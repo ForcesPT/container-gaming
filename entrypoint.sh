@@ -1,0 +1,495 @@
+#!/bin/bash
+# =============================================================================
+# DpadCloud Gaming Container Entrypoint (B2 + B2b)
+# Order ported from vastai/linux-desktop boot scripts:
+#   dbus -> Xvfb -> PipeWire(+pulse,+wireplumber) -> null-sink
+#        -> coturn -> Sunshine -> Selkies(127.0.0.1:16100, TURN=coturn)
+#        -> cloudflared(HTTPS tunnel) -> Tailscale(native Moonlight)
+# =============================================================================
+
+set -o pipefail
+
+echo "=========================================="
+echo "  DpadCloud Gaming Container Booting..."
+echo "=========================================="
+
+USER_NAME="dpad"
+USER_HOME="/home/dpad"
+DISPLAY_NUM="${DISPLAY:-:0}"
+SCREEN_RES="${SCREEN_RESOLUTION:-1920x1080x24}"
+
+# --- Config from env (Vast sets PUBLIC_IPADDR, OPEN_BUTTON_TOKEN, VAST_*_PORT) ---
+PUBLIC_IP="${PUBLIC_IPADDR:-}"
+if [ -z "$PUBLIC_IP" ]; then
+    PUBLIC_IP="$(curl -fs4 -m 5 https://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]')"
+fi
+[ -z "$PUBLIC_IP" ] && PUBLIC_IP="$(curl -fs4 -m 5 https://api.ipify.org 2>/dev/null | tr -d '[:space:]')"
+OPEN_TOKEN="${OPEN_BUTTON_TOKEN:-dpadcloud}"
+SUNSHINE_PASS="${SUNSHINE_PASSWORD:-dpadcloud}"
+SELKIES_USER="${SELKIES_BASIC_AUTH_USER:-dpad}"
+SELKIES_PASS="${SELKIES_BASIC_AUTH_PASSWORD:-${OPEN_TOKEN}}"
+TURN_USER="${TURN_USERNAME:-turnuser}"
+TURN_PASS="${TURN_PASSWORD:-${OPEN_TOKEN}}"
+TURN_PORT_EXT="${VAST_UDP_PORT_73478:-${VAST_TCP_PORT_73478:-3478}}"
+
+# --- Helper: wait for a unix socket ---
+wait_sock() {
+  local sock="$1" name="${2:-socket}"
+  local i=0
+  while [ $i -lt 120 ]; do
+    if [ -S "$sock" ] && timeout 1 socat -u OPEN:/dev/null "UNIX-CONNECT:${sock}" >/dev/null 2>&1; then
+      echo "    ${name} ready"; return 0
+    fi
+    sleep 1; i=$((i+1))
+  done
+  echo "    WARNING: ${name} (${sock}) not ready after 120s"; return 1
+}
+
+as_user() { su -s /bin/bash "${USER_NAME}" -c "$1"; }
+
+# --- NVIDIA check (non-fatal) ---
+echo "[*] Checking NVIDIA GPU..."
+if command -v nvidia-smi >/dev/null 2>&1; then
+    nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv || echo "WARNING: nvidia-smi query failed"
+else
+    echo "WARNING: nvidia-smi not found. GPU may not be accessible."
+fi
+
+# --- NVIDIA display-driver userspace libs (ported from vast-ai/base-image) ---
+# Some Vast hosts install only the *compute* driver, so libGL/libEGL/libvulkan
+# are missing and VirtualGL/Selkies can't render to the GPU. Download+extract
+# the matched .run graphics libs (idempotent; ~300MB first run, cached after).
+# This does NOT touch libnvidia-encode (NVENC) — that's toolkit-injected; the
+# multi-GPU NVENC peer-init bug (#1249) is handled by the flexgrip block below.
+echo "[*] Ensuring NVIDIA display-driver userspace libs (libGL/EGL/Vulkan)..."
+if [ -x /opt/dpadcloud/install-display-drivers ]; then
+    /opt/dpadcloud/install-display-drivers 2>&1 | sed 's/^/    /' || echo "    (display-driver install skipped/failed, continuing)"
+else
+    echo "    install-display-drivers not present — skipping (graphics libs rely on toolkit injection)"
+fi
+
+# --- CUDA Configuration (ported from vastai/base-image 05-configure-cuda.sh) ---
+# Clean stale cuda ldconfig entries, try forward-compat (datacenter GPUs),
+# fall back to minor-version compat (12.1 <= host Max CUDA, guaranteed by filter).
+# This prevents wrong-libcuda conflicts and may fix NVENC on datacenter GPUs.
+configure_cuda() {
+    command -v nvidia-smi >/dev/null 2>&1 || return 0
+
+    # Clean ALL cuda ldconfig entries — we'll add back only what we need
+    rm -f /etc/ld.so.conf.d/*cuda*.conf 2>/dev/null
+    for conf in /etc/ld.so.conf.d/*.conf; do
+        [[ -f "$conf" ]] || continue
+        if grep -q "cuda" "$conf" 2>/dev/null; then
+            sed -i '\#cuda#d' "$conf"
+            [[ ! -s "$conf" ]] && rm -f "$conf"
+        fi
+    done
+    sed -i '\#cuda#d' /etc/ld.so.conf 2>/dev/null
+    ldconfig
+
+    # Clean LD_LIBRARY_PATH of cuda entries
+    if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+        export LD_LIBRARY_PATH=$(echo "$LD_LIBRARY_PATH" | tr ':' '\n' | grep -vE '/cuda(/|-)' | paste -sd ':')
+    fi
+    [ -z "${LD_LIBRARY_PATH:-}" ] && unset LD_LIBRARY_PATH
+
+    local MAX_CUDA="$(nvidia-smi | grep -oP 'CUDA Version: \K[0-9]+\.[0-9]+' 2>/dev/null | head -1)"
+    [ -z "$MAX_CUDA" ] && return 0
+
+    # Resolve the real CUDA toolkit dir (e.g. /usr/local/cuda-12.1 or cuda-12.8)
+    # so this works for both build variants (CUDA_VERSION ARG in the Dockerfile).
+    local CUDA_REAL; CUDA_REAL="$(readlink -f /usr/local/cuda 2>/dev/null)"
+    [ -z "$CUDA_REAL" ] && CUDA_REAL="/usr/local/cuda"
+    local CUDA_VER_LABEL; CUDA_VER_LABEL="$(basename "$CUDA_REAL" | sed 's/^cuda-//')"
+
+    # Try forward-compat (datacenter GPUs only; consumer GPUs will fail cuInit test)
+    local COMPAT_DIR="${CUDA_REAL}/compat"
+    if [ -d "$COMPAT_DIR" ] && compgen -G "$COMPAT_DIR/libcuda.so.*" >/dev/null 2>&1; then
+        if LD_LIBRARY_PATH="$COMPAT_DIR" python3 -c "import ctypes,sys; sys.exit(0 if ctypes.CDLL('libcuda.so.1').cuInit(0)==0 else 1)" 2>/dev/null; then
+            echo "$COMPAT_DIR" > /etc/ld.so.conf.d/0-compat-cuda.conf
+            ldconfig
+            echo "    CUDA forward compatibility enabled (datacenter GPU) — Max CUDA: ${MAX_CUDA}"
+            return 0
+        fi
+    fi
+
+    # Fall back: minor-version compat (CUDA <= host Max CUDA, guaranteed by our filter)
+    echo "${CUDA_REAL}/lib64" > /etc/ld.so.conf.d/10-cuda.conf
+    ln -sf "${CUDA_REAL}" /usr/local/cuda 2>/dev/null
+    export CUDA_HOME=/usr/local/cuda
+    [[ ":${PATH}:" != *":${CUDA_HOME}/bin:"* ]] && export PATH="${CUDA_HOME}/bin:${PATH}"
+    ldconfig
+    echo "    CUDA ${CUDA_VER_LABEL} selected (host Max CUDA: ${MAX_CUDA}, forward-compat: not available)"
+}
+echo "[*] Configuring CUDA..."
+configure_cuda
+
+# --- Runtime dirs ---
+mkdir -p "${XDG_RUNTIME_DIR}" /tmp/.X11-unix /tmp/.ICE-unix
+chmod 1777 "${XDG_RUNTIME_DIR}" /tmp/.X11-unix /tmp/.ICE-unix
+chown -R "${USER_NAME}:${USER_NAME}" "${XDG_RUNTIME_DIR}"
+
+# --- D-Bus (system + session) ---
+echo "[*] Starting D-Bus..."
+mkdir -p /run/dbus "${XDG_RUNTIME_DIR}/dbus"
+[ ! -e /var/run/dbus/system_bus_socket ] && dbus-daemon --system --fork 2>/dev/null || true
+# Start a session bus and CAPTURE its address — xfwm4/xfce4-panel/xfdesktop/
+# xfsettingsd all need DBUS_SESSION_BUS_ADDRESS or they exit silently. Throwing
+# the --print-address output away (the old bug) left the desktop unpainted →
+# Selkies streamed a black root window with the default X cursor.
+DBUS_SESSION_BUS_ADDRESS="$(as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; dbus-daemon --session --fork --print-address=1 2>/dev/null" | head -1)"
+export DBUS_SESSION_BUS_ADDRESS
+if [ -n "${DBUS_SESSION_BUS_ADDRESS}" ]; then
+    echo "    D-Bus session: ${DBUS_SESSION_BUS_ADDRESS}"
+else
+    echo "    WARNING: D-Bus session bus address not captured — XFCE components will likely fail."
+fi
+sleep 1
+
+# --- Xvfb (Mesa software EGL; NVIDIA EGL segfaults on a virtual framebuffer) ---
+echo "[*] Starting Xvfb on ${DISPLAY_NUM}..."
+rm -f /tmp/.X${DISPLAY_NUM#:}-lock /tmp/.X11-unix/X${DISPLAY_NUM#:}
+# Force Mesa EGL if the vendor file exists (avoids NVIDIA EGL GBM segfault)
+if [ -f /usr/share/glvnd/egl_vendor.d/50_mesa.json ]; then
+    export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+fi
+Xvfb "${DISPLAY_NUM}" -screen 0 "${SCREEN_RES}" -dpi 96 \
+    +extension COMPOSITE +extension DAMAGE +extension GLX +extension RANDR \
+    +extension RENDER +extension MIT-SHM +extension XFIXES +extension XTEST \
+    +iglx +render -nolisten tcp -ac -noreset -shmem >/tmp/xvfb.log 2>&1 &
+sleep 2
+pgrep -x Xvfb >/dev/null && echo "    Xvfb running" || { echo "ERROR: Xvfb failed"; cat /tmp/xvfb.log; }
+export DISPLAY="${DISPLAY_NUM}"
+wait_sock "/tmp/.X11-unix/X${DISPLAY_NUM#:}" "X display"
+
+# (Resolution is fixed at boot via SCREEN_RESOLUTION; dynamic resize disabled with
+#  --enable_resize=false. To support on-the-fly resize, start Xvfb at 8192x4096
+#  and add `cvt` + selkies-gstreamer-resize.)
+
+# --- VirtualGL (GPU-accelerated OpenGL into the headless Xvfb) ---
+# Without VGL, GL apps hit Mesa llvmpipe (CPU) on Xvfb. vglrun routes GL to the
+# GPU's EGL offscreen backend (VGL_DISPLAY=egl needs no real display) and blits
+# the finished frame onto the Xvfb window, which Selkies/Sunshine then capture.
+# VGL does NOT solve Vulkan PRESENT (DXVK/Proton) — that needs gamescope (deferred).
+export VGL_DISPLAY=egl
+export VGL_REFRESHRATE=60
+if command -v vglrun >/dev/null 2>&1; then
+    # Unset the Mesa-only EGL vendor override for vglrun ONLY: the entrypoint sets
+    # __EGL_VENDOR_LIBRARY_FILENAMES=50_mesa.json so Xvfb doesn't segfault on
+    # NVIDIA EGL GBM, but vglrun's EGL backend must reach the NVIDIA EGL vendor to
+    # render offscreen on the GPU (else it falls back to Mesa llvmpipe = CPU).
+    VGL_RENDERER=$(as_user "unset __EGL_VENDOR_LIBRARY_FILENAMES; DISPLAY=${DISPLAY_NUM} VGL_DISPLAY=egl vglrun glxinfo -B 2>/dev/null | grep -m1 'OpenGL renderer string'" || echo 'VGL test failed (no GPU renderer)')
+    echo "[*] VirtualGL: ${VGL_RENDERER}"
+    case "${VGL_RENDERER}" in
+        *llvmpipe*|*"VGL test failed"*) echo "    WARNING: VGL is rendering on software (llvmpipe) or failed — GL games will be slow. Check NVIDIA_DRIVER_CAPABILITIES=all and that a GPU is assigned." ;;
+    esac
+else
+    echo "[*] VirtualGL: vglrun not found (VirtualGL not installed); GL apps will use Mesa llvmpipe (CPU)."
+fi
+
+# --- XFCE desktop components (light; started as user) ---
+# Each component needs DISPLAY, XDG_RUNTIME_DIR, PULSE_SERVER, AND the session
+# bus address. Errors go to /tmp/xfce.log (not /dev/null) so a black-screen
+# boot is diagnosable from the Vast Logs tab.
+echo "[*] Starting XFCE desktop..."
+: > /tmp/xfce.log; chown "${USER_NAME}:${USER_NAME}" /tmp/xfce.log
+XFCE_ENV="DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS}"
+as_user "export ${XFCE_ENV}; xfwm4 --compositor=off >>/tmp/xfce.log 2>&1 &" || true
+sleep 1
+as_user "export ${XFCE_ENV}; xfsettingsd >>/tmp/xfce.log 2>&1 &" || true
+as_user "export ${XFCE_ENV}; xfce4-panel >>/tmp/xfce.log 2>&1 &" || true
+as_user "export ${XFCE_ENV}; xfdesktop >>/tmp/xfce.log 2>&1 &" || true
+sleep 2
+echo "    --- XFCE procs ---"
+for p in xfwm4 xfsettingsd xfce4-panel xfdesktop; do
+    if pgrep -x "$p" >/dev/null; then echo "    $p: running"; else echo "    $p: NOT running (see /tmp/xfce.log)"; fi
+done
+[ ! -s /tmp/xfce.log ] || { echo "    --- /tmp/xfce.log (tail) ---"; tail -n 15 /tmp/xfce.log | sed 's/^/      /'; }
+
+# --- PulseAudio (headless null sink; monitor is capturable for silence) ---
+# PipeWire's null-sink monitor suspends when idle and pulsesrc times out against
+# it; PulseAudio's null-sink monitor produces capturable silence even when idle,
+# which is what we need for headless cloud-gaming audio capture.
+echo "[*] Starting PulseAudio (headless null sink)..."
+mkdir -p "${XDG_RUNTIME_DIR}/pulse"
+chmod 1777 "${XDG_RUNTIME_DIR}" "${XDG_RUNTIME_DIR}/pulse"
+chown -R "${USER_NAME}:${USER_NAME}" "${XDG_RUNTIME_DIR}"
+cat > /tmp/pulse-headless.pa <<EOF
+load-module module-native-protocol-unix socket=${XDG_RUNTIME_DIR}/pulse/native auth-anonymous=1
+load-module module-null-sink sink_name=dummy sink_properties=device.description="DummyOutput"
+load-module module-always-sink
+set-default-sink dummy
+set-default-source dummy.monitor
+EOF
+chown "${USER_NAME}:${USER_NAME}" /tmp/pulse-headless.pa
+# Run as the user (pulseaudio refuses root); unset PULSE_SERVER for the launch
+# itself so --start doesn't refuse to autospawn.
+as_user "unset PULSE_SERVER; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pulseaudio --start --log-target=stderr --disallow-exit --exit-idle-time=-1 -n -F /tmp/pulse-headless.pa" >/tmp/pulse.log 2>&1 || echo "    WARNING: pulseaudio start failed (see /tmp/pulse.log)"
+wait_sock "${XDG_RUNTIME_DIR}/pulse/native" "pulseaudio"
+if [ -S "${XDG_RUNTIME_DIR}/pulse/native" ]; then
+    echo "    PulseAudio socket OK (${PULSE_SERVER})"
+    echo "    --- sinks ---";  as_user "export PULSE_SERVER=${PULSE_SERVER} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pactl list short sinks 2>/dev/null"
+    echo "    --- sources ---"; as_user "export PULSE_SERVER=${PULSE_SERVER} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pactl list short sources 2>/dev/null"
+else
+    echo "    PulseAudio socket MISSING:"; tail -n 20 /tmp/pulse.log 2>/dev/null || true
+fi
+
+# --- coturn (in-image TURN; Selkies WebRTC media relays through it) ---
+echo "[*] Starting coturn on ${TURN_PORT_EXT}..."
+if [ -n "${TURN_SERVER:-}" ]; then
+    echo "    External TURN_SERVER configured — skipping local coturn"
+else
+    turnserver -n -a --log-file=/tmp/coturn.log --lt-cred-mech --fingerprint \
+        --no-stun --no-multicast-peers --no-cli --no-tlsv1 --no-tlsv1_1 \
+        --realm="dpadcloud" --user="${TURN_USER}:${TURN_PASS}" \
+        -p "${TURN_PORT_EXT}" -X "${PUBLIC_IP:-localhost}" >/tmp/coturn.log 2>&1 &
+    sleep 2
+    pgrep -x turnserver >/dev/null && echo "    coturn running" || echo "    WARNING: coturn failed (see /tmp/coturn.log)"
+fi
+
+# --- NVENC multi-GPU topology + flexgrip auto-enable (nvidia-container-toolkit #1249) ---
+# On driver >=570, NVENC's GET_ATTACHED_IDS returns ALL host GPUs; it then
+# peer-inits with the ones whose /dev/nvidiaX aren't mounted and bails with
+# NV_ENC_ERR_UNSUPPORTED_DEVICE. The flexgrip interposer filters that list to
+# only mounted GPUs. We auto-enable it when the topology shows we have a SLICE
+# of a multi-GPU host (host GPU count > mounted /dev/nvidiaX count) on a
+# 570..609 driver. Override with DPAD_NVENC_FIX=1|0|auto. This runs before
+# Sunshine AND the Selkies encoder probe so both inherit the LD_PRELOAD.
+echo "    --- NVENC topology (#1249 check) ---"
+DRIVER_MAJOR="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | cut -d. -f1)"
+HOST_GPU_COUNT="$(find /proc/driver/nvidia/gpus -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
+MOUNTED_GPU_COUNT="$(ls /dev/nvidia[0-9] 2>/dev/null | wc -l)"
+echo "    driver_major: ${DRIVER_MAJOR:-?}  host GPUs (/proc): ${HOST_GPU_COUNT}  mounted /dev/nvidiaX: ${MOUNTED_GPU_COUNT}"
+find /proc/driver/nvidia/gpus -mindepth 1 -maxdepth 1 -type d -printf '      /proc GPU: %f\n' 2>/dev/null | head -8
+ls /dev/nvidia[0-9] 2>/dev/null | sed 's/^/      mounted: /'
+
+NVENC_FIX_ENABLED=0
+case "${DPAD_NVENC_FIX:-auto}" in
+    1) NVENC_FIX_ENABLED=1 ;;
+    0) NVENC_FIX_ENABLED=0 ;;
+    auto)
+        # integer-safe comparison: enable only when host has more GPUs than we
+        # have device nodes (i.e. we got a slice of a multi-GPU host) on 570..609
+        if (( ${HOST_GPU_COUNT:-0} > ${MOUNTED_GPU_COUNT:-0} )) \
+           && (( ${DRIVER_MAJOR:-0} >= 570 )) \
+           && (( ${DRIVER_MAJOR:-0} < 610 )); then
+            NVENC_FIX_ENABLED=1
+        fi
+        ;;
+esac
+if [ "$NVENC_FIX_ENABLED" = "1" ] && [ -f /opt/dpadcloud/libnvenc_fix.so ]; then
+    export NVENC_FIX_DEBUG=1
+    echo "    DPAD_NVENC_FIX: ENABLED — libnvenc_fix.so will filter GET_ATTACHED_IDS (log: [nvenc_fix] on stderr)"
+elif [ "$NVENC_FIX_ENABLED" = "1" ]; then
+    echo "    DPAD_NVENC_FIX: requested but /opt/dpadcloud/libnvenc_fix.so missing — cannot enable"
+    NVENC_FIX_ENABLED=0
+else
+    echo "    DPAD_NVENC_FIX: disabled (single-GPU/whole-host or driver<570 or >=610 — NVENC native)"
+fi
+
+# Joystick interposer (gamepad) + conditional flexgrip NVENC fix — assembled
+# here so Sunshine, the Selkies encoder probe, and Selkies itself all inherit it.
+export SELKIES_INTERPOSER='/usr/$LIB/selkies_joystick_interposer.so'
+DPAD_PRELOAD=""
+[ "$NVENC_FIX_ENABLED" = "1" ] && DPAD_PRELOAD="/opt/dpadcloud/libnvenc_fix.so"
+export LD_PRELOAD="${DPAD_PRELOAD}${DPAD_PRELOAD:+:}${SELKIES_INTERPOSER}${LD_PRELOAD:+:${LD_PRELOAD}}"
+mkdir -pm1777 /dev/input 2>/dev/null && touch /dev/input/js0 2>/dev/null && chmod 777 /dev/input/js* 2>/dev/null || true
+
+# --- Sunshine (native Moonlight host) ---
+SUNSHINE_BIN="$(command -v sunshine 2>/dev/null || echo /usr/bin/sunshine)"
+if [ -x "$SUNSHINE_BIN" ]; then
+    echo "[*] Configuring Sunshine..."
+    as_user "mkdir -p ~/.config/sunshine"
+    cp -f /home/dpad/.config/sunshine/sunshine.conf "${USER_HOME}/.config/sunshine/sunshine.conf" 2>/dev/null || true
+    chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}/.config/sunshine"
+    as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER}; ${SUNSHINE_BIN} --creds admin '${SUNSHINE_PASS}'" 2>/dev/null || true
+    echo "[*] Starting Sunshine..."
+    as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} LD_PRELOAD='${LD_PRELOAD}'; ${SUNSHINE_BIN} >/tmp/sunshine.log 2>&1" &
+    sleep 3
+    pgrep -x sunshine >/dev/null && echo "    Sunshine running" || echo "    WARNING: sunshine failed (see /tmp/sunshine.log)"
+else
+    echo "WARNING: sunshine not found"
+fi
+
+# --- Selkies-GStreamer (browser WebRTC streaming, bound to localhost) ---
+echo "[*] Starting Selkies-GStreamer..."
+[ -f /opt/gstreamer/gst-env ] && . /opt/gstreamer/gst-env
+
+# Force a FRESH GStreamer registry at runtime. A registry baked during
+# `docker build` (no NVIDIA driver mounted) marks the NVENC plugin
+# (nvh264enc, which dlopens the host's libnvidia-encode.so.1 at scan time) as
+# unloadable — and gst-inspect-1.0 never re-tries a plugin it already failed to
+# load. Deleting the registry file forces a full rescan now, with the driver
+# present, so NVENC is discovered. (This was masked on some hosts and not
+# others → the x264enc fallback.)
+rm -f "${GST_REGISTRY:-/root/.cache/gstreamer-1.0/registry.bin}" \
+      /root/.cache/gstreamer-1.0/registry.* \
+      "${USER_HOME}/.cache/gstreamer-1.0/registry."* 2>/dev/null || true
+GST_REGISTRY_UPDATE=1 gst-inspect-1.0 -a >/dev/null 2>&1 || true
+
+# Encoder: runtime 1-frame test (nvh264enc if CUDA/NVENC work, else x264enc).
+SELKIES_ENC="${SELKIES_ENCODER:-}"
+if [ -z "$SELKIES_ENC" ]; then
+    for cand in nvh264enc nvh265enc x264enc vp8enc openh264enc; do
+        if ! gst-inspect-1.0 "$cand" >/dev/null 2>&1; then
+            echo "    gst $cand: element NOT FOUND (plugin not registered)"
+            continue
+        fi
+        if gst-launch-1.0 --quiet videotestsrc num-buffers=1 ! videoconvert ! "$cand" ! fakesink >/dev/null 2>&1; then
+            echo "    gst $cand: OK"; SELKIES_ENC="$cand"; break
+        else
+            echo "    gst $cand: present but encode FAILED — skipping"
+        fi
+    done
+fi
+[ -z "$SELKIES_ENC" ] && SELKIES_ENC="x264enc"
+echo "    Selected encoder: ${SELKIES_ENC}"
+
+# --- NVENC/CUDA diagnostic (shows why NVENC may be unavailable on a host) ---
+# NVENC needs libcuda (compute cap) AND libnvidia-encode (encode cap) mounted from
+# the host. nvidia-smi only needs utility/compute, so a host can show a GPU yet
+# still lack encode. Print what's actually present so we can see the difference
+# between hosts where nvh264enc works and hosts where it fails with error code 2.
+echo "    --- NVENC/CUDA diag ---"
+echo "    driver: $(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)"
+echo "    NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-<unset, Vast-assigned>}"
+echo "    visible GPUs:"; nvidia-smi -L 2>/dev/null | sed 's/^/      /' || echo "      nvidia-smi -L failed"
+for lib in /usr/lib/x86_64-linux-gnu/libcuda.so.1 /usr/lib/x86_64-linux-gnu/libnvidia-encode.so.1; do
+    [ -e "$lib" ] && echo "    present: $lib" || echo "    MISSING: $lib"
+done
+echo "    --- VGL graphics libs ---"
+for lib in /usr/lib/x86_64-linux-gnu/libGL.so.1 /usr/lib/x86_64-linux-gnu/libEGL.so.1 /usr/lib/x86_64-linux-gnu/libvulkan.so.1; do
+    [ -e "$lib" ] && echo "    present: $lib" || echo "    MISSING: $lib"
+done
+echo "    Vulkan ICDs:"; ls /usr/share/vulkan/icd.d/*.json 2>/dev/null | sed 's/^/      /' || echo "      none in-image (NVIDIA ICD is host-mounted at runtime)"
+ls /dev/nvidia* 2>/dev/null | sed 's/^/    dev: /' || echo "    no /dev/nvidia* devices mounted"
+. /opt/gstreamer/gst-env 2>/dev/null
+echo "    cuInit: $(python3 -c 'import ctypes; print(ctypes.CDLL("libcuda.so.1").cuInit(0))' 2>&1 | tail -1)"
+echo "    compute_mode: $(nvidia-smi --query-gpu=compute_mode --format=csv,noheader 2>/dev/null | head -1)"
+cat > /tmp/cudactx.py <<'PY'
+import ctypes
+c=ctypes.CDLL("libcuda.so.1")
+print("cuInit=",c.cuInit(0))
+n=ctypes.c_int(); c.cuDeviceGetCount(ctypes.byref(n))
+d=ctypes.c_int(); c.cuDeviceGet(ctypes.byref(d),0)
+x=ctypes.c_void_p()
+try: r=c.cuCtxCreate_v2(ctypes.byref(x),0,d.value)
+except AttributeError: r=c.cuCtxCreate(ctypes.byref(x),0,d.value)
+print("cuCtxCreate=",r, "dev=",d.value)
+PY
+echo "    $(python3 /tmp/cudactx.py 2>&1 | tail -1)"
+
+# Ensure the GStreamer registry cache dir is user-writable (else Selkies logs
+# 'registry update failed: Permission denied' on /home/dpad/.cache/gstreamer-1.0).
+mkdir -p "${USER_HOME}/.cache/gstreamer-1.0"
+chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}/.cache"
+rm -rf "${USER_HOME}/.cache/gstreamer-1.0"/* 2>/dev/null || true
+
+# (Joystick interposer + flexgrip LD_PRELOAD were assembled earlier, before
+# Sunshine, so both Sunshine and the Selkies encoder probe run under them.)
+
+# coturn is exposed TCP-only on Vast (the 73478 tag) — UDP TURN would need a
+# relay port range that blows Vast's 64-port limit. TCP TURN relays over the
+# single listening connection. Override with SELKIES_TURN_PROTOCOL only if you
+# also expose a UDP relay range.
+SELKIES_TURN_PROTOCOL="${SELKIES_TURN_PROTOCOL:-tcp}"
+
+as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=${PIPEWIRE_LATENCY} GST_DEBUG=${GST_DEBUG} LD_PRELOAD='${LD_PRELOAD}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${SELKIES_ENC} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --turn_host='${PUBLIC_IP:-127.0.0.1}' --turn_port=${TURN_PORT_EXT} --turn_protocol=${SELKIES_TURN_PROTOCOL} --turn_username='${TURN_USER}' --turn_password='${TURN_PASS}' --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
+sleep 4
+pgrep -f "selkies-gstreamer" >/dev/null && echo "    Selkies running on 127.0.0.1:16100 (encoder=${SELKIES_ENC})" || { echo "    WARNING: selkies failed (see /tmp/selkies.log)"; tail -n 30 /tmp/selkies.log; }
+
+# --- cloudflared (B2b: HTTPS tunnel front for click-and-play) ---
+SELKIES_URL=""
+if [ -n "${CLOUDFLARED_TUNNEL_TOKEN:-}" ]; then
+    echo "[*] Starting cloudflared named tunnel..."
+    cloudflared tunnel --no-autoupdate run --token "${CLOUDFLARED_TUNNEL_TOKEN}" >/tmp/cloudflared.log 2>&1 &
+    SELKIES_URL="${CLOUDFLARED_HOSTNAME:-https://<your-tunnel-hostname>}"
+    echo "    Tunnel URL: ${SELKIES_URL}"
+elif command -v cloudflared >/dev/null 2>&1; then
+    echo "[*] Starting cloudflared quick tunnel (https://...trycloudflare.com)..."
+    cloudflared tunnel --no-autoupdate --url http://localhost:16100 >/tmp/cloudflared.log 2>&1 &
+    sleep 8
+    SELKIES_URL="$(grep -oE 'https://[a-z0-9.-]+trycloudflare\.com' /tmp/cloudflared.log 2>/dev/null | head -1)"
+    [ -n "$SELKIES_URL" ] && echo "    Tunnel URL: ${SELKIES_URL}" || { echo "    Tunnel URL not captured yet (see /tmp/cloudflared.log):"; tail -n 15 /tmp/cloudflared.log; }
+fi
+
+# --- Tailscale (native-Moonlight enthusiast overlay) ---
+TAILSCALE_IP=""
+if [ -n "${TAILSCALE_AUTH_KEY:-}" ] && command -v tailscaled >/dev/null 2>&1; then
+    echo "[*] Starting Tailscale..."
+    mkdir -p /var/lib/tailscale /var/run/tailscale
+    tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock >/tmp/tailscaled.log 2>&1 &
+    sleep 3
+    tailscale up --authkey="${TAILSCALE_AUTH_KEY}" --hostname="${TAILSCALE_HOSTNAME:-dpadcloud}" 2>/dev/null \
+        || tailscale up --authkey="${TAILSCALE_AUTH_KEY}" --hostname="${TAILSCALE_HOSTNAME:-dpadcloud}" --accept-routes 2>/dev/null \
+        || echo "    WARNING: tailscale up failed (see /tmp/tailscaled.log)"
+    TAILSCALE_IP="$(tailscale ip -4 2>/dev/null | head -1)"
+    echo "    Tailnet IP: ${TAILSCALE_IP:-<pending>}"
+fi
+
+# --- Status ---
+IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+echo ""
+echo "=========================================="
+echo "  DpadCloud Container READY!"
+echo "=========================================="
+echo "  Display:          ${DISPLAY_NUM} @ ${SCREEN_RES}"
+echo "  Encoder:           ${SELKIES_ENC}"
+[ -n "$PUBLIC_IP" ] && echo "  Public IP:        ${PUBLIC_IP}"
+echo ""
+echo "  ▶ Browser click-and-play (Selkies via HTTPS tunnel):"
+if [ -n "$SELKIES_URL" ]; then
+    echo "      ${SELKIES_URL}"
+    echo "      Login: ${SELKIES_USER} / ${SELKIES_PASS}"
+else
+    echo "      (no tunnel — set CLOUDFLARED_TUNNEL_TOKEN or cloudflared quick-tunnel failed)"
+    echo "      Local fallback: http://localhost:16100  (Login: ${SELKIES_USER} / ${SELKIES_PASS})"
+fi
+echo ""
+echo "  ▶ Native Moonlight (enthusiast, low latency):"
+if [ -n "$TAILSCALE_IP" ]; then
+    echo "      Moonlight → ${TAILSCALE_IP} (port 47989), Sunshine PIN in its Web UI"
+else
+    echo "      Set TAILSCALE_AUTH_KEY to enable; or Sunshine Web UI:"
+    echo "      https://${PUBLIC_IP:-<ip>}:${VAST_TCP_PORT_47990:-47990} (admin / ${SUNSHINE_PASS})"
+fi
+echo ""
+echo "  TURN (WebRTC media relay): ${PUBLIC_IP:-<ip>}:${TURN_PORT_EXT}  (${SELKIES_TURN_PROTOCOL}, ${TURN_USER}/<token>)"
+echo ""
+echo "  ▶ GPU-accelerated gaming (VirtualGL — VGL_DISPLAY=${VGL_DISPLAY:-egl}):"
+echo "      In the stream, open a terminal and run:"
+echo "        vgl-test                     # sanity check (renderer + glxgears)"
+echo "        vgl-steam                    # native Linux GL titles on the GPU"
+echo "        proton-wined3d               # Windows DX9–11 via WineD3D+VGL (no gamescope)"
+echo "        proton-wined3d <appid>       # specific Windows game"
+echo "      (DX12 / true DXVK perf need a Vulkan present surface = gamescope, deferred)"
+echo "=========================================="
+
+# --- Periodic Selkies log dump (no SSH on Vast — stream to Logs tab) ---
+(
+    sleep 25
+    while true; do
+        echo ""
+        echo "=== /tmp/selkies.log (tail) ==="
+        tail -n 100 /tmp/selkies.log 2>/dev/null || true
+        echo "=== end selkies.log ==="
+        echo "=== /tmp/sunshine.log (tail) ==="
+        tail -n 60 /tmp/sunshine.log 2>/dev/null || true
+        echo "=== end sunshine.log ==="
+        echo "=== /tmp/pulse.log (tail) ==="
+        tail -n 30 /tmp/pulse.log 2>/dev/null || true
+        echo "=== end pulse.log ==="
+        echo "=== /tmp/xfce.log (tail) ==="
+        tail -n 30 /tmp/xfce.log 2>/dev/null || true
+        echo "=== end xfce.log ==="
+        sleep 30
+    done
+) &
+
+# --- Health loop ---
+while true; do
+    sleep 30
+    pgrep -x Xvfb >/dev/null || { echo "WARNING: Xvfb died, restarting"; Xvfb "${DISPLAY_NUM}" -screen 0 "${SCREEN_RES}" -dpi 96 +extension GLX +extension RANDR +extension RENDER -ac -noreset -shmem & }
+    pgrep -f "selkies-gstreamer" >/dev/null || echo "WARNING: selkies not running (see /tmp/selkies.log)"
+    pgrep -x sunshine >/dev/null || echo "WARNING: sunshine not running (see /tmp/sunshine.log)"
+done

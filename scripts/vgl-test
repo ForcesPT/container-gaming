@@ -1,0 +1,34 @@
+#!/bin/bash
+# vgl-test — quick VirtualGL sanity check. Prints the GL renderer VGL is using
+# and runs glxgears briefly. Run from inside the browser stream (Selkies) or SSH.
+#
+#   "OpenGL renderer string: NVIDIA GeForce RTX ..."   -> OK (VGL on the GPU)
+#   "OpenGL renderer string: llvmpipe ..."              -> SOFTWARE (VGL NOT reaching GPU)
+#   no renderer string                                   -> VGL failed
+#
+# Exits: 0 = GPU/NVIDIA OK, 2 = software (llvmpipe), 1 = failed/unknown.
+set -o pipefail
+export VGL_DISPLAY="${VGL_DISPLAY:-egl}"
+export VGL_REFRESHRATE="${VGL_REFRESHRATE:-60}"
+unset __EGL_VENDOR_LIBRARY_FILENAMES   # let vglrun reach the NVIDIA EGL vendor (not Mesa llvmpipe)
+DISP="${DISPLAY:-:0}"
+
+echo "== VirtualGL renderer =="
+RENDERER=$(DISPLAY="$DISP" VGL_DISPLAY="$VGL_DISPLAY" vglrun glxinfo -B 2>/dev/null | grep -m1 'OpenGL renderer string' || true)
+echo "${RENDERER:-VGL test FAILED — vglrun/glxinfo unavailable (is VirtualGL installed?)}"
+case "${RENDERER}" in
+    *llvmpipe*) echo "RESULT: SOFTWARE (llvmpipe) — VGL is NOT reaching the GPU (check NVIDIA_DRIVER_CAPABILITIES=all + a GPU is assigned)"; exit 2 ;;
+    *NVIDIA*)   echo "RESULT: OK — VGL is rendering on the NVIDIA GPU" ;;
+    "")         echo "RESULT: FAILED — no renderer string"; exit 1 ;;
+    *)          echo "RESULT: unexpected renderer (see line above)" ;;
+esac
+
+echo
+echo "== glxgears (6s) =="
+DISPLAY="$DISP" VGL_DISPLAY="$VGL_DISPLAY" timeout 7 vglrun glxgears -info 2>&1 | grep -E 'GL_RENDERER|GL_VERSION|FPS|frames' | head -8 || true
+
+echo
+echo "If RESULT: OK, native Linux GL titles work. For Windows DX9-11 titles:"
+echo "  proton-wined3d             # Steam with PROTON_USE_WINED3D=1 + vglrun"
+echo "  proton-wined3d <appid>     # launch a specific Windows game"
+echo "DX12 / true DXVK perf need a present surface (gamescope) — deferred."

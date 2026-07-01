@@ -1,0 +1,81 @@
+version: "3.8"
+
+services:
+  dpadcloud-gaming:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dpadcloud/gaming:latest
+    container_name: dpadcloud-gaming
+    restart: unless-stopped
+
+    # NVIDIA GPU access
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    privileged: true
+    shm_size: 4g
+
+    environment:
+      - DISPLAY=:0
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - SCREEN_RESOLUTION=1920x1080x24
+      - SUNSHINE_PASSWORD=dpadcloud
+      - SELKIES_BASIC_AUTH_USER=dpad
+      - SELKIES_BASIC_AUTH_PASSWORD=dpadcloud
+      # --- B2b: Cloudflare Tunnel for HTTPS click-and-play ---
+      # Leave unset to use a quick trycloudflare.com tunnel (MVP/testing).
+      # For production set both, configured on the Cloudflare side to route
+      # your hostname -> http://localhost:16100:
+      # - CLOUDFLARED_TUNNEL_TOKEN=
+      # - CLOUDFLARED_HOSTNAME=https://play.example.com
+      # --- Native-Moonlight enthusiast path (optional) ---
+      # - TAILSCALE_AUTH_KEY=tskey-...
+      # - TAILSCALE_HOSTNAME=dpadcloud-1
+
+    ports:
+      # Selkies browser UI (localhost only in-container; cloudflared fronts it).
+      - "16100:16100/tcp"
+      # In-image coturn TURN (WebRTC media relay). Default 3478.
+      # On Vast.ai request the 73478 identity tag so external==internal:
+      #   -p 73478:73478 -p 73478:73478/udp
+      # (the runtime then binds coturn to the real port in VAST_*_PORT_73478).
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      # Sunshine (native Moonlight; reachable over Tailnet, or directly if exposed)
+      - "47989:47989/tcp"
+      - "47990:47990/tcp"
+      # Tailscale WireGuard overlay
+      - "41641:41641/udp"
+
+    volumes:
+      - steam-data:/home/dpad/.steam
+      - steam-games:/home/dpad/.local/share/Steam
+      - sunshine-config:/home/dpad/.config/sunshine
+      - steamapps:/home/dpad/SteamLibrary
+
+    healthcheck:
+      test: ["/opt/dpadcloud/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  steam-data:
+  steam-games:
+  sunshine-config:
+  steamapps:

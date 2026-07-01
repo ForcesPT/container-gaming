@@ -1,0 +1,10 @@
+#!/bin/bash
+# vgl-steam — launch Steam under VirtualGL so native Linux OpenGL games render on
+# the GPU (EGL offscreen) instead of Mesa software (llvmpipe) on the headless Xvfb.
+#
+# Usage:  vgl-steam [steam args...]
+# Env:    VGL_DISPLAY (default egl), VGL_REFRESHRATE (default 60)
+export VGL_DISPLAY="${VGL_DISPLAY:-egl}"
+export VGL_REFRESHRATE="${VGL_REFRESHRATE:-60}"
+unset __EGL_VENDOR_LIBRARY_FILENAMES   # let vglrun reach the NVIDIA EGL vendor (not Mesa llvmpipe)
+exec vglrun steam "$@"

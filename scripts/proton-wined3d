@@ -1,0 +1,23 @@
+#!/bin/bash
+# proton-wined3d — interim path for Windows (Proton) DX9–11 games on a headless
+# GPU container WITHOUT gamescope/DXVK present. Forces Proton to use WineD3D
+# (D3D→OpenGL) instead of DXVK (D3D→Vulkan, which can't present on a headless
+# Xvfb), then wraps Steam with vglrun so that OpenGL renders on the GPU via
+# VirtualGL and is blitted onto the Xvfb that Selkies/Sunshine capture.
+#
+# DX12 titles use vkd3d-proton (Vulkan) and will NOT work via this path — that
+# needs a Vulkan present surface (gamescope), which is deferred. Use this for
+# DX9/DX10/DX11 Windows titles only; expect lower perf/compat than DXVK.
+#
+# Usage:  proton-wined3d [steam args...]   -> launches Steam (pick a game there)
+#         proton-wined3d <appid>           -> launches a specific game directly
+# Env:    VGL_DISPLAY (egl), VGL_REFRESHRATE (60)
+export VGL_DISPLAY="${VGL_DISPLAY:-egl}"
+export VGL_REFRESHRATE="${VGL_REFRESHRATE:-60}"
+unset __EGL_VENDOR_LIBRARY_FILENAMES   # let vglrun reach the NVIDIA EGL vendor (not Mesa llvmpipe)
+export PROTON_USE_WINED3D=1
+export PROTON_HIDE_NVIDIA_GPU=0
+if [ -n "${1:-}" ] && [[ "$1" =~ ^[0-9]+$ ]]; then
+    exec vglrun steam "steam://rungameid/$1"
+fi
+exec vglrun steam "$@"
