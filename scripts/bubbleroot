@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# bubbleroot: fake bubblewrap (bwrap) implemented via proot — vendored from
+# https://codeberg.org/valpackett/bubbleroot (UNLICENSE / public domain).
+#
+# WHY DpadCloud NEEDS THIS: Steam's pressure-vessel / Steam Linux Runtime (and
+# therefore the Steam client UI + Proton + runtime-wrapped native games) use
+# bubblewrap, which needs either unprivileged user namespaces OR a setuid bwrap
+# with CAP_SYS_ADMIN. On Vast.ai the container has neither: Vast strips
+# --cap-add SYS_ADMIN, ignores --security-opt seccomp/apparmor=unconfined, and
+# the host (Ubuntu 24.04 kernel) sets apparmor_restrict_unprivileged_userns=1.
+# bubbleroot instead emulates bwrap's bind-mount/chroot via proot's ptrace
+# filesystem emulation — no userns, no CAP_SYS_ADMIN, no setuid. (ptrace
+# self-trace / PTRACE_TRACEME needs no capability; proot traces its own child.)
+#
+# The entrypoint installs proot and symlinks /usr/local/bin/bwrap -> this script
+# when DPAD_BUBBLEROOT is enabled (auto when `unshare -U` fails), and exports
+# BWRAP + PRESSURE_VESSEL_BWRAP so Steam's runtime-tools / pressure-vessel pick
+# it up instead of their bundled bwrap.
+#
+# WARNING: experimental. GPU rendering (Vulkan/DXVK) is NOT emulated — runs
+# natively; only filesystem/path syscalls are intercepted (some loading
+# overhead). Do NOT report bugs in games/Steam/Proton to Valve while using this.
+# Upstream: https://codeberg.org/valpackett/bubbleroot
+
+printf "WARNING -- bubbleroot is being used -- WARNING\n" >&2
+printf "This is an experimental cursed hack to allow functioning in restricted environments.\n" >&2
+printf "DO NOT EVER report issues with software running under this configuration to the authors of the software.\n" >&2
+
+root="$(mktemp -d)"
+pargs=()
+declare -A tmpfses
+creation_dest() {
+  # TODO: support dirs nested under tmpfses
+  tmpdest="${tmpfses["$(dirname "$1")"]}"
+  if [ -n "$tmpdest" ]; then
+    printf "bubbleroot: creation dest tmp found '%s' for '%s' (dir '%s')" "$tmpdest" "$1" "$(dirname "$1")" >&2
+    echo "$tmpdest/$(basename "$1")"
+  else
+    printf "bubbleroot: creation dest tmp not for '%s' (dir '%s')" "$1" "$(dirname "$1")" >&2
+    mkdir -p "$root/$(dirname "$1")"
+    echo "$root/$1"
+  fi
+}
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --help) echo "good luck."; exit 0;;
+    --version) echo "bubblewrap 0.69.420"; exit 0;;
+    --args) argfd="$2"; shift 2; IFS= mapfile -d '' -u "$argfd" fileargs; set -- "${fileargs[@]}" "$@";;
+
+    --new-session) new_session=1; shift 1;;
+    --uid) uid="$2"; shift 2;;
+    --gid) gid="$2"; shift 2;;
+    --chdir) pargs+=("--cwd=$2"); shift 2;;
+    --setenv) export "$2"="$3"; shift 3;;
+    --unsetenv) unset "$2"; shift 2;;
+    --bind|--bind-try|--dev-bind|--dev-bind-try|--ro-bind|--ro-bind-try)
+      mkdir -p "$root/$3"; pargs+=("--bind=$2:$3"); shift 3;;
+    --bind-data|--ro-bind-data)
+      file="$(mktemp)"; cat <&"$2" >"$file"; mkdir -p "$root/$(dirname "$3")"; pargs+=("--bind=$file:$3"); shift 3;;
+    --proc) mkdir -p "$root/$2"; pargs+=("--bind=/proc:$2"); shift 2;;
+    --tmpfs) mkdir -p "$root/$2"; tmpfses["$2"]="$(mktemp -d)"; pargs+=("--bind=${tmpfses["$2"]}:$2"); shift 2;;
+    --dir) mkdir -p "$root/$2"; shift 2;;
+    --symlink) ln -s "$2" "$(creation_dest "$3")"; shift 3;;
+    --file) cat <&"$2" >"$(creation_dest "$3")"; shift 3;;
+
+    --remount-ro|--seccomp-fd|--add-seccomp-fd|--size|--cap-add|--cap-drop)
+      printf "bubbleroot: skipping option: '%s'\n" "$1" >&2; shift 2;;
+    --unshare-*|--share-*|--disable-userns|--assert-userns-disabled|--die-with-parent|--as-pid-1|'')
+      printf "bubbleroot: skipping option: '%s'\n" "$1" >&2; shift 1;;
+    -*) printf "bubbleroot: failing due to unsupported option: '%s'\n" "$1" >&2; exit 1;;
+    --) shift 1; break;;
+    *) break;;
+  esac
+done
+
+if [ -n "$uid" -a -n "$gid" ]; then
+  pargs+=(--change-id="$uid:$gid")
+fi
+
+printf "bubbleroot: fileargs: %s\n" "${fileargs[*]}" >&2
+printf "bubbleroot: root '%s' + args: %s\n" "$root" "${pargs[*]}" >&2
+
+exec proot -r "$root" "${pargs[@]}" "$@"

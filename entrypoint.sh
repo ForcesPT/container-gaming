@@ -305,6 +305,38 @@ else
     fi
 fi
 
+# --- bubbleroot: proot-based bwrap shim for when user namespaces are unavailable ---
+# Steam's pressure-vessel/bwrap (Steam client UI + Proton + runtime-wrapped
+# native games) needs unprivileged userns OR a setuid-bwrap with CAP_SYS_ADMIN.
+# On Vast neither is available (Vast strips --cap-add SYS_ADMIN, ignores
+# --security-opt, host has apparmor_restrict_unprivileged_userns=1). bubbleroot
+# emulates bwrap via proot ptrace (no userns/caps/setuid) so Steam can start.
+# GPU/Vulkan rendering is NOT emulated - runs natively; only FS/path syscalls
+# are intercepted (some loading overhead). DPAD_BUBBLEROOT=auto (default) enables
+# it when `unshare -U` fails; =1 forces on; =0 forces off.
+DPAD_BUBBLEROOT="${DPAD_BUBBLEROOT:-auto}"
+USE_BUBBLEROOT=0
+BUBBLEROOT_EXPORTS=""
+STEAM_ENV_EXTRAS=""
+if [ -x /opt/dpadcloud/bubbleroot ] && { command -v proot >/dev/null 2>&1 || [ -x /usr/local/bin/proot ]; }; then
+    case "$DPAD_BUBBLEROOT" in
+        1) USE_BUBBLEROOT=1 ;;
+        0) USE_BUBBLEROOT=0 ;;
+        auto) unshare -U true 2>/dev/null || USE_BUBBLEROOT=1 ;;
+    esac
+fi
+if [ "$USE_BUBBLEROOT" = "1" ]; then
+    ln -sf /opt/dpadcloud/bubbleroot /usr/local/bin/bwrap
+    export BWRAP=/opt/dpadcloud/bubbleroot
+    export PRESSURE_VESSEL_BWRAP=/opt/dpadcloud/bubbleroot
+    BUBBLEROOT_EXPORTS=$'export BWRAP=/opt/dpadcloud/bubbleroot
+export PRESSURE_VESSEL_BWRAP=/opt/dpadcloud/bubbleroot'
+    STEAM_ENV_EXTRAS="BWRAP=/opt/dpadcloud/bubbleroot PRESSURE_VESSEL_BWRAP=/opt/dpadcloud/bubbleroot"
+    echo "[*] bubbleroot: ENABLED (user namespaces unavailable - Steam/Proton via proot shim; GPU/Vulkan still native)"
+else
+    echo "[*] bubbleroot: disabled (user namespaces available or proot/bubbleroot missing)"
+fi
+
 # --- Steam autostart (XFCE session) ---
 # Drop a Steam.desktop into the XFCE autostart dir so Steam launches when the
 # desktop session comes up — same pattern Steam-Headless uses. Under a real
@@ -325,6 +357,7 @@ if [ "${DPAD_AUTOSTART_STEAM:-1}" = "1" ]; then
     # redirect, so we launch Steam through this small script.
     cat > /opt/dpadcloud/steam-autostart <<EOF
 #!/bin/bash
+${BUBBLEROOT_EXPORTS}
 exec ${STEAM_EXEC} ${STEAM_ARGS} >/tmp/steam.log 2>&1
 EOF
     chmod +x /opt/dpadcloud/steam-autostart
@@ -369,7 +402,7 @@ done
 if [ "${DPAD_AUTOSTART_STEAM:-1}" = "1" ] && [ -n "${STEAM_EXEC:-}" ]; then
     (
         sleep 8
-        as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}'; ${STEAM_EXEC} ${STEAM_ARGS} >/tmp/steam.log 2>&1"
+        as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' ${STEAM_ENV_EXTRAS}; ${STEAM_EXEC} ${STEAM_ARGS} >/tmp/steam.log 2>&1"
     ) &
     echo "[*] Steam launch scheduled in 8s (${STEAM_EXEC} ${STEAM_ARGS}) -> /tmp/steam.log"
 fi

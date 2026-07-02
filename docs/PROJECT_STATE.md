@@ -100,6 +100,8 @@ Present path (no KMS), to be validated. If it works → Windows/Proton games on 
 without caps. If not → Windows games need a host that grants `--privileged`/caps
 (not Vast today); Linux GL games work via `vgl-steam` regardless.
 
+**Workaround for Steam + Proton on Vast = bubbleroot** (`scripts/bubbleroot`, vendored from codeberg.org/valpackett/bubbleroot): a proot-based drop-in `bwrap` that emulates bind-mount/chroot via ptrace — needs NO userns / NO CAP_SYS_ADMIN / NO setuid. The entrypoint auto-enables it when `unshare -U` fails (`DPAD_BUBBLEROOT=auto`), symlinks `/usr/local/bin/bwrap` -> it, and exports `BWRAP`+`PRESSURE_VESSEL_BWRAP` so Steam's runtime-tools/pressure-vessel use it instead of their bundled bwrap. GPU/Vulkan/DXVK render natively (NOT emulated); only filesystem/path syscalls are intercepted, so there is some loading-I/O overhead. PENDING validation on Vast: does the Steam client open + a Proton game launch under bubbleroot?
+
 **VALIDATED 2026-07-02 (RTX 3060 / driver 580, unprivileged Vast):** `vkcube
 --gpu_number 0` on the NULL-mode Xorg presents a Vulkan cube to an X window AND
 Selkies captures it → Vulkan present + ximagesrc capture both work WITHOUT
@@ -384,6 +386,7 @@ RTX 50/Blackwell requires the **cuda-12.8 image variant** (driver ≥570) — us
 | `DPAD_XORG` | `1` | Display server: `1` = real **Xorg + nvidia DDX** (gaming path — Vulkan present surface so DXVK/Proton render on GPU; Steam + Proton render directly, no vglrun). `0` = Xvfb + Mesa + VirtualGL (debug/fallback only — no Vulkan present, Windows games can't render). |
 | `DPAD_AUTOSTART_STEAM` | `1` | `1` writes an XFCE autostart `Steam.desktop` so Steam launches on desktop login (Steam-Headless pattern); `0` boots a bare desktop for debugging the Xorg/DXVK path. |
 | `STEAM_ARGS` | `-silent` | Args passed to the autostarted Steam (e.g. `-tenfoot` for Big Picture). |
+| `DPAD_BUBBLEROOT` | `auto` | proot-based `bwrap` shim for Steam/Proton when user namespaces are unavailable (Vast). `auto` enables when `unshare -U` fails; `1` force on; `0` force off. Sets `BWRAP`+`PRESSURE_VESSEL_BWRAP` to `/opt/dpadcloud/bubbleroot` and symlinks `/usr/local/bin/bwrap`. GPU/Vulkan render natively; only FS syscalls are ptrace-emulated (some loading overhead). Experimental — if a game misbehaves, set `DPAD_BUBBLEROOT=0` (needs a host with real userns). |
 | `SELKIES_TURN_PROTOCOL` | `tcp` | TURN protocol (TCP = one port, no relay range needed) |
 | `CLOUDFLARED_TUNNEL_TOKEN` | (unset → quick tunnel) | Named Cloudflare tunnel token (production) |
 | `CLOUDFLARED_HOSTNAME` | (unset) | Your domain for the named tunnel |

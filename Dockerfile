@@ -281,16 +281,16 @@ RUN gcc -shared -fPIC -O2 -o /opt/dpadcloud/libnvenc_fix.so /opt/dpadcloud/src/n
 COPY configs/ ${HOME}/.config/
 COPY configs/xorg/xorg.conf.template /opt/dpadcloud/xorg.conf.template
 COPY entrypoint.sh healthcheck.sh /opt/dpadcloud/
-COPY scripts/vgl-steam scripts/proton-wined3d scripts/vgl-test scripts/install-display-drivers scripts/mws-autopair /opt/dpadcloud/
+COPY scripts/vgl-steam scripts/proton-wined3d scripts/vgl-test scripts/install-display-drivers scripts/mws-autopair scripts/bubbleroot /opt/dpadcloud/
 # Strip any CR (CRLF) line endings — the repo is edited on Windows and
 # `#!/bin/bash\r` fails to exec with "no such file or directory". Defense-in-depth.
 RUN sed -i 's/\r$//' /opt/dpadcloud/entrypoint.sh /opt/dpadcloud/healthcheck.sh \
         /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \
-        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/mws-autopair \
+        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/mws-autopair /opt/dpadcloud/bubbleroot \
         ${HOME}/.config/sunshine/sunshine.conf 2>/dev/null || true && \
     chmod +x /opt/dpadcloud/*.sh \
         /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \
-        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/mws-autopair && \
+        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/mws-autopair /opt/dpadcloud/bubbleroot && \
     chown -R ${USERNAME}:${USERNAME} ${HOME}/.config && \
     rm -f ${HOME}/.config/autostart/*.desktop 2>/dev/null || true
 
@@ -314,6 +314,15 @@ EXPOSE 3478/tcp
 EXPOSE 47989/tcp
 EXPOSE 47990/tcp
 EXPOSE 41641/udp
+
+# Install proot (for bubbleroot — the proot-based bwrap shim used when user
+# namespaces are unavailable, e.g. on Vast). Try the distro package first; fall
+# back to the static proot binary if the apt package isn't in the enabled repos.
+RUN (apt-get update && apt-get install -y --no-install-recommends proot) \
+    || (curl -fsSL -o /usr/local/bin/proot https://proot.gitlab.io/proot/bin/proot \
+        && chmod +x /usr/local/bin/proot) \
+    && (command -v proot || test -x /usr/local/bin/proot) \
+    && rm -rf /var/lib/apt/lists/*
 
 # Generate the en_US.UTF-8 locale (Steam otherwise warns
 # "setlocale('en_US.UTF-8') failed" and mangles international characters).
