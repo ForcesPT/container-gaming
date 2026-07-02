@@ -61,7 +61,7 @@ error on failure, and selects/reports the Selkies-facing name `nvh264enc`
 Vast: `gst nvh264enc: OK (via videoconvert ! cudaupload ! cudaconvert →
 nvcudah264enc)` / `Selected encoder: nvh264enc` on both hosts.
 
-### ✅ Validated working (on Vast, built image `forcespt/dpadcloud-gaming:ubuntu24.04`)
+### ✅ Validated working (on Vast, built image `forcespt/dpadcloud-gaming:ubuntu24.04` / `:SteamUbuntu24.04`)
 - **NVENC on all topologies** via the flexgrip interposer + a PCI-bus→minor mask:
   - single-GPU (4060 Ti / 3090): native `h264_nvenc` ✅
   - multi-GPU slice (2 /proc, 1 mounted, driver 580/595): flexgrip filters → `h264_nvenc` ✅
@@ -86,6 +86,28 @@ nvcudah264enc)` / `Selected encoder: nvh264enc` on both hosts.
   hard cap). `nofile` hard cap is often 1024 → needs `--ulimit nofile=1048576:1048576`.
 
 ### ❌ The ONE blocker: `/dev/uinput` EPERM → Sunshine segfault → mws stream fails
+
+**Vast strips `--cap-add SYS_ADMIN` (confirmed):** the container's bounding set is
+exactly Docker's 14 default caps — `!cap_sys_admin`. So we **cannot become DRM
+master**, which means the DFP/virtual-monitor Xorg path (`--connected-monitor=DFP`, the
+Steam-Headless approach) fails with `Failed to acquire modesetting permission` even
+on hosts where `nvidia_drm.modeset=Y`. **Workaround = NULL-mode Xorg**
+(`UseDisplayDevice=None`, `ConnectedMonitor=None`): the nvidia DDX runs WITHOUT
+KMS, so Xorg comes up and GL/Vulkan render on the GPU with no DRM master needed.
+Capture is via `XGetImage` on the root window (backing store enabled). **Open:
+Vulkan present (→ DXVK/Proton) on a NULL-mode Xorg** — present goes through the DDX
+Present path (no KMS), to be validated. If it works → Windows/Proton games on Vast
+without caps. If not → Windows games need a host that grants `--privileged`/caps
+(not Vast today); Linux GL games work via `vgl-steam` regardless.
+
+**VALIDATED 2026-07-02 (RTX 3060 / driver 580, unprivileged Vast):** `vkcube
+--gpu_number 0` on the NULL-mode Xorg presents a Vulkan cube to an X window AND
+Selkies captures it → Vulkan present + ximagesrc capture both work WITHOUT
+CAP_SYS_ADMIN / DRM master. ⇒ DXVK/Proton (Windows games) ARE supported on
+Vast's unprivileged sandbox. Full cloud-gaming stack now works end-to-end:
+Steam (installed + autostarts, GPU-rendered) + native Linux GL + Windows/Proton
+via DXVK, streamed to the browser by Selkies with hardware NVENC, gamepad via
+Selkies' XTest interposer (no /dev/uinput).
 
 When the user clicks Play in the mws tab, mws's streamer does the RTSP handshake to
 Sunshine; Sunshine starts the session and tries to create virtual keyboard/mouse/touch
@@ -224,8 +246,9 @@ driver≥570 is via mws+Sunshine, NOT Selkies.
 
 ## What Doesn't Work Yet
 
-- ❌ **VirtualGL**: Installed (3.1.4). `vglrun` routes GL to the GPU's EGL offscreen backend and blits to Xvfb. Boot test prints the GL renderer (`NVIDIA GeForce…` = GPU, `llvmpipe` = software fallback). Launchers: `vgl-steam` (native Linux GL), `proton-wined3d` (Windows DX9–11 via WineD3D+VGL — interim path that needs no Vulkan present surface), `vgl-test` (sanity check).
-- ⏸ **gamescope**: DEFERRED (evaluated, not installed). Solves DXVK/Proton's Vulkan *present* on a headless host. On Ubuntu 22.04 the only jammy build is akdor 3.12.5-2 (Sept 2023, unsupported, dead-end on jammy). Current gamescope needs a base bump to Ubuntu 24.04 — but the earliest official `nvidia/cuda` image on 24.04 is 12.5.1, which forces host driver ≥555 (Max CUDA 12.5) and **narrows the Vast pool** (excludes driver 535/545/550, incl. the 3080 Ti hosts). Forward-compat only helps datacenter GPUs, not consumer RTX. Interim Windows-game path = **WineD3D (D3D→OpenGL) + vglrun** (no Vulkan present needed); revisit gamescope only if WineD3D perf is insufficient. Ruled out: Bazzite/CachyOS Handheld (bare-metal OS images, need kernel+modeset+display — opposite of headless rented); cage/wlroots DIY (NVIDIA+wlroots finicky); DXVK headless WSI / lavapipe (immature / too slow).
+- ✅ **Xorg + nvidia DDX (PRIMARY gaming path)**: `install-display-drivers` now extracts the X nvidia DDX driver (`nvidia_drv.so` + `libglx.so`) from the same `.run` into `/usr/lib/xorg/modules/nvidia/` (private `ModulePath` so it does NOT shadow the mesa `libglx.so` Xvfb needs), plus `nvidia-xconfig`. The entrypoint generates `/etc/X11/xorg.conf` (busid from `nvidia-smi`, `PrimaryGPU`/`AllowEmptyInitialConfiguration`/`UseDisplayDevice=None`/`ModeValidation` relaxation, `cvt` modeline, drops `--no-multigpu` on driver≥550) and starts `/usr/bin/Xorg :0` as root via `xserver-xorg-legacy`'s `Xwrapper.config`. This gives Vulkan a **present surface** → Steam + Proton/DXVK render on the GPU directly (no vglrun). Steam auto-starts on XFCE login (`Steam.desktop` autostart). Falls back to Xvfb+Mesa+VGL (debug, `DPAD_XORG=0`) if the nvidia DDX is missing or Xorg fails to start. **PENDING**: real Vast boot validation (does Xorg acquire `vt7` under Vast's unprivileged sandbox? Sunshine/Selkies capture against a real nvidia X screen? NVENC #1249 flexgrip still covers the Xorg path on multi-GPU slices?).
+- ⏸ **VirtualGL**: Installed (3.1.4) and still used by the Xvfb debug path (`vgl-steam` wraps `vglrun` only when `DPAD_XORG=0`). NOT needed under Xorg+nvidia-DDX (the X screen is already GPU-backed). Launchers kept: `vgl-steam`, `proton-wined3d` (WineD3D for the Xvfb path), `vgl-test`.
+- ✅ **gamescope: NO LONGER NEEDED for the present-surface problem.** The whole reason gamescope was deferred (DXVK/Proton need a Vulkan present surface on a headless host) is solved by the real Xorg+nvidia-DDX path. gamescope may still be useful later as a micro-compositor for Steam Big Picture / resolution scaling, but it is no longer a blocker for running Windows games.
 - ✅ **NVENC on RTX 3060**: RESOLVED — confirmed working on RTX 3060/driver-580 (multi-GPU slice + flexgrip). The old "3060 NVENC broken" was the #1249 multi-GPU issue + the encoder-probe artifact (see above), not a 3060 defect. Orchestrator probe-and-select still wise.
 - ❌ **Orchestrator integration**: The Fastify API (`apps/api`) doesn't yet provision this image. Needs: provision via Vast API, read boot log for tunnel URL + encoder probe, create named Cloudflare tunnels + per-session auth, return URL to website.
 - ❌ **KDE Plasma**: Not installed (using XFCE). Optional UX upgrade — doesn't affect game rendering perf. Would need KWIN_COMPOSE=N (disable compositor on Xvfb).
@@ -295,8 +318,9 @@ ENV DISPLAY=:0  PUID=1001  XDG_RUNTIME_DIR=/run/user/1001  PULSE_SERVER=unix:/ru
 2. install-display-drivers — extract matched .run OpenGL/EGL/Vulkan libs (compute-only Vast hosts)
 3. configure_cuda() — clean ldconfig, try forward-compat, select CUDA ${CUDA_VERSION}
 4. D-Bus (system + session)
-5. Xvfb (Mesa EGL, 1920x1080x24, -ac -noreset -shmem)
-6. XFCE desktop (xfwm4, xfsettingsd, xfce4-panel, xfdesktop — as user)
+5. Display server — **Xorg + nvidia DDX** (default, `DPAD_XORG=1`): entrypoint runs `install-display-drivers` (which now also extracts `nvidia_drv.so` + `libglx.so` into `/usr/lib/xorg/modules/nvidia/` + `nvidia-xconfig`), generates `/etc/X11/xorg.conf` (nvidia-xconfig or shipped template) with the assigned GPU's PCI busid + `PrimaryGPU`/`AllowEmptyInitialConfiguration`/`UseDisplayDevice=None`, and starts `/usr/bin/Xorg :0` as root (Xwrapper). Falls back to **Xvfb + Mesa EGL** (debug, `DPAD_XORG=0`) if the nvidia DDX is missing or Xorg fails to start.
+6. VirtualGL renderer check — Xorg: plain `glxinfo` (expect the real NVIDIA renderer); Xvfb: `vglrun glxinfo`. Steam autostart `Steam.desktop` written to `~/.config/autostart` (Exec=`/usr/bin/steam` in Xorg, `/opt/dpadcloud/vgl-steam` in Xvfb).
+7. XFCE desktop (xfwm4, xfsettingsd, xfce4-panel, xfdesktop — as user) — Steam then autostarts on login.
 7. PulseAudio (headless null-sink: dummy + dummy.monitor, as user, not root)
 8. coturn (TCP on VAST_TCP_PORT_73478 or 3478, lt-cred-mech, PUBLIC_IPADDR)
 9. NVENC topology diag (#1249 check) + flexgrip auto-enable + assemble LD_PRELOAD (joystick + libnvenc_fix.so)
@@ -357,6 +381,9 @@ RTX 50/Blackwell requires the **cuda-12.8 image variant** (driver ≥570) — us
 | `SELKIES_BASIC_AUTH_PASSWORD` | `OPEN_BUTTON_TOKEN or dpadcloud` | Browser login password (per-session token in production) |
 | `SELKIES_ENCODER` | (auto-probe) | Force encoder: nvh264enc, x264enc, etc. |
 | `DPAD_NVENC_FIX` | `auto` | NVENC #1249 fix: `auto` (enable when host GPUs > mounted `/dev/nvidiaX` on driver 570..609), `1` (force on), `0` (force off). Uses `/opt/dpadcloud/libnvenc_fix.so`. |
+| `DPAD_XORG` | `1` | Display server: `1` = real **Xorg + nvidia DDX** (gaming path — Vulkan present surface so DXVK/Proton render on GPU; Steam + Proton render directly, no vglrun). `0` = Xvfb + Mesa + VirtualGL (debug/fallback only — no Vulkan present, Windows games can't render). |
+| `DPAD_AUTOSTART_STEAM` | `1` | `1` writes an XFCE autostart `Steam.desktop` so Steam launches on desktop login (Steam-Headless pattern); `0` boots a bare desktop for debugging the Xorg/DXVK path. |
+| `STEAM_ARGS` | `-silent` | Args passed to the autostarted Steam (e.g. `-tenfoot` for Big Picture). |
 | `SELKIES_TURN_PROTOCOL` | `tcp` | TURN protocol (TCP = one port, no relay range needed) |
 | `CLOUDFLARED_TUNNEL_TOKEN` | (unset → quick tunnel) | Named Cloudflare tunnel token (production) |
 | `CLOUDFLARED_HOSTNAME` | (unset) | Your domain for the named tunnel |
@@ -410,7 +437,7 @@ PipeWire's null-sink monitor **suspends when idle** (no driver node → graph do
 
 ---
 
-## Status: Ubuntu 24.04 + CUDA 12.5.1 · mws PRIMARY browser path (Sunshine NVENC) · Selkies FALLBACK · VirtualGL DONE · gamescope DEFERRED · flexgrip #1249 fix IMPLEMENTED · NEXT = validate mws+Sunshine on Vast + orchestrator
+## Status: Ubuntu 24.04 + CUDA 12.5.1 · **Xorg + nvidia-DDX = PRIMARY gaming path (real Vulkan present surface → Steam/Proton/DXVK on GPU)** · Xvfb+VGL = debug fallback · mws browser PRIMARY · Selkies browser FALLBACK · flexgrip #1249 fix IMPLEMENTED · NEXT = validate Xorg+Steam on Vast, then orchestrator
 
 ### What was built (Ubuntu 24.04 move + mws)
 - **Dockerfile**: base `nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu24.04` (default `12.5.1`/`12-5`, single tag `ubuntu24.04`; `12.8.1`/`12-8` → `ubuntu24.04-rtx50` for Blackwell). noble t64 apt renames applied ONLY where actually renamed (libasound2t64, libssl3t64, libgtk-3-0t64); libpulse0/libva2/libvdpau1/libwayland-egl1/libjack-jackd2-0 keep plain names, libvpx7→libvpx9; libgl1-mesa-glx dropped; pipewire packages dropped — we use PulseAudio). Sunshine deb → `sunshine-ubuntu-24.04-amd64.deb`. Selkies tarball/deb auto-resolve to `*_ubuntu24.04_*` via `${UBUNTU_VER}`. `PIP_BREAK_SYSTEM_PACKAGES=1` for noble pip3.

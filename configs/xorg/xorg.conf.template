@@ -1,0 +1,50 @@
+# DpadCloud headless Xorg + nvidia DDX config (fallback when nvidia-xconfig is
+# unavailable). The entrypoint seds in __BUSID__, __WIDTH__, __HEIGHT__,
+# __DEPTH__, __MODE__, __MODELINE__ before starting Xorg. The nvidia X modules
+# (nvidia_drv.so + libglx.so) live under /usr/lib/xorg/modules/nvidia so they
+# do NOT shadow the mesa GLX module that Xvfb (debug path) needs — ModulePath
+# lists the nvidia dir first, so a real Xorg picks up the nvidia DDX, while
+# Xvfb (default ModulePath) keeps using mesa.
+
+Section "Files"
+    ModulePath "/usr/lib/xorg/modules/nvidia"
+    ModulePath "/usr/lib/xorg/modules"
+EndSection
+
+Section "ServerLayout"
+    Identifier "Layout0"
+    Screen 0 "Screen0"
+EndSection
+
+Section "ServerFlags"
+    Option "AutoAddGPU" "false"
+EndSection
+
+Section "Device"
+    Identifier "Device0"
+    Driver "nvidia"
+    VendorName "NVIDIA Corporation"
+    BusID "__BUSID__"
+    Option "PrimaryGPU" "yes"
+    Option "AllowEmptyInitialConfiguration" "true"
+    Option "ConnectedMonitor" "None"
+    Option "UseDisplayDevice" "None"
+    Option "ModeValidation" "NoMaxPClkCheck, NoEdidMaxPClkCheck, NoMaxSizeCheck, NoHorizSyncCheck, NoVertRefreshCheck, NoVirtualSizeCheck, NoTotalSizeCheck, NoDualLinkDVICheck, NoDisplayPortBandwidthCheck, AllowNon3DVisionModes, AllowNonHDMI3DModes, AllowNonEdidModes, NoEdidHDMI2Check, AllowDpInterlaced"
+EndSection
+
+Section "Monitor"
+    Identifier "Monitor0"
+    __MODELINE__
+EndSection
+
+Section "Screen"
+    Identifier "Screen0"
+    Device "Device0"
+    Monitor "Monitor0"
+    DefaultDepth __DEPTH__
+    SubSection "Display"
+        Depth __DEPTH__
+        Modes "__MODE__"
+        Virtual __WIDTH__ __HEIGHT__
+    EndSubSection
+EndSection

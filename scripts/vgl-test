@@ -28,7 +28,10 @@ echo "== glxgears (6s) =="
 DISPLAY="$DISP" VGL_DISPLAY="$VGL_DISPLAY" timeout 7 vglrun glxgears -info 2>&1 | grep -E 'GL_RENDERER|GL_VERSION|FPS|frames' | head -8 || true
 
 echo
-echo "If RESULT: OK, native Linux GL titles work. For Windows DX9-11 titles:"
+echo "If RESULT: OK, native Linux GL titles work. Benchmarks (run under vglrun):"
+echo "  vglrun glmark2            # OpenGL benchmark (FPS + scene scores) — GL path"
+echo "  vglrun glmark2-es2         # OpenGL ES2 benchmark"
+echo "For Windows DX9-11 titles:"
 echo "  proton-wined3d             # Steam with PROTON_USE_WINED3D=1 + vglrun"
 echo "  proton-wined3d <appid>     # launch a specific Windows game"
 echo "DX12 / true DXVK perf need a present surface (gamescope) — deferred."

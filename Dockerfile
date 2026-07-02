@@ -39,7 +39,7 @@ LABEL description="Lean headless cloud-gaming container: mws + Selkies + Sunshin
 ARG CUDA_VERSION
 ARG CUDA_PKG
 ARG DEBIAN_FRONTEND=noninteractive
-ARG PROTONGE_VERSION=GE-Proton9-25
+ARG PROTONGE_VERSION=GE-Proton11-1
 ARG MWS_VERSION=v2.10.0
 ARG CLOUDFLARED_VERSION=2025.7.0
 ARG VIRTUALGL_VERSION=3.1.4
@@ -64,6 +64,9 @@ ENV GST_DEBUG="*:2"
 ENV GSTREAMER_PATH=/opt/gstreamer
 ENV SELKIES_WEB_ROOT=/opt/gst-web
 ENV MWS_PATH=/opt/mws
+# Put our launcher scripts (vgl-test, vgl-steam, proton-wined3d, mws-autopair,
+# install-display-drivers) on PATH so they work bare inside the container.
+ENV PATH=/opt/dpadcloud:${PATH}
 # Encoder chosen at runtime by entrypoint (1-frame test). Do NOT hardcode here.
 ENV SDL_VIDEODRIVER=x11
 # Noble (24.04) enforces PEP 668 — allow pip3 to install the Selkies wheel into
@@ -84,7 +87,7 @@ ENV PIP_BREAK_SYSTEM_PACKAGES=1
 RUN dpkg --add-architecture i386 && \
     apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl wget git gnupg2 sudo socat jq unzip xz-utils \
-      xserver-xorg-core xvfb x11-xserver-utils x11-utils mesa-utils \
+      xserver-xorg-core xserver-xorg-legacy xvfb x11-xserver-utils x11-utils mesa-utils \
       libgl1-mesa-dri libegl-mesa0 libgles2 libglvnd0 \
       libglx-mesa0 libglx0 libgl1 \
       xfce4 xfce4-goodies dbus-x11 \
@@ -119,10 +122,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # =============================================================================
-# 4. Install Steam
+# 4. Install Steam (+ steam-libs amd64/i386 so the Steam runtime has its deps).
+#    --no-install-recommends is intentionally DROPPED for this step — Steam's
+#    runtime libs (steam-libs-amd64 / steam-libs-i386) are Recommends of
+#    steam-installer on Ubuntu and are needed for the client to actually run.
+#    If steam-installer isn't in the enabled apt repos (multiverse may not be
+#    enabled on the nvidia/cuda base), fall back to Valve's official steam.deb
+#    (linuxserver/docker-steam's approach) which adds the Steam apt repo itself.
+#    Symlink steam onto PATH (matches Steam-Headless) so the XFCE autostart
+#    Exec=/usr/bin/steam works.
 # =============================================================================
-RUN apt-get update && apt-get install -y --no-install-recommends steam-installer \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && \
+    ( apt-get install -y steam-installer \
+      || ( curl -fsSL -o /tmp/steam.deb "https://cdn.fastly.steamstatic.com/client/installer/steam.deb" \
+           && apt-get install -y /tmp/steam.deb && rm -f /tmp/steam.deb ) ) && \
+    apt-get update && \
+    ( apt-get install -y steam-libs-amd64 steam-libs-i386 2>/dev/null \
+      || echo "    (steam-libs-* not separate packages; Steam will fetch its runtime on first launch)" ) && \
+    ( ln -sf /usr/games/steam /usr/bin/steam 2>/dev/null || ln -sf /usr/bin/steam-launch /usr/bin/steam 2>/dev/null || true ) && \
+    rm -rf /var/lib/apt/lists/*
 
 # =============================================================================
 # 5. Install Proton-GE (Windows game compatibility, Steam-Deck-grade)
@@ -218,7 +236,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends pulseaudio puls
 #     this just lets us print what Vulkan the host exposes at boot.
 # =============================================================================
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libvulkan1 vulkan-tools mesa-vulkan-drivers \
+      libvulkan1 libvulkan1:i386 vulkan-tools mesa-vulkan-drivers mesa-vulkan-drivers:i386 \
     && rm -rf /var/lib/apt/lists/*
 
 # =============================================================================
@@ -261,6 +279,7 @@ RUN gcc -shared -fPIC -O2 -o /opt/dpadcloud/libnvenc_fix.so /opt/dpadcloud/src/n
 # 10. Copy configs + entrypoint + launcher scripts + display-driver installer
 # =============================================================================
 COPY configs/ ${HOME}/.config/
+COPY configs/xorg/xorg.conf.template /opt/dpadcloud/xorg.conf.template
 COPY entrypoint.sh healthcheck.sh /opt/dpadcloud/
 COPY scripts/vgl-steam scripts/proton-wined3d scripts/vgl-test scripts/install-display-drivers scripts/mws-autopair /opt/dpadcloud/
 # Strip any CR (CRLF) line endings — the repo is edited on Windows and
@@ -295,6 +314,28 @@ EXPOSE 3478/tcp
 EXPOSE 47989/tcp
 EXPOSE 47990/tcp
 EXPOSE 41641/udp
+
+# Generate the en_US.UTF-8 locale (Steam otherwise warns
+# "setlocale('en_US.UTF-8') failed" and mangles international characters).
+RUN apt-get update && apt-get install -y --no-install-recommends locales && \
+    echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen && locale-gen en_US.UTF-8 && \
+    rm -rf /var/lib/apt/lists/*
+ENV LANG=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
+
+# Put the user-facing launchers on the DEFAULT PATH. The container's `su`/login
+# shells reset PATH via pam_env/`/etc/environment`, dropping /opt/dpadcloud, so
+# `vgl-steam` was "command not found" in an interactive terminal. /usr/local/bin
+# survives that reset.
+RUN ln -sf /opt/dpadcloud/vgl-steam /usr/local/bin/vgl-steam && \
+    ln -sf /opt/dpadcloud/vgl-test /usr/local/bin/vgl-test && \
+    ln -sf /opt/dpadcloud/proton-wined3d /usr/local/bin/proton-wined3d
+
+# xserver-xorg-legacy reads this to allow a headless Xorg started by root (and
+# non-root via the wrapper) to acquire the server — required for the real
+# Xorg+nvidia-DDX gaming path. Xvfb ignores it.
+RUN mkdir -p /etc/X11 && \
+    printf 'allowed_users=anybody\nneeds_root_rights=yes\n' > /etc/X11/Xwrapper.config
 
 USER root
 ENTRYPOINT ["/opt/dpadcloud/entrypoint.sh"]

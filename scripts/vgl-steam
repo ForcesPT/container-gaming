@@ -1,9 +1,15 @@
 #!/bin/bash
-# vgl-steam — launch Steam under VirtualGL so native Linux OpenGL games render on
-# the GPU (EGL offscreen) instead of Mesa software (llvmpipe) on the headless Xvfb.
+# vgl-steam — launch Steam with GPU rendering.
+# Under the real Xorg+nvidia-DDX path (DPAD_XORG=1, default) the X screen is
+# already backed by the GPU, so Steam + Proton/DXVK render directly — NO vglrun.
+# Under the Xvfb debug path (DPAD_XORG=0) we wrap with vglrun so VirtualGL
+# bridges GL onto the GPU's EGL offscreen backend and blits to Xvfb.
 #
 # Usage:  vgl-steam [steam args...]
 # Env:    VGL_DISPLAY (default egl), VGL_REFRESHRATE (default 60)
+if [ "${DPAD_XORG:-1}" = "1" ]; then
+    exec steam "$@"
+fi
 export VGL_DISPLAY="${VGL_DISPLAY:-egl}"
 export VGL_REFRESHRATE="${VGL_REFRESHRATE:-60}"
 unset __EGL_VENDOR_LIBRARY_FILENAMES   # let vglrun reach the NVIDIA EGL vendor (not Mesa llvmpipe)

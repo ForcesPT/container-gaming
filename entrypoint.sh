@@ -162,19 +162,112 @@ else
 fi
 sleep 1
 
-# --- Xvfb (Mesa software EGL; NVIDIA EGL segfaults on a virtual framebuffer) ---
-echo "[*] Starting Xvfb on ${DISPLAY_NUM}..."
+# --- Display server: REAL Xorg + nvidia DDX (gaming) or Xvfb+Mesa (debug) ---
+# DPAD_XORG=1 (default): a real Xorg with the nvidia DDX driver so Vulkan gets a
+#   present surface → DXVK/Proton render on the GPU (the cloud-gaming path).
+# DPAD_XORG=0: Xvfb + Mesa software EGL + VirtualGL (the old path; kept ONLY as
+#   a debug/fallback when the nvidia DDX isn't available or Xorg won't start).
+# Steam autostart + vgl-steam both branch on which server actually came up.
+export DPAD_XORG="${DPAD_XORG:-1}"
+SCREEN_W="$(echo "$SCREEN_RES" | cut -dx -f1)"
+SCREEN_H="$(echo "$SCREEN_RES" | cut -dx -f2)"
+SCREEN_D="$(echo "$SCREEN_RES" | cut -dx -f3)"; [ -z "$SCREEN_D" ] && SCREEN_D=24
 rm -f /tmp/.X${DISPLAY_NUM#:}-lock /tmp/.X11-unix/X${DISPLAY_NUM#:}
-# Force Mesa EGL if the vendor file exists (avoids NVIDIA EGL GBM segfault)
-if [ -f /usr/share/glvnd/egl_vendor.d/50_mesa.json ]; then
-    export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+
+# Generate /etc/X11/xorg.conf for the assigned GPU (busid from nvidia-smi).
+# nvidia-xconfig if available; else our shipped template + sed.
+generate_xorg_conf() {
+    local GPU_BUS_HEX BUSID B D F MODEL MODE_NAME
+    GPU_BUS_HEX="$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader 2>/dev/null | head -1)"
+    # GPU_BUS_HEX like "00000000:01:00.0" -> PCI:1:0:0
+    BUSID=""
+    if [ -n "$GPU_BUS_HEX" ]; then
+        IFS=":." read -r _b B D F <<< "$GPU_BUS_HEX"
+        BUSID="PCI:$((16#${B:-0})):$((16#${D:-0})):$((16#${F:-0}))"
+    fi
+    MODEL="$(command -v cvt >/dev/null 2>&1 && cvt -r "$SCREEN_W" "$SCREEN_H" 60 2>/dev/null | sed -n 2p)"
+    MODE_NAME="$(echo "$MODEL" | awk '{print $2}' | tr -d '"')"
+    [ -z "$MODE_NAME" ] && MODE_NAME="${SCREEN_W}x${SCREEN_H}"
+    rm -f /etc/X11/xorg.conf
+    if command -v nvidia-xconfig >/dev/null 2>&1; then
+        local DRVMAJ
+        DRVMAJ="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | cut -d. -f1)"
+        local NVXCFG_ARGS=(--virtual="${SCREEN_W}x${SCREEN_H}" --depth="$SCREEN_D" \
+            --mode="$MODE_NAME" --allow-empty-initial-configuration --no-probe-all-gpus \
+            --only-one-x-screen --no-sli --no-base-mosaic \
+            --use-display-device=None --connected-monitor=None)
+        # NOTE: NULL/NoScanout mode (UseDisplayDevice=None) is REQUIRED on Vast:
+        # Vast strips --cap-add SYS_ADMIN, so we CANNOT become DRM master, which
+        # the DFP/virtual-monitor path needs ("Failed to acquire modesetting
+        # permission"). NULL mode runs the nvidia DDX WITHOUT KMS, so Xorg comes
+        # up and GL/Vulkan render on the GPU. Capture is via XGetImage on the root
+        # window (backing store enabled) -- works for Selkies. Vulkan present to
+        # an X window goes through the DDX Present path (no DRM master needed);
+        # DXVK/Proton on this path to be validated.
+        [ -n "$BUSID" ] && NVXCFG_ARGS+=(--busid="$BUSID")
+        # --no-multigpu was removed in driver 550; only pass it on older drivers.
+        if [ -z "$DRVMAJ" ] || [ "$DRVMAJ" -lt 550 ]; then NVXCFG_ARGS+=(--no-multigpu); fi
+        nvidia-xconfig "${NVXCFG_ARGS[@]}" >/dev/null 2>&1 || true
+        # Patch in the options Steam-Headless found necessary on a headless GPU.
+        sed -i '/Driver\s\+"nvidia"/a\    Option         "PrimaryGPU" "yes"' /etc/X11/xorg.conf 2>/dev/null || true
+        sed -i '/Driver\s\+"nvidia"/a\    Option         "AllowEmptyInitialConfiguration"' /etc/X11/xorg.conf 2>/dev/null || true
+        sed -i '/Driver\s\+"nvidia"/a\    Option         "ModeValidation" "NoMaxPClkCheck, NoEdidMaxPClkCheck, NoMaxSizeCheck, NoHorizSyncCheck, NoVertRefreshCheck, NoVirtualSizeCheck, NoTotalSizeCheck, NoDualLinkDVICheck, NoDisplayPortBandwidthCheck, AllowNon3DVisionModes, AllowNonHDMI3DModes, AllowNonEdidModes, NoEdidHDMI2Check, AllowDpInterlaced"' /etc/X11/xorg.conf 2>/dev/null || true
+        [ -n "$MODEL" ] && sed -i "/Section\s\+\"Monitor\"/a\    $MODEL" /etc/X11/xorg.conf 2>/dev/null || true
+        grep -q 'AutoAddGPU' /etc/X11/xorg.conf 2>/dev/null || printf 'Section "ServerFlags"\n    Option "AutoAddGPU" "false"\nEndSection\n' >> /etc/X11/xorg.conf
+    else
+        cp -f /opt/dpadcloud/xorg.conf.template /etc/X11/xorg.conf
+        [ -n "$BUSID" ] && sed -i "s/__BUSID__/$BUSID/" /etc/X11/xorg.conf || sed -i 's/__BUSID__/PCI:1:0:0/' /etc/X11/xorg.conf
+        sed -i "s/__WIDTH__/$SCREEN_W/g; s/__HEIGHT__/$SCREEN_H/g; s/__DEPTH__/$SCREEN_D/g; s/__MODE__/$MODE_NAME/g" /etc/X11/xorg.conf
+        [ -n "$MODEL" ] && sed -i "s|__MODELINE__|$MODEL|" /etc/X11/xorg.conf || sed -i '/__MODELINE__/d' /etc/X11/xorg.conf
+    fi
+    # Make Xorg pick up the nvidia DDX + libglx from our private ModulePath first
+    # (the mesa libglx.so in the default path stays for Xvfb).
+    sed -i '/Section "Files"/,/^EndSection/d' /etc/X11/xorg.conf 2>/dev/null
+    cat >> /etc/X11/xorg.conf <<'FILES'
+Section "Files"
+    ModulePath "/usr/lib/xorg/modules/nvidia"
+    ModulePath "/usr/lib/xorg/modules"
+EndSection
+FILES
+    echo "    xorg.conf written (busid ${BUSID:-auto}, mode ${MODE_NAME})"
+}
+
+X_SERVER=""
+if [ "${DPAD_XORG}" = "1" ] && [ -x /usr/bin/Xorg ] && [ -f /usr/lib/xorg/modules/nvidia/drivers/nvidia_drv.so ]; then
+    echo "[*] Starting real Xorg + nvidia DDX on ${DISPLAY_NUM} (Vulkan present for DXVK/Proton)..."
+    generate_xorg_conf
+    # Do NOT set __EGL_VENDOR_LIBRARY_FILENAMES=50_mesa.json here — that Mesa
+    # override only exists to stop NVIDIA EGL GBM segfaulting on a virtual
+    # framebuffer. On a real nvidia X screen we WANT the NVIDIA GLX/EGL vendor.
+    /usr/bin/Xorg "${DISPLAY_NUM}" -config /etc/X11/xorg.conf -noreset -novtswitch \
+        -sharevts +extension RANDR +extension RENDER +extension GLX +extension XVideo \
+        +extension DOUBLE-BUFFER +extension DAMAGE +extension COMPOSITE +extension XTEST \
+        -dpms -s off -nolisten tcp -ac -iglx -verbose vt7 >/tmp/xorg.log 2>&1 &
+    sleep 3
+    if pgrep -x Xorg >/dev/null; then
+        echo "    Xorg running (nvidia DDX)"
+        X_SERVER=Xorg
+    else
+        echo "    WARNING: Xorg failed to start — falling back to Xvfb. /tmp/xorg.log tail:"
+        tail -n 20 /tmp/xorg.log 2>/dev/null | sed 's/^/      /'
+        rm -f /tmp/.X${DISPLAY_NUM#:}-lock /tmp/.X11-unix/X${DISPLAY_NUM#:}
+    fi
 fi
-Xvfb "${DISPLAY_NUM}" -screen 0 "${SCREEN_RES}" -dpi 96 \
-    +extension COMPOSITE +extension DAMAGE +extension GLX +extension RANDR \
-    +extension RENDER +extension MIT-SHM +extension XFIXES +extension XTEST \
-    +iglx +render -nolisten tcp -ac -noreset -shmem >/tmp/xvfb.log 2>&1 &
-sleep 2
-pgrep -x Xvfb >/dev/null && echo "    Xvfb running" || { echo "ERROR: Xvfb failed"; cat /tmp/xvfb.log; }
+
+if [ -z "$X_SERVER" ]; then
+    echo "[*] Starting Xvfb on ${DISPLAY_NUM} (software framebuffer — debug/fallback)..."
+    export DPAD_XORG=0
+    # Force Mesa EGL if the vendor file exists (avoids NVIDIA EGL GBM segfault on a virtual framebuffer)
+    if [ -f /usr/share/glvnd/egl_vendor.d/50_mesa.json ]; then
+        export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+    fi
+    Xvfb "${DISPLAY_NUM}" -screen 0 "${SCREEN_RES}" -dpi 96 \
+        +extension COMPOSITE +extension DAMAGE +extension GLX +extension RANDR \
+        +extension RENDER +extension MIT-SHM +extension XFIXES +extension XTEST \
+        +iglx +render -nolisten tcp -ac -noreset -shmem >/tmp/xvfb.log 2>&1 &
+    sleep 2
+    pgrep -x Xvfb >/dev/null && { echo "    Xvfb running"; X_SERVER=Xvfb; } || { echo "ERROR: Xvfb failed"; cat /tmp/xvfb.log; }
+fi
 export DISPLAY="${DISPLAY_NUM}"
 wait_sock "/tmp/.X11-unix/X${DISPLAY_NUM#:}" "X display"
 
@@ -182,25 +275,73 @@ wait_sock "/tmp/.X11-unix/X${DISPLAY_NUM#:}" "X display"
 #  --enable_resize=false. To support on-the-fly resize, start Xvfb at 8192x4096
 #  and add `cvt` + selkies-gstreamer-resize.)
 
-# --- VirtualGL (GPU-accelerated OpenGL into the headless Xvfb) ---
-# Without VGL, GL apps hit Mesa llvmpipe (CPU) on Xvfb. vglrun routes GL to the
-# GPU's EGL offscreen backend (VGL_DISPLAY=egl needs no real display) and blits
-# the finished frame onto the Xvfb window, which Selkies/Sunshine then capture.
-# VGL does NOT solve Vulkan PRESENT (DXVK/Proton) — that needs gamescope (deferred).
+# --- Renderer check ---
+# Real Xorg+nvidia: GL goes straight to the GPU — no vglrun needed. We just
+#   print the renderer so the boot log shows whether the nvidia DDX bound the GPU.
+# Xvfb path: VirtualGL bridges GL onto the GPU's EGL offscreen backend and blits
+#   the frame onto Xvfb. VGL does NOT solve Vulkan PRESENT (DXVK/Proton) — that's
+#   the whole reason DPAD_XORG=1 is the default for gaming.
 export VGL_DISPLAY=egl
 export VGL_REFRESHRATE=60
-if command -v vglrun >/dev/null 2>&1; then
-    # Unset the Mesa-only EGL vendor override for vglrun ONLY: the entrypoint sets
-    # __EGL_VENDOR_LIBRARY_FILENAMES=50_mesa.json so Xvfb doesn't segfault on
-    # NVIDIA EGL GBM, but vglrun's EGL backend must reach the NVIDIA EGL vendor to
-    # render offscreen on the GPU (else it falls back to Mesa llvmpipe = CPU).
-    VGL_RENDERER=$(as_user "unset __EGL_VENDOR_LIBRARY_FILENAMES; DISPLAY=${DISPLAY_NUM} VGL_DISPLAY=egl vglrun glxinfo -B 2>/dev/null | grep -m1 'OpenGL renderer string'" || echo 'VGL test failed (no GPU renderer)')
-    echo "[*] VirtualGL: ${VGL_RENDERER}"
+if [ "${X_SERVER}" = "Xorg" ]; then
+    VGL_RENDERER="$(as_user "DISPLAY=${DISPLAY_NUM} glxinfo -B 2>/dev/null | grep -m1 'OpenGL renderer string'" || echo 'glxinfo failed')"
+    echo "[*] OpenGL renderer (Xorg+nvidia DDX): ${VGL_RENDERER}"
     case "${VGL_RENDERER}" in
-        *llvmpipe*|*"VGL test failed"*) echo "    WARNING: VGL is rendering on software (llvmpipe) or failed — GL games will be slow. Check NVIDIA_DRIVER_CAPABILITIES=all and that a GPU is assigned." ;;
+        *llvmpipe*|*"glxinfo failed"*) echo "    WARNING: Xorg is rendering on software (llvmpipe) — the nvidia DDX did not bind the GPU. Check /tmp/xorg.log and that NVIDIA_DRIVER_CAPABILITIES=all + a GPU is assigned." ;;
     esac
 else
-    echo "[*] VirtualGL: vglrun not found (VirtualGL not installed); GL apps will use Mesa llvmpipe (CPU)."
+    if command -v vglrun >/dev/null 2>&1; then
+        # Unset the Mesa-only EGL vendor override for vglrun ONLY: the entrypoint
+        # sets __EGL_VENDOR_LIBRARY_FILENAMES=50_mesa.json so Xvfb doesn't segfault
+        # on NVIDIA EGL GBM, but vglrun's EGL backend must reach the NVIDIA EGL
+        # vendor to render offscreen on the GPU (else Mesa llvmpipe = CPU).
+        VGL_RENDERER=$(as_user "unset __EGL_VENDOR_LIBRARY_FILENAMES; DISPLAY=${DISPLAY_NUM} VGL_DISPLAY=egl vglrun glxinfo -B 2>/dev/null | grep -m1 'OpenGL renderer string'" || echo 'VGL test failed (no GPU renderer)')
+        echo "[*] VirtualGL: ${VGL_RENDERER}"
+        case "${VGL_RENDERER}" in
+            *llvmpipe*|*"VGL test failed"*) echo "    WARNING: VGL is rendering on software (llvmpipe) or failed — GL games will be slow. Check NVIDIA_DRIVER_CAPABILITIES=all and that a GPU is assigned." ;;
+        esac
+    else
+        echo "[*] VirtualGL: vglrun not found (VirtualGL not installed); GL apps will use Mesa llvmpipe (CPU)."
+    fi
+fi
+
+# --- Steam autostart (XFCE session) ---
+# Drop a Steam.desktop into the XFCE autostart dir so Steam launches when the
+# desktop session comes up — same pattern Steam-Headless uses. Under a real
+# Xorg+nvidia screen Steam + Proton/DXVK render on the GPU directly (no vglrun);
+# under Xvfb (debug) we wrap with vgl-steam so the VGL bridge still applies.
+# STEAM_ARGS defaults to -silent (override e.g. -tenfoot for Big Picture).
+# Disable with DPAD_AUTOSTART_STEAM=0 to boot a bare desktop for debugging.
+STEAM_ARGS="${STEAM_ARGS:--silent}"
+mkdir -p "${USER_HOME}/.config/autostart"
+if [ "${DPAD_AUTOSTART_STEAM:-1}" = "1" ]; then
+    if [ "${X_SERVER}" = "Xorg" ]; then
+        STEAM_EXEC="/usr/bin/steam"
+    else
+        STEAM_EXEC="/opt/dpadcloud/vgl-steam"
+    fi
+    # Wrapper so Steam's output is captured to /tmp/steam.log (surfaced in the
+    # Vast Logs tab by the periodic dump) — a .desktop Exec can't easily
+    # redirect, so we launch Steam through this small script.
+    cat > /opt/dpadcloud/steam-autostart <<EOF
+#!/bin/bash
+exec ${STEAM_EXEC} ${STEAM_ARGS} >/tmp/steam.log 2>&1
+EOF
+    chmod +x /opt/dpadcloud/steam-autostart
+    cat > "${USER_HOME}/.config/autostart/Steam.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Steam
+Exec=/opt/dpadcloud/steam-autostart
+Icon=steam
+Terminal=false
+X-GNOME-Autostart-enabled=true
+EOF
+    chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}/.config/autostart"
+    echo "[*] Steam autostart configured: ${STEAM_EXEC} ${STEAM_ARGS} (direct launch after desktop -> /tmp/steam.log)"
+else
+    rm -f "${USER_HOME}/.config/autostart/Steam.desktop"
+    echo "[*] Steam autostart: disabled (DPAD_AUTOSTART_STEAM=0)"
 fi
 
 # --- XFCE desktop components (light; started as user) ---
@@ -221,6 +362,17 @@ for p in xfwm4 xfsettingsd xfce4-panel xfdesktop; do
     if pgrep -x "$p" >/dev/null; then echo "    $p: running"; else echo "    $p: NOT running (see /tmp/xfce.log)"; fi
 done
 [ ! -s /tmp/xfce.log ] || { echo "    --- /tmp/xfce.log (tail) ---"; tail -n 15 /tmp/xfce.log | sed 's/^/      /'; }
+
+# --- Launch Steam directly (we DON'T run xfce4-session, so the XFCE autostart
+# .desktop above is never processed). Background it after a short delay so the
+# desktop + PulseAudio settle first. Logs to /tmp/steam.log (in the periodic dump).
+if [ "${DPAD_AUTOSTART_STEAM:-1}" = "1" ] && [ -n "${STEAM_EXEC:-}" ]; then
+    (
+        sleep 8
+        as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}'; ${STEAM_EXEC} ${STEAM_ARGS} >/tmp/steam.log 2>&1"
+    ) &
+    echo "[*] Steam launch scheduled in 8s (${STEAM_EXEC} ${STEAM_ARGS}) -> /tmp/steam.log"
+fi
 
 # --- PulseAudio (headless null sink; monitor is capturable for silence) ---
 # PipeWire's null-sink monitor suspends when idle and pulsesrc times out against
@@ -620,7 +772,7 @@ echo ""
 echo "=========================================="
 echo "  DpadCloud Container READY!"
 echo "=========================================="
-echo "  Display:          ${DISPLAY_NUM} @ ${SCREEN_RES}"
+echo "  Display:          ${DISPLAY_NUM} @ ${SCREEN_RES}  (${X_SERVER:-?}$( [ "${X_SERVER}" = Xorg ] && echo "+nvidia DDX" ))"
 echo "  Encoder:           ${SELKIES_ENC}"
 [ -n "$PUBLIC_IP" ] && echo "  Public IP:        ${PUBLIC_IP}"
 echo ""
@@ -658,13 +810,19 @@ fi
 echo ""
 echo "  TURN (WebRTC media relay): ${PUBLIC_IP:-<ip>}:${TURN_PORT_EXT}  (${SELKIES_TURN_PROTOCOL}, ${TURN_USER}/<token>)"
 echo ""
-echo "  ▶ GPU-accelerated gaming (VirtualGL — VGL_DISPLAY=${VGL_DISPLAY:-egl}):"
-echo "      In the stream, open a terminal and run:"
-echo "        vgl-test                     # sanity check (renderer + glxgears)"
-echo "        vgl-steam                    # native Linux GL titles on the GPU"
-echo "        proton-wined3d               # Windows DX9–11 via WineD3D+VGL (no gamescope)"
-echo "        proton-wined3d <appid>       # specific Windows game"
-echo "      (DX12 / true DXVK perf need a Vulkan present surface = gamescope, deferred)"
+echo "  ▶ GPU-accelerated gaming (X server: ${X_SERVER:-?}):"
+if [ "${X_SERVER}" = "Xorg" ]; then
+    echo "      Steam auto-starts on login (${STEAM_ARGS}) — native Linux + Proton/DXVK"
+    echo "      render directly on the GPU (real Vulkan present surface)."
+    echo "      Manual: vgl-steam | steam steam://rungameid/<appid>"
+else
+    echo "      Xvfb debug path — VirtualGL bridges native GL to the GPU (VGL_DISPLAY=${VGL_DISPLAY:-egl}):"
+    echo "        vgl-test                     # sanity check (renderer + glxgears)"
+    echo "        vgl-steam                    # native Linux GL titles on the GPU"
+    echo "        proton-wined3d               # Windows DX9–11 via WineD3D+VGL"
+    echo "        proton-wined3d <appid>       # specific Windows game"
+    echo "      (DX12 / true DXVK need the real Xorg path — DPAD_XORG=1)"
+fi
 echo "=========================================="
 
 # --- Periodic Selkies log dump (no SSH on Vast — stream to Logs tab) ---
@@ -690,6 +848,14 @@ echo "=========================================="
         echo "=== /tmp/xfce.log (tail) ==="
         tail -n 30 /tmp/xfce.log 2>/dev/null || true
         echo "=== end xfce.log ==="
+        echo "=== /tmp/xorg.log (tail) ==="
+        tail -n 60 /tmp/xorg.log 2>/dev/null || true
+        echo "=== end xorg.log ==="
+        echo "=== /tmp/steam.log (tail) ==="
+        tail -n 60 /tmp/steam.log 2>/dev/null || true
+        echo "=== end steam.log ==="
+        echo "=== steam procs ==="
+        pgrep -af steam 2>/dev/null | head -n 10 || echo "      (no steam process)"
         echo "=== /tmp/gst-probe-*.log (encoder probe errors) ==="
         for f in /tmp/gst-probe-*.log; do [ -f "$f" ] || continue; echo "--- $f ---"; tail -n 25 "$f" 2>/dev/null; done
         echo "=== end gst-probe logs ==="
@@ -700,7 +866,11 @@ echo "=========================================="
 # --- Health loop ---
 while true; do
     sleep 30
-    pgrep -x Xvfb >/dev/null || { echo "WARNING: Xvfb died, restarting"; Xvfb "${DISPLAY_NUM}" -screen 0 "${SCREEN_RES}" -dpi 96 +extension GLX +extension RANDR +extension RENDER -ac -noreset -shmem & }
+    if [ "${X_SERVER}" = "Xorg" ]; then
+        pgrep -x Xorg >/dev/null || { echo "WARNING: Xorg died, restarting"; rm -f /tmp/.X${DISPLAY_NUM#:}-lock /tmp/.X11-unix/X${DISPLAY_NUM#:}; /usr/bin/Xorg "${DISPLAY_NUM}" -config /etc/X11/xorg.conf -noreset -novtswitch -sharevts +extension RANDR +extension RENDER +extension GLX +extension XVideo +extension DAMAGE +extension COMPOSITE +extension XTEST -dpms -s off -nolisten tcp -ac -iglx -verbose vt7 >/tmp/xorg.log 2>&1 & }
+    else
+        pgrep -x Xvfb >/dev/null || { echo "WARNING: Xvfb died, restarting"; Xvfb "${DISPLAY_NUM}" -screen 0 "${SCREEN_RES}" -dpi 96 +extension GLX +extension RANDR +extension RENDER -ac -noreset -shmem & }
+    fi
     pgrep -f "selkies-gstreamer" >/dev/null || echo "WARNING: selkies not running (see /tmp/selkies.log)"
     # mws is launched as `./web-server` (cwd /opt/mws), so pgrep on the path
     # doesn't match — check the port instead (returns 0 on any HTTP response,

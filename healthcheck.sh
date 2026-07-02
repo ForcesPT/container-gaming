@@ -1,9 +1,9 @@
 #!/bin/bash
 # Health check for container orchestrators.
 
-# Xvfb (virtual display) must be up
-if ! pgrep -x "Xvfb" >/dev/null; then
-    echo "UNHEALTHY: Xvfb not running"; exit 1
+# Display server must be up — Xorg (nvidia DDX, gaming path) OR Xvfb (debug)
+if ! pgrep -x "Xorg" >/dev/null && ! pgrep -x "Xvfb" >/dev/null; then
+    echo "UNHEALTHY: no display server (Xorg/Xvfb) running"; exit 1
 fi
 # PipeWire (audio) must be up
 if ! pgrep -x "pulseaudio" >/dev/null; then

@@ -43,7 +43,7 @@ configure_nvidia_display_drivers() {
     if [[ -f "${NVIDIA_DRIVERS_DIR}/.driver-version" ]]; then
         local CACHED_VERSION
         CACHED_VERSION="$(<"${NVIDIA_DRIVERS_DIR}/.driver-version")"
-        if [[ "$CACHED_VERSION" == "$DRIVER_VERSION" ]]; then
+        if [[ "$CACHED_VERSION" == "$DRIVER_VERSION" ]] && [[ -f /usr/lib/xorg/modules/nvidia/drivers/nvidia_drv.so ]]; then
             if [[ ! -f "$NVIDIA_DRIVERS_LDCONF" ]]; then
                 {
                     echo "${NVIDIA_DRIVERS_DIR}/lib64"
@@ -54,7 +54,7 @@ configure_nvidia_display_drivers() {
             echo "NVIDIA display driver ${DRIVER_VERSION} libs already installed"
             return 0
         fi
-        echo "Driver version changed (${CACHED_VERSION} -> ${DRIVER_VERSION}), clearing stale libs"
+        echo "Driver version changed (${CACHED_VERSION} -> ${DRIVER_VERSION}) or X DDX missing, clearing stale libs"
         rm -rf "${NVIDIA_DRIVERS_DIR}"
         rm -f "${NVIDIA_DRIVERS_LDCONF}"
         ldconfig
@@ -110,6 +110,33 @@ configure_nvidia_display_drivers() {
             fi
         done
         echo "Installed 64-bit NVIDIA display/Vulkan driver libs"
+    fi
+
+    # X server nvidia DDX driver + GLX module (for a REAL Xorg with the nvidia
+    # driver — gives Vulkan a present surface so DXVK/Proton can render). These
+    # ship in the SAME .run we already extracted, so there's no extra download.
+    # They go under /usr/lib/xorg/modules/nvidia (a private ModulePath listed
+    # first by our xorg.conf) so the mesa libglx.so that Xvfb relies on in the
+    # default ModulePath is NOT shadowed.
+    if [[ -f "$EXTRACT_DIR/nvidia_drv.so" ]]; then
+        mkdir -p /usr/lib/xorg/modules/nvidia/drivers \
+                 /usr/lib/xorg/modules/nvidia/extensions
+        cp -a "$EXTRACT_DIR/nvidia_drv.so" /usr/lib/xorg/modules/nvidia/drivers/
+        local _glx
+        for _glx in "$EXTRACT_DIR"/libglx.so.*; do
+            [[ -e "$_glx" ]] && cp -a "$_glx" /usr/lib/xorg/modules/nvidia/extensions/
+        done
+        # Xorg dlopens the unversioned libglx.so — point it at the nvidia build.
+        local _glxv
+        _glxv=$(ls /usr/lib/xorg/modules/nvidia/extensions/libglx.so.* 2>/dev/null | head -1)
+        [[ -n "$_glxv" ]] && ln -sf "$(basename "$_glxv")" \
+            /usr/lib/xorg/modules/nvidia/extensions/libglx.so
+        echo "Installed nvidia_drv.so + libglx (X DDX) under /usr/lib/xorg/modules/nvidia"
+    fi
+    if [[ -f "$EXTRACT_DIR/nvidia-xconfig" ]]; then
+        cp -a "$EXTRACT_DIR/nvidia-xconfig" /usr/bin/nvidia-xconfig
+        chmod +x /usr/bin/nvidia-xconfig
+        echo "Installed nvidia-xconfig"
     fi
 
     # 32-bit libs are in the 32/ subdirectory
