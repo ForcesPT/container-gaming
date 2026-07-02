@@ -102,6 +102,27 @@ without caps. If not → Windows games need a host that grants `--privileged`/ca
 
 **Workaround for Steam + Proton on Vast = bubbleroot** (`scripts/bubbleroot`, vendored from codeberg.org/valpackett/bubbleroot): a proot-based drop-in `bwrap` that emulates bind-mount/chroot via ptrace — needs NO userns / NO CAP_SYS_ADMIN / NO setuid. The entrypoint auto-enables it when `unshare -U` fails (`DPAD_BUBBLEROOT=auto`), symlinks `/usr/local/bin/bwrap` -> it, and exports `BWRAP`+`PRESSURE_VESSEL_BWRAP` so Steam's runtime-tools/pressure-vessel use it instead of their bundled bwrap. GPU/Vulkan/DXVK render natively (NOT emulated); only filesystem/path syscalls are intercepted, so there is some loading-I/O overhead. PENDING validation on Vast: does the Steam client open + a Proton game launch under bubbleroot?
 
+**VALIDATED 2026-07-02 (bubbleroot result):** bubbleroot DOES get Steam +
+pressure-vessel running on Vast without userns (proot mounts the whole Steam
+Linux Runtime, BWRAP/PRESSURE_VESSEL_BWRAP -> /opt/dpadcloud/bubbleroot, Steam
+downloads its 493MB update and relaunches, the main steam process + pv-adverb +
+proot are all alive). BUT the **Steam UI (CEF/Chromium webhelper) crash-loops
+under proot's ptrace** (startcount=45 relaunches; only tiny 64x24/10x10
+placeholder X windows appear, never the real UI). CEF under ptrace is a
+closed-source-Chromium wall with no reliable in-container fix (linuxserver gave
+up on the same). => **Vast cannot host the interactive Steam UI / Proton.**
+`-no-cef-sandbox`, `STEAM_FORCE_NO_GPU=1`, `PROOT_NO_SECCOMP=1` did not help.
+
+**DECISION: Steam/Proton product path = a provider that grants real user
+namespaces** (RunPod/Lambda honor `--security-opt seccomp=unconfined` +
+`--cap-add SYS_ADMIN`; standard Steam + CEF + Proton work there with NO hacks).
+The DpadCloud image is provider-agnostic — everything we built (Xorg+nvidia-DDX
+NULL mode, Vulkan present, Selkies, NVENC, the entrypoint, bubbleroot-as-fallback)
+carries over unchanged; only the Docker options the provider honors differ.
+Vast stays useful for Linux-native games (no pressure-vessel) and as the cheap
+secondary pool. The orchestrator (apps/api) should be multi-provider: a
+userns-capable provider for Steam/Proton sessions, Vast for the rest.
+
 **VALIDATED 2026-07-02 (RTX 3060 / driver 580, unprivileged Vast):** `vkcube
 --gpu_number 0` on the NULL-mode Xorg presents a Vulkan cube to an X window AND
 Selkies captures it → Vulkan present + ximagesrc capture both work WITHOUT
