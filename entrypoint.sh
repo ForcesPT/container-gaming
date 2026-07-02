@@ -391,17 +391,65 @@ rm -f "${GST_REGISTRY:-/root/.cache/gstreamer-1.0/registry.bin}" \
 GST_REGISTRY_UPDATE=1 gst-inspect-1.0 -a >/dev/null 2>&1 || true
 
 # Encoder: runtime 1-frame test (nvh264enc if CUDA/NVENC work, else x264enc).
+# IMPORTANT — probe the element Selkies ACTUALLY instantiates, not the literal
+# name. Selkies' pipeline builder (gstwebrtc_app.py) maps `--encoder=nvh264enc` →
+# `nvcudah264enc` (the MODERN nvcodec element, P1–P7 presets + NV_ENC_TUNING_INFO)
+# on GStreamer 1.21–1.24, and `--encoder=nvh265enc` → `nvcudah265enc`. The legacy
+# `nvh264enc` element uses the OLD NVENC preset GUIDs that NVIDIA REMOVED in
+# driver 590+ → "Selected preset not supported" on e.g. RTX 3090/driver-595.
+# Probing the literal `nvh264enc` would false-negative on those hosts and fall
+# back to x264enc even though Selkies would have used the working modern element.
+# So we probe `nvcudah264enc` on 1.21–1.24 (else `nvh264enc`) but report/select
+# the Selkies-facing name `nvh264enc`, which Selkies then re-maps internally.
+GST_MINOR=$(gst-launch-1.0 --version 2>/dev/null | awk 'NR==1{print $3}' | cut -d. -f2)
+actual_nvenc() {
+    case "$1" in
+        nvh264enc) if [ "${GST_MINOR:-0}" -gt 20 ] && [ "${GST_MINOR:-0}" -le 24 ]; then echo "nvcudah264enc"; else echo "nvh264enc"; fi ;;
+        nvh265enc) if [ "${GST_MINOR:-0}" -gt 20 ] && [ "${GST_MINOR:-0}" -le 24 ]; then echo "nvcudah265enc"; else echo "nvh265enc"; fi ;;
+        *) echo "$1" ;;
+    esac
+}
+# nv* encoders pair with `cudaupload ! cudaconvert` (cudaconvert's sink needs
+# CUDA memory, so cudaupload MUST precede it — without it `videotestsrc !
+# cudaconvert` can't link → false negative). va* use `vapostproc`, software
+# encoders use `videoconvert`. On failure we capture the GStreamer error
+# (NVRTC arch vs NVENC preset vs #1249 open-session) so the boot log shows the
+# real root cause — not just "FAILED".
+chain_for() {
+    case "$1" in
+        nvh264enc|nvh265enc|nvav1enc) echo "videoconvert ! cudaupload ! cudaconvert" ;;
+        vah264enc|vah265enc|vavp9enc|vaav1enc) echo "videoconvert ! vapostproc" ;;
+        *) echo "videoconvert" ;;
+    esac
+}
 SELKIES_ENC="${SELKIES_ENCODER:-}"
 if [ -z "$SELKIES_ENC" ]; then
     for cand in nvh264enc nvh265enc x264enc vp8enc openh264enc; do
-        if ! gst-inspect-1.0 "$cand" >/dev/null 2>&1; then
-            echo "    gst $cand: element NOT FOUND (plugin not registered)"
+        test_enc="$(actual_nvenc "$cand")"
+        if ! gst-inspect-1.0 "$test_enc" >/dev/null 2>&1; then
+            echo "    gst $cand ($test_enc): element NOT FOUND (plugin not registered)"
             continue
         fi
-        if gst-launch-1.0 --quiet videotestsrc num-buffers=1 ! videoconvert ! "$cand" ! fakesink >/dev/null 2>&1; then
-            echo "    gst $cand: OK"; SELKIES_ENC="$cand"; break
+        chain="$(chain_for "$cand")"
+        # cudaupload/cudaconvert/vapostproc may be absent on non-NVIDIA/non-VA
+        # hosts; fall back to a bare videoconvert so we still exercise the
+        # encoder itself (nvcuda*h264enc also accepts sysmem via internal upload).
+        case "$cand" in
+            nvh264enc|nvh265enc|nvav1enc)
+                { gst-inspect-1.0 cudaupload >/dev/null 2>&1 && gst-inspect-1.0 cudaconvert >/dev/null 2>&1; } || chain="videoconvert" ;;
+            vah264enc|vah265enc|vavp9enc|vaav1enc)
+                gst-inspect-1.0 vapostproc >/dev/null 2>&1 || chain="videoconvert" ;;
+        esac
+        errlog="/tmp/gst-probe-${cand}.log"
+        # $chain is intentionally unquoted: it contains ` ! ` separators that
+        # gst-launch needs as separate argv tokens (history expansion is off
+        # in a script, so `!` is literal here).
+        if gst-launch-1.0 --quiet videotestsrc num-buffers=1 ! $chain ! "$test_enc" ! fakesink >"$errlog" 2>&1; then
+            echo "    gst $cand: OK (via $chain → $test_enc)"; SELKIES_ENC="$cand"; break
         else
-            echo "    gst $cand: present but encode FAILED — skipping"
+            echo "    gst $cand: present but encode FAILED (via $chain → $test_enc) — skipping"
+            grep -iE 'ERROR|nvrtc|nvenc|preset|unsupported device|architecture|could not (link|open|create|initialize|load)' "$errlog" 2>/dev/null | sed 's/^/      /' | head -10
+            echo "      (full log: $errlog)"
         fi
     done
 fi
@@ -642,6 +690,9 @@ echo "=========================================="
         echo "=== /tmp/xfce.log (tail) ==="
         tail -n 30 /tmp/xfce.log 2>/dev/null || true
         echo "=== end xfce.log ==="
+        echo "=== /tmp/gst-probe-*.log (encoder probe errors) ==="
+        for f in /tmp/gst-probe-*.log; do [ -f "$f" ] || continue; echo "--- $f ---"; tail -n 25 "$f" 2>/dev/null; done
+        echo "=== end gst-probe logs ==="
         sleep 30
     done
 ) &

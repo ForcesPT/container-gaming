@@ -28,11 +28,38 @@
 
 ## 🔖 CURRENT STATUS & BLOCKER (2026-07-02) — read this first
 
-**Where we are:** Ubuntu 24.04 / CUDA 12.5.1 image is built, boots on Vast, and
-hardware NVENC works across **every** GPU topology tested. Auto-pairing
-(mws↔Sunshine) works. The **single remaining blocker** is `/dev/uinput` access,
-which makes Sunshine segfault when a stream starts, which is the only thing
-preventing the mws browser stream from showing video.
+**Where we are (focus = Selkies browser path; Sunshine/mws parked):** Ubuntu
+24.04 / CUDA 12.5.1 image is built, boots on Vast. **Selkies hardware NVENC now
+works on BOTH driver classes** — RTX 3060/driver-580 and RTX 3090/driver-595 —
+via the corrected encoder probe (see "Selkies encoder probe fix" below). The
+browser/Selkies path is the primary path. Sunshine + mws remain installed and
+auto-pair, but the mws browser-stream path is **parked** behind the
+`/dev/uinput` blocker (see below): `/dev/uinput` is unreachable on Vast (cgroup
+v2 device controller is BPF-based, deny-wins, can't be relaxed from inside an
+unprivileged container; Vast allows neither `--privileged` nor `--device`), and
+Sunshine (current `inputtino`-only builds — legacy XTest input was removed in
+PR #2606) needs `/dev/uinput` for input. mws *video* likely still streams
+(Sunshine warns-and-continues on uinput failure rather than segfaulting, per
+upstream issues #4354/#3569), but input is the gap. Resolving mws input = a
+from-source Sunshine build with legacy XTest restored
+(`lunarlattice0/Sunshine-RestoreLegacyInput`); not pursued while Selkies works.
+
+### Selkies encoder probe fix (2026-07-02) — "software encoder on some VMs" was a probe bug
+The entrypoint encoder probe was testing the **literal** `nvh264enc` element.
+On GStreamer 1.24.x that is the **legacy** nvcodec element using the OLD NVENC
+preset GUIDs that NVIDIA **removed in driver 590+** → `Selected preset not
+supported` on e.g. RTX 3090/driver-595 → false-negative → `x264enc` fallback.
+But Selkies' `gstwebrtc_app.py` does NOT instantiate the literal name: on
+GStreamer 1.21–1.24 it maps `--encoder=nvh264enc` → **`nvcudah264enc`** (the
+modern P1–P7 + `NV_ENC_TUNING_INFO` element), which works on driver 595. The
+probe now tests the element Selkies **actually instantiates**
+(`nvcudah264enc` on 1.21–1.24, `nvh264enc` otherwise) via
+`videoconvert ! cudaupload ! cudaconvert ! <enc>`, captures the real GStreamer
+error on failure, and selects/reports the Selkies-facing name `nvh264enc`
+(which Selkies re-maps). Result: `nvh264enc` (hardware) on both 3060/580 and
+3090/595. **No GStreamer 1.26 build needed; no Selkies patch.** Confirmed on
+Vast: `gst nvh264enc: OK (via videoconvert ! cudaupload ! cudaconvert →
+nvcudah264enc)` / `Selected encoder: nvh264enc` on both hosts.
 
 ### ✅ Validated working (on Vast, built image `forcespt/dpadcloud-gaming:ubuntu24.04`)
 - **NVENC on all topologies** via the flexgrip interposer + a PCI-bus→minor mask:
@@ -43,8 +70,10 @@ preventing the mws browser stream from showing video.
     Device Minor, with an `index→minor` fallback) correctly kept minor 2 → Sunshine found
     `h264_nvenc` + `hevc_nvenc` + `av1_nvenc` ✅ (the PCI-bus mapping was essential — the
     assigned GPU was NOT at minor 0; the naive index=minor assumption would have failed)
-  - driver 580: Selkies `nvh264enc: OK`; driver 595: Selkies `x264enc` (expected — GStreamer
-    1.24.6 preset GUIDs removed in NVENC 13) but Sunshine `h264_nvenc` works (FFmpeg handles it).
+  - driver 580 (RTX 3060) AND driver 595 (RTX 3090): Selkies `nvh264enc` (hardware) —
+    Selkies maps it to `nvcudah264enc` (modern nvcodec, works on driver 590+); the entrypoint
+    probe now tests that element. Sunshine `h264_nvenc` also works (FFmpeg). See "Selkies
+    encoder probe fix" above.
 - **Auto-pairing** (`scripts/mws-autopair`): logs in to mws (creates admin `dpad`), adds the
   `localhost` host, calls mws `POST /api/pair` (NDJSON pin via `curl -N` — no-buffer was the
   key fix), submits the pin to Sunshine `POST /api/pin`, → `SUCCESS`. End user opens the mws
@@ -187,7 +216,7 @@ driver≥570 is via mws+Sunshine, NOT Selkies.
 - ✅ **TURN relay**: In-image coturn on Vast identity port 73478 (TCP only) — shared by mws and Selkies — no Open Relay flakiness
 - ✅ **Sunshine**: Running (native Moonlight host AND encoder for mws) — `sunshine-ubuntu-24.04-amd64.deb`
 - ✅ **Tailscale**: Installed + entrypoint hook (gated by TAILSCALE_AUTH_KEY)
-- ✅ **Selkies encoder auto-probe**: 1-frame gst-launch test → nvh264enc or x264enc
+- ✅ **Selkies encoder auto-probe**: 1-frame gst-launch test mirroring Selkies' `gstwebrtc_app.py` element selection — tests `nvcudah264enc` on Gst 1.21–1.24 (the element Selkies actually instantiates for `--encoder=nvh264enc`), else `nvh264enc`, via `videoconvert ! cudaupload ! cudaconvert`; captures the real error on failure; selects the Selkies-facing name. → `nvh264enc` (hardware) on 3060/580 + 3090/595; `x264enc` only on genuine NVENC failure.
 - ✅ **CUDA compat**: configure_cuda ported — cleans ldconfig, tries forward-compat (datacenter), falls back to minor-version compat
 - ✅ **NVENC**: Works on RTX 3060 Ti, 3080 Ti (driver ~535), and any single-GPU host on any driver (`gpu_frac=1`). On multi-GPU hosts with only a slice assigned + driver 570/580, the flexgrip interposer is implemented (opt-in, pending Vast validation) to fix #1249; x264 fallback remains the safety net. See "NVENC: What We Know".
 - ✅ **Boot diagnostics**: NVENC/CUDA diag prints driver, visible GPUs, lib presence, compute_mode, cuInit, cuCtxCreate
@@ -197,7 +226,7 @@ driver≥570 is via mws+Sunshine, NOT Selkies.
 
 - ❌ **VirtualGL**: Installed (3.1.4). `vglrun` routes GL to the GPU's EGL offscreen backend and blits to Xvfb. Boot test prints the GL renderer (`NVIDIA GeForce…` = GPU, `llvmpipe` = software fallback). Launchers: `vgl-steam` (native Linux GL), `proton-wined3d` (Windows DX9–11 via WineD3D+VGL — interim path that needs no Vulkan present surface), `vgl-test` (sanity check).
 - ⏸ **gamescope**: DEFERRED (evaluated, not installed). Solves DXVK/Proton's Vulkan *present* on a headless host. On Ubuntu 22.04 the only jammy build is akdor 3.12.5-2 (Sept 2023, unsupported, dead-end on jammy). Current gamescope needs a base bump to Ubuntu 24.04 — but the earliest official `nvidia/cuda` image on 24.04 is 12.5.1, which forces host driver ≥555 (Max CUDA 12.5) and **narrows the Vast pool** (excludes driver 535/545/550, incl. the 3080 Ti hosts). Forward-compat only helps datacenter GPUs, not consumer RTX. Interim Windows-game path = **WineD3D (D3D→OpenGL) + vglrun** (no Vulkan present needed); revisit gamescope only if WineD3D perf is insufficient. Ruled out: Bazzite/CachyOS Handheld (bare-metal OS images, need kernel+modeset+display — opposite of headless rented); cage/wlroots DIY (NVIDIA+wlroots finicky); DXVK headless WSI / lavapipe (immature / too slow).
-- ❌ **NVENC on RTX 3060**: Likely a misdiagnosis — mining rigs are multi-GPU, so the failure was almost certainly #1249, not a 3060-specific defect. A single-GPU 3060 (`gpu_frac=1`) should give working NVENC; re-test pending. Orchestrator probe-and-select still wise.
+- ✅ **NVENC on RTX 3060**: RESOLVED — confirmed working on RTX 3060/driver-580 (multi-GPU slice + flexgrip). The old "3060 NVENC broken" was the #1249 multi-GPU issue + the encoder-probe artifact (see above), not a 3060 defect. Orchestrator probe-and-select still wise.
 - ❌ **Orchestrator integration**: The Fastify API (`apps/api`) doesn't yet provision this image. Needs: provision via Vast API, read boot log for tunnel URL + encoder probe, create named Cloudflare tunnels + per-session auth, return URL to website.
 - ❌ **KDE Plasma**: Not installed (using XFCE). Optional UX upgrade — doesn't affect game rendering perf. Would need KWIN_COMPOSE=N (disable compositor on Xvfb).
 
@@ -359,9 +388,9 @@ PipeWire's null-sink monitor **suspends when idle** (no driver node → graph do
   - **LD_PRELOAD fix (flexgrip/nvidia-gpu-enumeration `libnvenc_fix.so`) — CORRECTED & IMPLEMENTED (opt-in, pending Vast validation)**: the earlier on-host test concluded "dead end on Vast" because it manually `rm /\​/dev/nvidia1` to force filtering, and that `rm` (deleting a runtime-managed device node) broke CUDA (`cuInit=CUDA_ERROR_NO_DEVICE`) — **not** the interposer. CUDA's `cuInit` does NOT go through `GET_ATTACHED_IDS`/`GET_ID_INFO`, so filtering the attached-IDs list cannot break CUDA; only the `rm` did. The current flexgrip code (May 2026) also has a `/proc`-based fallback (Strategy 2) that maps `gpuId`→PCI bus→`Device Minor` without calling `GET_ID_INFO` — so whether `GET_ID_INFO` returns `OBJECT_NOT_FOUND` on Vast may not even matter. We vendored the current source into `scripts/nvenc_fix.c`, build it as `/opt/dpadcloud/libnvenc_fix.so`, and auto-enable it (see "NVENC solution" below) when host GPU count > mounted device count on driver 570..609. **Open question to validate on a real Vast multi-GPU driver-570 host**: does NVENC register under the interposer with NO `rm`? If yes → multi-GPU 570/580 pool unlocked. If `GET_ID_INFO` failure still bites NVENC after filtering → extend the interposer to synthesize `GET_ID_INFO` (return `deviceInstance` = `Device Minor` from `/proc`). Watch driver 610.x for NVIDIA's upstream fix (rajatchopra: "610.x seems to have the fix").
   - **NVENC-safe offer predicate (CORRECTED)**: `gpu_frac==1` (single-GPU OR whole-machine → all `/dev/nvidiaX` mounted → no unreachable peers → NVENC works on ANY driver) **OR** `cuda_max_good<12.8` (driver <570, pre-regression) **OR** `driver_version>=610` (upstream fix). Cheapest: `gpu_frac=1 num_gpus=1`. The old policy (`driver<570` only) wrongly excluded every single-GPU host on driver 570/580 — a large, cheap pool that's actually immune. Plus the flexgrip interposer (below) now covers the `gpu_frac<1` multi-GPU slice case on 570..609.
   - **NVENC solution IMPLEMENTED (pending Vast validation)**: `scripts/nvenc_fix.c` (vendored flexgrip) → `/opt/dpadcloud/libnvenc_fix.so`; entrypoint auto-enables it when host GPU count > mounted `/dev/nvidiaX` count on driver 570..609 (override `DPAD_NVENC_FIX=1|0|auto`); prepended to `LD_PRELOAD` before Sunshine AND the Selkies encoder probe so both benefit; `NVENC_FIX_DEBUG=1` logs `[nvenc_fix]` to stderr. Worst case unchanged (x264 fallback). See https://github.com/NVIDIA/nvidia-container-toolkit/issues/1249.
-  - **CONFIRMED on-host (RTX 3060 / driver 595 / CUDA 13.2): GStreamer 1.24.6 (latest Selkies tarball = v1.6.2) cannot drive nvh264enc on NVENC 13** — element registers (open-session OK) but encode fails with `Selected preset not supported`. Root cause: 1.24.6's nvcodec uses the OLD NVENC preset GUIDs (hq/hp/low-latency…) which NVIDIA REMOVED in NVENC API 13 (driver ≥570). Every preset the 1.24.6 enum exposes (default/hp/hq/low-latency/p4…) FAILs. This is a SECOND, distinct failure from #1249 (which is multi-GPU-only and fails at open-session, not preset). The latest Selkies release (v1.6.2, Aug 2024) and `main` (1.24.12) both still bundle 1.24.x; no prebuilt 1.26.x nvcodec tarball exists.
-  - **DECISION: do NOT upgrade GStreamer (Path B abandoned)**. Building GStreamer 1.26.7 in-image was implemented then reverted (too heavy a build for the benefit, and the browser path is secondary). Instead: the **browser (Selkies) path keeps the 1.24.6 tarball and falls back to `x264enc` on driver ≥570** (NVENC 13) hosts — still playable, CPU-encoded. **NVENC hardware encoding on driver ≥570 hosts is handled by Sunshine** (native Moonlight path; Sunshine's FFmpeg `h264_nvenc` was confirmed working on the 3060/driver-595 even where Selkies nvh264enc failed). flexgrip (step 9d) remains for the #1249 multi-GPU case on Sunshine's NVENC path. So: browser = x264 on driver≥570 (NVENC on driver≤565); native Moonlight = Sunshine NVENC on all drivers (with flexgrip on multi-GPU driver 570+).
-  - **Browser-NVENC via moonlight-web-stream (DEFERRED — attempted then reverted, try later):** to give the *browser* path hardware NVENC on driver≥570 (instead of x264), evaluated bridging Sunshine's `h264_nvenc` to the browser over WebRTC with [moonlight-web-stream](https://github.com/MrCreativ3001/moonlight-web-stream) (no Tailscale needed; reuses our coturn TURN + cloudflared HTTPS; Sunshine is the encoder, mws web-server is the WebRTC bridge). It was wired in (Dockerfile/entrypoint/configs) then REVERTED to the Selkies baseline. Blocker: the upstream prebuilt `x86_64-unknown-linux-gnu` binary is built on ubuntu 24.04 (needs glibc ≥2.39) and won't run on our 22.04 base; switching the base to 24.04 requires CUDA 12.8 (driver ≥570 only → narrows the pool) AND noble's `t64` package renames (`libasound2`→`libasound2t64`, `libgl1-mesa-glx` removed, `libvpx7`→`libvpx9`, likely `libssl3`/`libpulse0`/`libva2`/`libvdpau1`/`libgtk-3-0` t64) broke the 22.04-era apt list. Two revisit paths: **(A)** build moonlight-web-stream from source on ubuntu 22.04 (Rust nightly + npm build stage) → keeps the wide `cuda12.1` pool (preferred for coverage, ~15 min cached build); **(B)** a separate `cuda12.8`/ubuntu24.04 variant with the prebuilt binary (driver≥570 only, no build). Current shipped state = Selkies baseline; working images: `forcespt/dpadcloud-gaming:cuda12.1` and `:cuda12.8_RTX5000`.
+  - **CORRECTED (2026-07-02): the "GStreamer 1.24.6 cannot drive nvh264enc on driver 595" diagnosis was a probe artifact, NOT a real NVENC failure.** NVIDIA removed the legacy NVENC preset GUIDs (`NV_ENC_PRESET_DEFAULT/HP/HQ/LOW_LATENCY/LOSSLESS_*`) starting in **driver 590** (NVIDIA Video Codec SDK 13.1 deprecation notice) — this is the 580-works / 595-fails cutoff (NOT a blanket "NVENC 13 / driver ≥570" thing: driver 580 still accepts the old GUIDs). The **legacy** `nvh264enc` element (old GUIDs) fails on 595 with `Selected preset not supported`; the **modern** `nvcudah264enc` element (P1–P7 + `NV_ENC_TUNING_INFO`) works on BOTH 580 and 595. Selkies' `gstwebrtc_app.py` already maps `--encoder=nvh264enc` → `nvcudah264enc` on GStreamer 1.21–1.24 — so Selkies was always going to use the working element; only the entrypoint probe was testing the literal (legacy) `nvh264enc` and false-negativing. **Fix = probe the element Selkies actually instantiates** (see "Selkies encoder probe fix" above). Confirmed on Vast: hardware `nvh264enc` on RTX 3060/580 and RTX 3090/595.
+  - **GStreamer 1.26 upgrade is NOT needed (Path B stays abandoned — now for the right reason).** The earlier rationale ("browser path is secondary, x264 fallback is fine") is obsolete: Selkies now does hardware NVENC on driver 595 via `nvcudah264enc` on the existing 1.24.6 tarball. No from-source GStreamer build, no Selkies patch. (1.26 just renames `nvcudah264enc`→`nvh264enc` and drops the legacy element; the probe already handles both via a Gst-version check.)
+  - **Browser-NVENC status:** Selkies = hardware `nvcudah264enc` on all tested drivers (580, 595). Sunshine = `h264_nvenc` (FFmpeg) on all drivers. mws (Sunshine→WebRTC bridge) is integrated on 24.04 and auto-pairs, but the mws *browser stream* is parked behind the `/dev/uinput` input blocker (see CURRENT STATUS) and is now lower priority since Selkies already delivers hardware browser NVENC — the original mws motivation ("give the browser hardware NVENC on driver≥570") is moot for Selkies.
 - **Now partly fixable in the image** via the flexgrip interposer (multi-GPU slice case); single-GPU hosts need no fix; only a genuinely host-broken NVENC (rare) stays on x264.
 - **Image auto-falls back to x264enc** (software) — stream works everywhere.
 - **Forward-compat** (cuda-compat-12-1) installed: on datacenter GPUs, `configure_cuda()` tries compat libs (cuInit test) → if pass, uses matched NVENC libs → may fix UNSUPPORTED_DEVICE. On consumer GPUs, compat fails → host libs used.
@@ -397,7 +426,7 @@ PipeWire's null-sink monitor **suspends when idle** (no driver node → graph do
 ### NEXT steps (in order)
 1. **Build + boot on Vast** (driver 535 single-GPU for the wide-pool/compat check, and a driver ≥570 host for the mws NVENC path). Read the boot log: `mws running on 0.0.0.0:8080`, `mws tunnel URL:`, `Sunshine running`, `Selected encoder:` (Selkies). Watch for noble t64 apt failures in the build (one-line fix if any).
 2. **Validate mws↔Sunshine end-to-end**: open the mws tunnel URL → first login creates admin → add host `localhost` → pair → enter PIN in Sunshine Web UI → launch an app → confirm browser streams with `h264_nvenc` (check `/tmp/sunshine.log` for `Found H.264 encoder: h264_nvenc`). Confirm gamepad + audio. **Gate:** mws streams in browser with NVENC → ship mws as primary and drop Selkies. Else debug pairing/capture/audio.
-3. **Validate Selkies fallback** on the same host (regression): `Selected encoder: nvh264enc` on driver <570, `x264enc` on ≥570 (expected).
+3. **Validate Selkies fallback** on the same host (regression): `Selected encoder: nvh264enc` (hardware via `nvcudah264enc`) on BOTH driver 580 and 595 hosts; `x264enc` only on genuine NVENC failure.
 4. **Orchestrator** — Vast provider in `apps/api` with the NVENC-safe offer predicate (`cuda_max_good>=12.1`), per-GPU CUDA-variant selection (RTX 50 → `ubuntu24.04-rtx50`, else `ubuntu24.04`), provision via Vast API, read boot log for the mws tunnel URL + encoder, create named Cloudflare tunnel (two ingress: `play-<id>`→8080, `selkies-<id>`→16100), return URL to website. mws↔Sunshine pairing is already auto-handled in-image (`scripts/mws-autopair` at boot); the orchestrator just sets `MWS_ADMIN_USER`/`MWS_ADMIN_PASSWORD` per session so the end user logs in with a session token (or fronts mws with the forwarded-header reverse-proxy auth so no mws login is shown).
 5. (Later, data-driven) **Present-surface decision** — gamescope / 24.04 was already done / cage, to unlock true DXVK + DX12 + DLSS.
 6. (Cleanup) **Drop Selkies** once mws+Sunshine is validated.
