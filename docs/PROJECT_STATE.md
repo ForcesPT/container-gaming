@@ -113,15 +113,62 @@ closed-source-Chromium wall with no reliable in-container fix (linuxserver gave
 up on the same). => **Vast cannot host the interactive Steam UI / Proton.**
 `-no-cef-sandbox`, `STEAM_FORCE_NO_GPU=1`, `PROOT_NO_SECCOMP=1` did not help.
 
-**DECISION: Steam/Proton product path = a provider that grants real user
-namespaces** (RunPod/Lambda honor `--security-opt seccomp=unconfined` +
-`--cap-add SYS_ADMIN`; standard Steam + CEF + Proton work there with NO hacks).
-The DpadCloud image is provider-agnostic — everything we built (Xorg+nvidia-DDX
-NULL mode, Vulkan present, Selkies, NVENC, the entrypoint, bubbleroot-as-fallback)
-carries over unchanged; only the Docker options the provider honors differ.
-Vast stays useful for Linux-native games (no pressure-vessel) and as the cheap
-secondary pool. The orchestrator (apps/api) should be multi-provider: a
-userns-capable provider for Steam/Proton sessions, Vast for the rest.
+**`STEAM_RUNTIME=0` does NOT help** (tested): Steam's webhelper/CEF is
+hardcoded into the sniper/steamrt3c pressure-vessel container since Valve's 2024
+UI-containerization, so `STEAM_RUNTIME=0` only disables the *game* runtime, not
+the UI's. The webhelper still goes through pressure-vessel -> bubbleroot/proot
+-> CEF crash (startcount=102). No in-image path to the interactive Steam UI on
+Vast exists.
+
+**REVISED DECISION — the Vast product path is HEADLESS (no Steam UI), via
+`steamcmd` + Proton-direct.** The interactive Steam UI needs pressure-vessel
+(userns) -> not available on Vast. But Valve's official **`steamcmd`** is a
+console client that does NOT use CEF/pressure-vessel -> runs on Vast. And
+**Proton can run WITHOUT pressure-vessel** (with system libs; pressure-vessel is
+only for library consistency, not required on modern Ubuntu 24.04 / glibc 2.39).
+
+VALIDATED 2026-07-02 (steamcmd on Vast, RTX 3060): `steamcmd +login anonymous
++quit` starts, loads Steam API, connects to Steam — NO userns / pressure-vessel
+error. => the headless path is viable on Vast.
+
+**Headless architecture (Vast):**
+- `steamcmd +login <user> +app_update <appid> validate +quit` downloads a game
+  (login caches a token after first Steam-Guard auth).
+- **Native Linux games**: `steamcmd -globaluser +login <user> +app_launch <appid>`
+  launches them via the old scout runtime (LD_LIBRARY_PATH, NOT pressure-vessel)
+  -> NO userns needed. (Ref: Rosentti/steamcmd-gaming — native games work;
+  needs `reaper` + `steam-launch-wrapper` copied from the Steam install into
+  steamcmd's linux32 dir.) Caveats: no Steam overlay/achievements/cloud/VAC.
+- **Windows games**: launch the game .exe via Proton DIRECTLY (no pressure-vessel)
+  with env vars (`STEAM_COMPAT_DATA_PATH`, `STEAM_COMPAT_CLIENT_INSTALL_PATH`,
+  `PROTONPATH` -> `proton waitforexitandrun game.exe`). DXVK uses Vulkan present
+  on the NULL-mode Xorg (proven by vkcube). Tools: `proton-cli`/`proton-run`
+  (explicitly support running WITHOUT the Steam runtime). NOT yet validated.
+- The **website** lists the user's Steam library (Steam Web API); the user clicks
+  a game; the **orchestrator** launches it on the headless GPU container
+  (native -> app_launch; Windows -> Proton-direct); **Selkies streams the game**.
+  No in-container Steam UI. This is the Games-on-Whales / linuxserver
+  `steam://rungameid` / `umu-run --config game.toml` direct-launch pattern,
+  minus the userns-dependent parts.
+
+**PENDING validation (resume here):**
+1. steamcmd: login with a real account + download a small NATIVE Linux game
+   (Stardew Valley 413150 / Terraria 105600 / Celeste 404410 — all native Linux,
+   ~0.5-1.5GB) + `app_launch` it -> confirm the game window renders on the GPU
+   and Selkies streams it (with audio).
+2. Windows game via Proton-direct (no pressure-vessel) -> confirm DXVK renders.
+3. Then: add `steamcmd` + a `dpad-launch <appid>` wrapper to the Dockerfile
+   (auto login/download/launch; pick native vs Proton-direct), and build the
+   orchestrator's Vast provider around it.
+
+**`DPAD_BUBBLEROOT` is now a dead-end for the Steam UI** (CEF crashes under
+proot). Keep the code as opt-in (`DPAD_BUBBLEROOT=1`) for experimentation, but
+default it OFF and do NOT rely on it. The headless steamcmd path replaces it.
+
+**Userns-capable provider (RunPod/Lambda) remains an OPTION** for the full
+interactive Steam UI + standard Proton (zero hacks), if a UI-in-browser
+experience is later desired. The image is provider-agnostic. But the primary
+Vast path is headless steamcmd + Proton-direct.
 
 **VALIDATED 2026-07-02 (RTX 3060 / driver 580, unprivileged Vast):** `vkcube
 --gpu_number 0` on the NULL-mode Xorg presents a Vulkan cube to an X window AND
@@ -461,7 +508,7 @@ PipeWire's null-sink monitor **suspends when idle** (no driver node → graph do
 
 ---
 
-## Status: Ubuntu 24.04 + CUDA 12.5.1 · **Xorg + nvidia-DDX = PRIMARY gaming path (real Vulkan present surface → Steam/Proton/DXVK on GPU)** · Xvfb+VGL = debug fallback · mws browser PRIMARY · Selkies browser FALLBACK · flexgrip #1249 fix IMPLEMENTED · NEXT = validate Xorg+Steam on Vast, then orchestrator
+## Status: Ubuntu 24.04 + CUDA 12.5.1 · **Xorg + nvidia-DDX NULL mode = PRIMARY gaming path (Vulkan present → DXVK/Proton on GPU, validated on Vast: vkcube streams via Selkies)** · Xvfb+VGL = debug fallback · Selkies = browser stream (NVENC) · **Steam UI = BLOCKED on Vast** (pressure-vessel/userns; bubbleroot-proot crashes CEF) · **Vast product path = HEADLESS steamcmd + Proton-direct** (steamcmd validated; native game launch + Windows via Proton-direct = PENDING) · NEXT = validate steamcmd native-game launch + Proton-direct, then orchestrator
 
 ### What was built (Ubuntu 24.04 move + mws)
 - **Dockerfile**: base `nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu24.04` (default `12.5.1`/`12-5`, single tag `ubuntu24.04`; `12.8.1`/`12-8` → `ubuntu24.04-rtx50` for Blackwell). noble t64 apt renames applied ONLY where actually renamed (libasound2t64, libssl3t64, libgtk-3-0t64); libpulse0/libva2/libvdpau1/libwayland-egl1/libjack-jackd2-0 keep plain names, libvpx7→libvpx9; libgl1-mesa-glx dropped; pipewire packages dropped — we use PulseAudio). Sunshine deb → `sunshine-ubuntu-24.04-amd64.deb`. Selkies tarball/deb auto-resolve to `*_ubuntu24.04_*` via `${UBUNTU_VER}`. `PIP_BREAK_SYSTEM_PACKAGES=1` for noble pip3.
