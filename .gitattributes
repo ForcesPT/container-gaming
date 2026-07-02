@@ -1,0 +1,12 @@
+# Keep shell scripts and Dockerfiles with LF line endings so they exec correctly
+# inside the Linux image (CRLF makes `#!/bin/bash\r` fail with "no such file or
+# directory"). This overrides core.autocrlf on Windows checkouts.
+*.sh           text eol=lf
+Dockerfile     text eol=lf
+*.dockerfile   text eol=lf
+docker-compose.yml text eol=lf
+deploy.sh      text eol=lf
+healthcheck.sh text eol=lf
+entrypoint.sh  text eol=lf
+scripts/*      text eol=lf
+configs/**     text eol=lf

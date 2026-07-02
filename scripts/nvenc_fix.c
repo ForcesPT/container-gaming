@@ -149,6 +149,17 @@ static int device_node_exists(NvU32 device_instance) {
 }
 
 static uint32_t get_available_devices(void) {
+    /* Optional override: the entrypoint sets NVENC_FIX_AVAILABLE to the bitmask
+     * of nvidia-smi-visible (actually CUDA-usable) GPU minors. This is needed on
+     * hosts where the container mounts /dev/nvidiaX for GPUs it can't use
+     * (e.g. NVIDIA_VISIBLE_DEVICES=void on Vast) — the mounted-node scan below
+     * would keep too many GPUs and NVENC still fails peer-init. */
+    const char *override = getenv("NVENC_FIX_AVAILABLE");
+    if (override && override[0] != '\0') {
+        uint32_t mask = (uint32_t)strtoul(override, NULL, 0);
+        log_msg("using NVENC_FIX_AVAILABLE=0x%x (nvidia-smi-visible GPUs)", mask);
+        return mask;
+    }
     uint32_t mask = 0;
     for (int i = 0; i < 32; i++)
         if (device_node_exists(i)) mask |= (1u << i);

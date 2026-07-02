@@ -1,55 +1,197 @@
 # DpadCloud Container Gaming — Project State & Continuation Guide
 
+> **UPDATE 2026-07-01 — Ubuntu 24.04 move (mws primary browser path).** The base is
+> now `nvidia/cuda:12.5.1-runtime-ubuntu24.04` (single tag `ubuntu24.04`). Two
+> things drove this:
+> 1. **moonlight-web-stream (mws) added as the PRIMARY browser path.** mws is a
+>    Moonlight client that bridges Sunshine's `h264_nvenc` stream to a browser
+>    over WebRTC. The prebuilt mws binary requires glibc 2.39 (= noble), so 24.04
+>    makes it a 3-line tarball install — no from-source Rust build, no patchelf.
+>    This gives the **browser hardware NVENC on ALL drivers** (Selkies'
+>    `nvh264enc` falls back to `x264enc` on driver ≥570 / NVENC 13; mws sidesteps
+>    that via Sunshine's FFmpeg `h264_nvenc`). Selkies is **kept as a fallback**.
+> 2. **The wide Vast pool is preserved.** CUDA 12.5.1 runs on any driver ≥525 via
+>    CUDA minor-version compatibility (whole 12.x family shares the R525 baseline).
+>    The old PROJECT_STATE claim that 12.5.1 "forces driver ≥555" was wrong — it
+>    confused the *bundled* driver with the *minimum required* (525.60.13). Keep
+>    the offer filter at `cuda_max_good>=12.1` (includes 535/545/550 hosts).
+>
+> Remaining validation: a real Vast boot to confirm the mws↔Sunshine **auto-pair**
+> (`scripts/mws-autopair`, now implemented) completes end-to-end and the browser
+> streams, plus noble t64 apt names (may need one fix iteration).
+>
 > **Purpose:** This document captures everything a new AI session needs to continue
 > the DpadCloud cloud-gaming container project. It documents what's built, what works,
 > what doesn't, and the next steps (VirtualGL + gamescope).
 
 ---
 
+## 🔖 CURRENT STATUS & BLOCKER (2026-07-02) — read this first
+
+**Where we are:** Ubuntu 24.04 / CUDA 12.5.1 image is built, boots on Vast, and
+hardware NVENC works across **every** GPU topology tested. Auto-pairing
+(mws↔Sunshine) works. The **single remaining blocker** is `/dev/uinput` access,
+which makes Sunshine segfault when a stream starts, which is the only thing
+preventing the mws browser stream from showing video.
+
+### ✅ Validated working (on Vast, built image `forcespt/dpadcloud-gaming:ubuntu24.04`)
+- **NVENC on all topologies** via the flexgrip interposer + a PCI-bus→minor mask:
+  - single-GPU (4060 Ti / 3090): native `h264_nvenc` ✅
+  - multi-GPU slice (2 /proc, 1 mounted, driver 580/595): flexgrip filters → `h264_nvenc` ✅
+  - **5-GPU mining rig** (5 /proc, 5 mounted, only 1 nvidia-smi-visible at minor 2): the
+    `NVENC_FIX_AVAILABLE` mask (computed from `nvidia-smi --query-gpu=pci.bus_id` → /proc
+    Device Minor, with an `index→minor` fallback) correctly kept minor 2 → Sunshine found
+    `h264_nvenc` + `hevc_nvenc` + `av1_nvenc` ✅ (the PCI-bus mapping was essential — the
+    assigned GPU was NOT at minor 0; the naive index=minor assumption would have failed)
+  - driver 580: Selkies `nvh264enc: OK`; driver 595: Selkies `x264enc` (expected — GStreamer
+    1.24.6 preset GUIDs removed in NVENC 13) but Sunshine `h264_nvenc` works (FFmpeg handles it).
+- **Auto-pairing** (`scripts/mws-autopair`): logs in to mws (creates admin `dpad`), adds the
+  `localhost` host, calls mws `POST /api/pair` (NDJSON pin via `curl -N` — no-buffer was the
+  key fix), submits the pin to Sunshine `POST /api/pin`, → `SUCCESS`. End user opens the mws
+  URL → host already paired → no PIN shown.
+- **mws runs** on `0.0.0.0:8080`; **Selkies streams** (browser video confirmed via Selkies on
+  a 4060 Ti). VirtualGL renders on the GPU. PulseAudio null-sink, coturn TURN (TCP),
+  cloudflared (two quick tunnels), all up.
+- **Resource limits**: entrypoint raises `ulimit -u/-n`; hosts with a hard `nproc=50` need
+  `--ulimit nproc=1048576:1048576` in the Docker options (the in-image raise can't exceed a
+  hard cap). `nofile` hard cap is often 1024 → needs `--ulimit nofile=1048576:1048576`.
+
+### ❌ The ONE blocker: `/dev/uinput` EPERM → Sunshine segfault → mws stream fails
+
+When the user clicks Play in the mws tab, mws's streamer does the RTSP handshake to
+Sunshine; Sunshine starts the session and tries to create virtual keyboard/mouse/touch
+via `/dev/uinput` → **`Unable to create virtual touch screen: Operation not permitted`**
+→ Sunshine **segfaults** → mws `RTSP ANNOUNCE failed: -1` → mws stops the stream → the
+browser's `WebRTC negotiation timed out after 15000ms` (downstream symptom; WebRTC
+itself is fine, mws just gave up). Confirmed via `tail /tmp/mws.log` + `/tmp/sunshine.log`.
+
+Root cause: `/dev/uinput` access is denied by the **device cgroup**. The entrypoint does
+`mknod /dev/uinput c 10 223` + `chmod 666`, so the node exists (`crw-rw-rw- root root`),
+but `open('/dev/uinput', O_WRONLY)` returns **EPERM (errno 1)** — the cgroup allowlist
+blocks it; `mknod` can't bypass the cgroup. `--device /dev/uinput` in the Vast Docker
+options did **not** fix it (Vast appears to strip `--device`, or the host's uinput isn't
+reachable that way) — the open test still EPERM after adding it.
+
+### ▶ NEXT STEP (the only thing left to try before mws video works)
+
+Try **`--privileged`** in the Vast Docker options — it allows the cgroup to access the
+char device the entrypoint already `mknod`'d (and grants caps). If Vast honors
+`--privileged`, `open('/dev/uinput')` should succeed → Sunshine creates the virtual
+devices → no segfault → mws RTSP succeeds → mws WebRTC connects → browser video + input.
+
+Full recommended launch options (replace `<pass>`):
+```
+--privileged --ulimit nproc=1048576:1048576 --ulimit nofile=1048576:1048576 -p 73478:73478 -e SUNSHINE_PASSWORD=<pass> -e SELKIES_BASIC_AUTH_USER=dpad -e SELKIES_BASIC_AUTH_PASSWORD=<pass>
+```
+(`--device /dev/uinput` can be added too as belt-and-suspenders, but it didn't work
+alone on Vast — `--privileged` is the lever.)
+
+**If `--privileged` still shows EPERM on `open('/dev/uinput')`**, the host kernel's uinput
+module isn't available. Then the fallbacks (in order):
+1. Run **Sunshine as root** (entrypoint change: drop `as_user` for the Sunshine launch,
+   set `HOME=/home/dpad` so it reads the config) + `--cap-add SYS_ADMIN` — in case uinput
+   `UI_DEV_CREATE` needs a capability (we believe it only needs write access, but root+cap
+   covers it).
+2. If uinput is truly unavailable on the host, input injection can't use uinput; investigate
+   whether Sunshine can be made to not crash on the touch/pen failure (it currently segfaults),
+   or use a different input path. (Low probability — most Vast hosts have uinput; `--privileged`
+   should expose it via the mknod'd node.)
+
+### 🛠️ Build + test loop
+```bash
+cd dpadcloud/container-gaming
+docker build -t forcespt/dpadcloud-gaming:ubuntu24.04 .   # build (CUDA 12.5.1/12-5)
+# RTX 50/Blackwell variant: --build-arg CUDA_VERSION=12.8.1 --build-arg CUDA_PKG=12-8 -t ...:ubuntu24.04-rtx50
+# Vast offer filter: compute_cap>=750 cuda_max_good>=12.1 gpu_display_active=false rentable=true verified=true
+# Launch with the options above. Read the Vast Logs tab for:
+#   [*] Resource limits: nproc=… nofile=… cgroup_pids.max=…
+#   --- NVENC topology (#1249 check) ---  (driver_major, host/mounted/visible counts, mask)
+#   DPAD_NVENC_FIX: ENABLED/DISABLED
+#   [mws-autopair] SUCCESS — mws is paired with Sunshine
+#   mws running on 0.0.0.0:8080
+# Then open the mws tunnel URL → log in (dpad/<pass>) → click localhost host → Desktop.
+# Verify uinput: python3 -c "import os; f=os.open('/dev/uinput', os.O_WRONLY); print('OPEN OK'); os.close(f)"
+# Verify Sunshine encoder: grep -i 'Found H.264 encoder' /tmp/sunshine.log
+# Verify mws streamer: tail -n 150 /tmp/mws.log  (look for RTSP ANNOUNCE + webrtc peer state)
+```
+
+### Fixes already in the image (don't redo these)
+- `Dockerfile`: Ubuntu 24.04 / CUDA 12.5.1 base; noble t64 apt renames (libasound2t64, libssl3t64,
+  libgtk-3-0t64 — but libpulse0/libva2/libvdpau1/libwayland-egl1/libjack-jackd2-0 keep plain
+  names); Sunshine `sunshine-ubuntu-24.04-amd64.deb`; Selkies 24.04 tarball; mws v2.10
+  prebuilt; `PIP_BREAK_SYSTEM_PACKAGES=1`; `libglu1-mesa` pre-installed for VirtualGL;
+  `nvenc_fix.c` built → `/opt/dpadcloud/libnvenc_fix.so`; `.gitattributes` enforces LF.
+- `entrypoint.sh`: raises `ulimit -u/-n` + prints cgroup pids; `nvidia-smi`-visible GPU bitmask
+  (`NVENC_FIX_AVAILABLE`, PCI-bus→minor + index fallback) + broadened flexgrip enable
+  (`host>mounted OR visible<mounted` on driver 570..609); `mknod /dev/uinput` + `chmod 666`;
+  mws launch with `DISABLE_DEFAULT_WEBRTC_ICE_SERVERS=true WEBRTC_NETWORK_TYPES=udp4,tcp4
+  WEBRTC_ICE_SERVER_0_*=coturn`; `scripts/mws-autopair` backgrounded after mws up; two
+  cloudflared tunnels (mws + Selkies); health loop uses port checks not pgrep paths.
+- `scripts/nvenc_fix.c`: `NVENC_FIX_AVAILABLE` env override in `get_available_devices()`.
+- `scripts/mws-autopair`: full auto-pair (login→add host→pair→submit pin to Sunshine→confirm).
+
+### Known host-class notes
+- **nproc=50 hosts** (some RTX 3090/driver-595 instances): hard cap → MUST pass
+  `--ulimit nproc=1048576:1048576` or the whole stack hangs at PulseAudio (EAGAIN on every
+  thread). The entrypoint's `ulimit -Hu` can't exceed the hard cap; only the docker option can.
+- `NVIDIA_VISIBLE_DEVICES=void` (Vast sets this): mounts extra `/dev/nvidiaX` for GPUs the
+  container can't use → that's exactly the `visible<mounted` case the mask fix handles.
+- `/dev/uinput`: see the blocker above.
+
+---
+
 ## What This Project Is
 
-A **lean (~8.3 GB) headless cloud-gaming container** that runs on Vast.ai GPU hosts.
-It streams a virtual desktop + games to a browser via WebRTC (Selkies) or to a native
-client via Moonlight (Sunshine). The container is designed for per-session provisioning
-by a Fastify orchestrator (in `apps/api`).
+A **lean (~8 GB) headless cloud-gaming container** that runs on Vast.ai GPU hosts.
+It streams a virtual desktop + games to a browser via **moonlight-web-stream
+(Sunshine NVENC → WebRTC)** or **Selkies-GStreamer** (fallback), or to a native
+client via **Moonlight (Sunshine)**. Built on `nvidia/cuda:12.5.1-runtime-ubuntu24.04`.
+The container is designed for per-session provisioning by a Fastify orchestrator
+(in `apps/api`).
 
-## Architecture (B2 + B2b — clean lean rebuild)
+## Architecture (Ubuntu 24.04 + mws primary browser path)
 
 ```
-User Browser ──(HTTPS)──▶ cloudflared tunnel ──▶ Selkies (127.0.0.1:16100)
+User Browser ──(HTTPS)──▶ cloudflared tunnel ─┬─▶ mws (0.0.0.0:8080)      [PRIMARY: Sunshine h264_nvenc]
+                                               │      │
+                                               │      └─ WebRTC ──▶ Sunshine (localhost:47989)
+                                               │                        │
+                                               └─▶ Selkies (127.0.0.1:16100) [FALLBACK: NVENC or x264]
                                                         │
-                                         ┌──────────────┤
-                                         ▼              ▼
-                                    Xvfb display    coturn TURN
-                                   (Mesa EGL)     (TCP 73478)
-                                         │
-                                    PulseAudio
-                                   (null-sink)
+                                         ┌──────────────┴─────────────┐
+                                         ▼                            ▼
+                                    Xvfb display               coturn TURN
+                                   (Mesa EGL)                (TCP 73478)
+                                         │                            │
+                                    PulseAudio          (shared WebRTC relay for
+                                   (null-sink)          both mws + Selkies)
                                          │
                               ┌──────────┼──────────┐
                               ▼          ▼          ▼
-                           XFCE       Steam      Sunshine
-                         desktop     (Proton)   (Moonlight host)
-                                                  │
-                                           Tailscale ──▶ Native Moonlight client
+                           XFCE       Steam      Sunshine (NVENC host)
+                         desktop     (Proton)   ├── mws (browser, all drivers)
+                                                  └── Tailscale ──▶ Native Moonlight client
 
-NVENC encoder: auto-selected at boot (1-frame test). nvh264enc if GPU supports it,
-x264enc (software) fallback. On RTX 3060 mining-rig hosts, NVENC is unavailable
-(host-level issue) — x264 fallback keeps the stream working.
+NVENC encoder: Sunshine = h264_nvenc (FFmpeg) on all drivers (with flexgrip on
+multi-GPU driver 570..609). Selkies = nvh264enc on driver<570, x264enc fallback
+on driver≥570 (GStreamer 1.24.6 vs NVENC-13 preset GUIDs). Browser NVENC on
+driver≥570 is via mws+Sunshine, NOT Selkies.
 ```
 
 ## What Works (confirmed on Vast)
 
-- ✅ **Browser click-and-play**: Selkies WebRTC + cloudflared HTTPS tunnel → gamepad + audio + video in browser
+- ✅ **Base moved to Ubuntu 24.04 + CUDA 12.5.1** — wide pool preserved via CUDA minor-version compat (driver ≥525). noble t64 apt renames applied.
+- ✅ **moonlight-web-stream (mws) integrated as PRIMARY browser path** — prebuilt binary runs natively on noble (glibc 2.39); reuses in-image coturn TURN; fronted by its own cloudflared tunnel. Browser NVENC via Sunshine `h264_nvenc` on ALL drivers (pending Vast validation of the mws↔Sunshine pairing + capture flow).
+- ✅ **Browser click-and-play (fallback)**: Selkies WebRTC + cloudflared HTTPS tunnel → gamepad + audio + video in browser (Selkies 24.04 tarball)
 - ✅ **Audio**: PulseAudio headless null-sink (dummy/dummy.monitor) — pulsesrc captures silence reliably
-- ✅ **TURN relay**: In-image coturn on Vast identity port 73478 (TCP only) — no Open Relay flakiness
-- ✅ **Sunshine**: Running (native Moonlight host) for enthusiast path
+- ✅ **TURN relay**: In-image coturn on Vast identity port 73478 (TCP only) — shared by mws and Selkies — no Open Relay flakiness
+- ✅ **Sunshine**: Running (native Moonlight host AND encoder for mws) — `sunshine-ubuntu-24.04-amd64.deb`
 - ✅ **Tailscale**: Installed + entrypoint hook (gated by TAILSCALE_AUTH_KEY)
-- ✅ **Encoder auto-probe**: 1-frame gst-launch test → nvh264enc or x264enc
-- ✅ **CUDA compat**: 05-configure-cuda.sh ported — cleans ldconfig, tries forward-compat (datacenter), falls back to minor-version compat
-- ✅ **NVENC**: Works on RTX 3060 Ti, 3080 Ti (driver ~535), and **any single-GPU host on any driver** (`gpu_frac=1` — #1249 is multi-GPU-only). On multi-GPU hosts with only a slice assigned + driver 570/580, the **flexgrip interposer is now implemented (opt-in, pending Vast validation)** to fix #1249; x264 fallback remains the safety net. See "NVENC: What We Know".
+- ✅ **Selkies encoder auto-probe**: 1-frame gst-launch test → nvh264enc or x264enc
+- ✅ **CUDA compat**: configure_cuda ported — cleans ldconfig, tries forward-compat (datacenter), falls back to minor-version compat
+- ✅ **NVENC**: Works on RTX 3060 Ti, 3080 Ti (driver ~535), and any single-GPU host on any driver (`gpu_frac=1`). On multi-GPU hosts with only a slice assigned + driver 570/580, the flexgrip interposer is implemented (opt-in, pending Vast validation) to fix #1249; x264 fallback remains the safety net. See "NVENC: What We Know".
 - ✅ **Boot diagnostics**: NVENC/CUDA diag prints driver, visible GPUs, lib presence, compute_mode, cuInit, cuCtxCreate
-- ✅ **Periodic log dump**: selkies.log + sunshine.log + pulse.log to stdout (Vast Logs tab) — no SSH needed
+- ✅ **Periodic log dump**: selkies.log + sunshine.log + mws.log + pulse.log to stdout (Vast Logs tab) — no SSH needed
 
 ## What Doesn't Work Yet
 
@@ -239,30 +381,26 @@ PipeWire's null-sink monitor **suspends when idle** (no driver node → graph do
 
 ---
 
-## Status: VirtualGL DONE · gamescope DEFERRED · NVENC #1249 fix (flexgrip) IMPLEMENTED · GStreamer 1.24.6 kept (browser=x264 on driver≥570, Sunshine=NVENC) · NEXT = validate Sunshine NVENC path + orchestrator
+## Status: Ubuntu 24.04 + CUDA 12.5.1 · mws PRIMARY browser path (Sunshine NVENC) · Selkies FALLBACK · VirtualGL DONE · gamescope DEFERRED · flexgrip #1249 fix IMPLEMENTED · NEXT = validate mws+Sunshine on Vast + orchestrator
 
-### What was built (NVENC #1249 fix + display drivers + CUDA matrix)
-- **Dockerfile**: `ARG CUDA_VERSION`/`ARG CUDA_PKG` → build two tags: `12.1.1` (wide pool) and `12.8.1` (RTX 50/Blackwell, driver ≥570). `9d` builds vendored `scripts/nvenc_fix.c` → `/opt/dpadcloud/libnvenc_fix.so` (flexgrip interposer).
-- **entrypoint.sh**: calls `install-display-drivers` (graphics libs for compute-only hosts); `configure_cuda()` now uses `readlink -f /usr/local/cuda` (works for both 12.1 + 12.8); new NVENC topology diag (`/proc` GPU count vs mounted `/dev/nvidiaX`) auto-enables `DPAD_NVENC_FIX` on multi-GPU slices + driver 570..609; `LD_PRELOAD` (flexgrip + joystick) assembled before Sunshine AND the encoder probe so both benefit; Sunshine launch now re-exports `LD_PRELOAD`.
-- **deploy.sh**: `build [12.1|12.8]` and `CUDA_VARIANT=12.8` env; `cuda12.8` tag for the RTX-50 variant.
-- **VirtualGL** (earlier): `9b` Vulkan loader/tools (diag), `9c` VirtualGL 3.1.4. Launchers `vgl-steam`, `proton-wined3d`, `vgl-test`.
+### What was built (Ubuntu 24.04 move + mws)
+- **Dockerfile**: base `nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu24.04` (default `12.5.1`/`12-5`, single tag `ubuntu24.04`; `12.8.1`/`12-8` → `ubuntu24.04-rtx50` for Blackwell). noble t64 apt renames applied ONLY where actually renamed (libasound2t64, libssl3t64, libgtk-3-0t64); libpulse0/libva2/libvdpau1/libwayland-egl1/libjack-jackd2-0 keep plain names, libvpx7→libvpx9; libgl1-mesa-glx dropped; pipewire packages dropped — we use PulseAudio). Sunshine deb → `sunshine-ubuntu-24.04-amd64.deb`. Selkies tarball/deb auto-resolve to `*_ubuntu24.04_*` via `${UBUNTU_VER}`. `PIP_BREAK_SYSTEM_PACKAGES=1` for noble pip3.
+- **7b. moonlight-web-stream**: prebuilt `moonlight-web-x86_64-unknown-linux-gnu.tar.gz` (v2.10.0) → `/opt/mws/{web-server,streamer,static}`. Runs natively (glibc 2.39 = noble).
+- **entrypoint.sh**: writes `/opt/mws/server/config.json` at boot (bind `0.0.0.0:8080`, coturn TURN ICE), launches `web-server` as `dpad` after Sunshine, under `DISABLE_DEFAULT_WEBRTC_ICE_SERVERS=1` + `WEBRTC_NAT_1TO1_HOST`. cloudflared now runs **two** tunnels (mws primary `:8080`, Selkies fallback `:16100`); named-tunnel mode fronts mws with `CLOUDFLARED_HOSTNAME`, Selkies gets a quick tunnel. Status banner + periodic log dump (`/tmp/mws.log`) + health loop updated.
+- **deploy.sh / docker-compose.yml / healthcheck.sh**: tag `ubuntu24.04`, build args 12.5.1/12-5, port 8080, mws-data volume, mws recognized as a streamer.
 
-### What was built (VirtualGL)
-- **Dockerfile**: `9b` Vulkan loader/tools (diag), `9c` VirtualGL 3.1.4 deb layer.
-- **entrypoint.sh**: sets `VGL_DISPLAY=egl`/`VGL_REFRESHRATE=60`, runs a boot-time `vglrun glxinfo -B` test printing the GL renderer, and adds graphics-libs + Vulkan ICD diagnostics.
-- **Launchers** (`/opt/dpadcloud/`): `vgl-steam`, `proton-wined3d` (`PROTON_USE_WINED3D=1` + `vglrun` — no Vulkan present surface needed), `vgl-test`.
-
-### Why gamescope was deferred
-gamescope gives DXVK/Proton a Vulkan *present* surface on a headless host. Without it DXVK can *render* on the GPU but can't *present* (no `VkSurfaceKHR`). On Ubuntu 22.04 the only jammy build is akdor `3.12.5-2` (Sept 2023, unsupported). Current gamescope needs Ubuntu 24.04 — but the earliest official `nvidia/cuda` image on 24.04 is **12.5.1**, forcing host driver ≥555, which narrows the Vast pool. So interim Windows path = **WineD3D + vglrun** (DX9–11 only; DX12 needs vkd3d-proton → same wall). Decision gate: validate WineD3D+VGL on real titles; revisit gamescope only if perf insufficient.
+### Why 24.04 (and why the pool is NOT lost)
+- mws prebuilt needs glibc 2.39 → noble. 24.04 makes it a tarball install (no Rust build / patchelf).
+- CUDA 12.5.1 on 24.04 runs on driver ≥525 via minor-version compat. The old "12.5.1 forces driver ≥555" claim confused bundled vs minimum driver (525.60.13). Offer filter stays `cuda_max_good>=12.1` → wide pool kept.
+- Latest Sunshine added XDG/Pipewire/KWin direct screencast + Vulkan encoding on Linux — a better match for 24.04 (though headless-Xvfb capture path still needs validation; we may stay on the ximagesrc/KMS path).
 
 ### NEXT steps (in order)
-1. **Validate the Sunshine-NVENC path on a driver-570 host** (the chosen NVENC solution). Rebuild the reverted image (Selkies 1.24.6 tarball restored; flexgrip + install-display-drivers + CUDA ARGs intact): `docker build --build-arg CUDA_VERSION=12.8.1 --build-arg CUDA_PKG=12-8 -t forcespt/dpadcloud-gaming:cuda12.8 .` (fast — no gstreamer build). Rent a driver-570 host, connect via Moonlight (needs TAILSCALE_AUTH_KEY or direct Sunshine 47989/47990), and confirm Sunshine streams with hardware `h264_nvenc`/`hevc_nvenc`. Read `/tmp/sunshine.log` (already in the periodic log dump) for `Found H.264 encoder: h264_nvenc`. **Browser (Selkies) on the same host will show `Selected encoder: x264enc`** — that is expected now (1.24.6 vs NVENC 13); the browser path is the x264 fallback, the low-latency NVENC path is Sunshine/Moonlight.
-   - **multi-GPU driver 570..609, 1-GPU slice** (`gpu_frac<1`): Sunshine's FFmpeg nvenc ALSO hits #1249 peer-init — flexgrip auto-enables (`DPAD_NVENC_FIX: ENABLED`, LD_PRELOAD now applied to the Sunshine launch too) and should fix it. Confirm `/tmp/sunshine.log` shows `h264_nvenc` working + boot log shows `[nvenc_fix] filtered: N -> 1`. **Branch**: (A) Sunshine NVENC works → ship the two-path model (browser=x264/Sunshine=NVENC on driver>=570). (B) Sunshine NVENC fails on multi-GPU despite flexgrip → check `[nvenc_fix] GET_ID_INFO status=0x1f` and extend `nvenc_fix.c`.
-   - **single-GPU driver ≥570** (`gpu_frac=1`): Sunshine NVENC should work natively (flexgrip disabled, no #1249). Confirms the 3060/driver-595 case (where Sunshine `h264_nvenc` was already seen working).
-   - **driver ≤565 host** (e.g. 3080 Ti @535): both browser nvh264enc AND Sunshine nvenc work (regression check).
-2. **Validate gaming on Vast** — `vgl-test`, a native Linux title under `vgl-steam`, a Windows DX9–11 title under `proton-wined3d`, a DX12 title (expected fail until gamescope). Capture encoder + fps + latency. **Gate:** WineD3D good enough → ship MVP; else revisit gamescope.
-3. **Orchestrator** (see below) — Vast provider in `apps/api` with the NVENC-safe offer predicate + per-GPU CUDA-variant selection (RTX 50 → `cuda12.8`, else `latest`) + routing (browser click-and-play via Selkies; low-latency via Sunshine/Moonlight).
-4. (Later, data-driven) **Present-surface decision** — gamescope / 24.04 bump / cage, to unlock true DXVK + DX12 + DLSS.
+1. **Build + boot on Vast** (driver 535 single-GPU for the wide-pool/compat check, and a driver ≥570 host for the mws NVENC path). Read the boot log: `mws running on 0.0.0.0:8080`, `mws tunnel URL:`, `Sunshine running`, `Selected encoder:` (Selkies). Watch for noble t64 apt failures in the build (one-line fix if any).
+2. **Validate mws↔Sunshine end-to-end**: open the mws tunnel URL → first login creates admin → add host `localhost` → pair → enter PIN in Sunshine Web UI → launch an app → confirm browser streams with `h264_nvenc` (check `/tmp/sunshine.log` for `Found H.264 encoder: h264_nvenc`). Confirm gamepad + audio. **Gate:** mws streams in browser with NVENC → ship mws as primary and drop Selkies. Else debug pairing/capture/audio.
+3. **Validate Selkies fallback** on the same host (regression): `Selected encoder: nvh264enc` on driver <570, `x264enc` on ≥570 (expected).
+4. **Orchestrator** — Vast provider in `apps/api` with the NVENC-safe offer predicate (`cuda_max_good>=12.1`), per-GPU CUDA-variant selection (RTX 50 → `ubuntu24.04-rtx50`, else `ubuntu24.04`), provision via Vast API, read boot log for the mws tunnel URL + encoder, create named Cloudflare tunnel (two ingress: `play-<id>`→8080, `selkies-<id>`→16100), return URL to website. mws↔Sunshine pairing is already auto-handled in-image (`scripts/mws-autopair` at boot); the orchestrator just sets `MWS_ADMIN_USER`/`MWS_ADMIN_PASSWORD` per session so the end user logs in with a session token (or fronts mws with the forwarded-header reverse-proxy auth so no mws login is shown).
+5. (Later, data-driven) **Present-surface decision** — gamescope / 24.04 was already done / cage, to unlock true DXVK + DX12 + DLSS.
+6. (Cleanup) **Drop Selkies** once mws+Sunshine is validated.
 
 ---
 

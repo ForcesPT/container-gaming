@@ -1,11 +1,14 @@
-version: "3.8"
+# version key removed (obsolete in Compose v2)
 
 services:
   dpadcloud-gaming:
     build:
       context: .
       dockerfile: Dockerfile
-    image: dpadcloud/gaming:latest
+      args:
+        CUDA_VERSION: "12.5.1"
+        CUDA_PKG: "12-5"
+    image: dpadcloud/gaming:ubuntu24.04
     container_name: dpadcloud-gaming
     restart: unless-stopped
 
@@ -41,6 +44,9 @@ services:
       # - TAILSCALE_HOSTNAME=dpadcloud-1
 
     ports:
+      # moonlight-web-stream — PRIMARY browser path (Sunshine NVENC -> WebRTC).
+      # In-container it binds 0.0.0.0:8080; cloudflared fronts it for HTTPS.
+      - "8080:8080/tcp"
       # Selkies browser UI (localhost only in-container; cloudflared fronts it).
       - "16100:16100/tcp"
       # In-image coturn TURN (WebRTC media relay). Default 3478.
@@ -60,9 +66,12 @@ services:
       - steam-games:/home/dpad/.local/share/Steam
       - sunshine-config:/home/dpad/.config/sunshine
       - steamapps:/home/dpad/SteamLibrary
+      # mws users/hosts (data.json) — optional persistence; comment out for
+      # ephemeral per-session (fresh admin/pairing each boot).
+      - mws-data:/opt/mws/server
 
     healthcheck:
-      test: ["/opt/dpadcloud/healthcheck.sh"]
+      test: ["CMD", "/opt/dpadcloud/healthcheck.sh"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -79,3 +88,4 @@ volumes:
   steam-games:
   sunshine-config:
   steamapps:
+  mws-data:

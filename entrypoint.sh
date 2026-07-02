@@ -1,10 +1,13 @@
 #!/bin/bash
 # =============================================================================
-# DpadCloud Gaming Container Entrypoint (B2 + B2b)
-# Order ported from vastai/linux-desktop boot scripts:
-#   dbus -> Xvfb -> PipeWire(+pulse,+wireplumber) -> null-sink
-#        -> coturn -> Sunshine -> Selkies(127.0.0.1:16100, TURN=coturn)
-#        -> cloudflared(HTTPS tunnel) -> Tailscale(native Moonlight)
+# DpadCloud Gaming Container Entrypoint (Ubuntu 24.04)
+# Boot order:
+#   dbus -> Xvfb -> XFCE -> PulseAudio(null-sink) -> coturn
+#        -> NVENC topology + flexgrip LD_PRELOAD
+#        -> Sunshine (NVENC host; encoder for BOTH mws and native Moonlight)
+#        -> Selkies-GStreamer (127.0.0.1:16100, TURN=coturn) [browser fallback]
+#        -> moonlight-web-stream (0.0.0.0:8080, Sunshine NVENC) [browser primary]
+#        -> cloudflared (HTTPS tunnels: mws + Selkies) -> Tailscale (native Moonlight)
 # =============================================================================
 
 set -o pipefail
@@ -46,6 +49,19 @@ wait_sock() {
 }
 
 as_user() { su -s /bin/bash "${USER_NAME}" -c "$1"; }
+
+# --- Raise thread/file limits (best-effort) ---
+# Some Vast hosts default to low RLIMIT_NPROC/NOFILE, which makes Sunshine, mws,
+# and XFCE fail to spawn threads ("Resource temporarily unavailable" / EAGAIN ->
+# Sunshine Aborted at startup, mws panic, XFCE GLib-ERROR). Raise them as high as
+# the hard cap allows. The diagnostic below prints the cgroup pids limit too — if
+# that's a low number (not "max"), it's the binding constraint and ulimit can't
+# help (the host needs a higher pids.max or a different instance).
+ulimit -Hu 1048576 2>/dev/null || true
+ulimit -u  1048576 2>/dev/null || true
+ulimit -Hn 1048576 2>/dev/null || true
+ulimit -n  1048576 2>/dev/null || true
+echo "[*] Resource limits: nproc=$(ulimit -u 2>/dev/null) nofile=$(ulimit -n 2>/dev/null)  cgroup_pids.max=$( (cat /sys/fs/cgroup/pids.max 2>/dev/null || grep -h '' /sys/fs/cgroup/*/pids.max 2>/dev/null | head -1) || echo '?')"
 
 # --- NVIDIA check (non-fatal) ---
 echo "[*] Checking NVIDIA GPU..."
@@ -259,7 +275,43 @@ echo "    --- NVENC topology (#1249 check) ---"
 DRIVER_MAJOR="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | cut -d. -f1)"
 HOST_GPU_COUNT="$(find /proc/driver/nvidia/gpus -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
 MOUNTED_GPU_COUNT="$(ls /dev/nvidia[0-9] 2>/dev/null | wc -l)"
-echo "    driver_major: ${DRIVER_MAJOR:-?}  host GPUs (/proc): ${HOST_GPU_COUNT}  mounted /dev/nvidiaX: ${MOUNTED_GPU_COUNT}"
+# nvidia-smi-visible GPUs = the ones this container can actually use (CUDA/NVENC).
+# On some Vast hosts (NVIDIA_VISIBLE_DEVICES=void) /dev/nvidiaX nodes are mounted
+# for GPUs the container CAN'T use, so the mounted count overcounts. nvidia-smi
+# only enumerates the usable ones, so we build a minor-bitmask from it and hand it
+# to the interposer (NVENC_FIX_AVAILABLE) so it filters GET_ATTACHED_IDS correctly.
+VISIBLE_GPU_COUNT="$(nvidia-smi -L 2>/dev/null | grep -c '^GPU ')"
+# Bitmask of the minors this container can actually use (nvidia-smi-visible GPUs).
+# Primary: map each visible GPU's PCI bus (nvidia-smi pci.bus_id) -> /proc Device
+# Minor — correct even when Vast mounts /dev/nvidiaX for GPUs we can't use (mining
+# rigs) and the assigned GPU isn't at minor 0.
+# Fallback: nvidia-smi "index" = minor (the standard toolkit renumbering), used if
+# the PCI-bus query returns nothing or doesn't match (its format varies by driver).
+VISIBLE_BITMASK=0
+while IFS= read -r busid; do
+    [ -z "$busid" ] && continue
+    key="${busid#*:}"                       # "00000000:2b:00.0" -> "2b:00.0"
+    for d in /proc/driver/nvidia/gpus/*; do
+        [ -d "$d" ] || continue
+        pkey="$(basename "$d")"; pkey="${pkey#*:}"   # "0000:2b:00.0" -> "2b:00.0"
+        if [ "$pkey" = "$key" ]; then
+            minor="$(grep -oP 'Device Minor:\s*\K[0-9]+' "$d/information" 2>/dev/null)"
+            [ -n "$minor" ] && VISIBLE_BITMASK=$(( VISIBLE_BITMASK | (1 << minor) ))
+            break
+        fi
+    done
+done < <(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader 2>/dev/null)
+# Fallback: index -> minor if the PCI-bus mapping came up empty.
+if [ "$VISIBLE_BITMASK" = "0" ]; then
+    while IFS= read -r idx; do
+        [ -z "$idx" ] && continue
+        VISIBLE_BITMASK=$(( VISIBLE_BITMASK | (1 << idx) ))
+    done < <(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null)
+fi
+if [ "$VISIBLE_BITMASK" = "0" ]; then
+    echo "    WARNING: visible-GPU mask is 0 (pci.bus_id='$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader 2>/dev/null | tr '\n' ' ')'); flexgrip won't filter"
+fi
+echo "    driver_major: ${DRIVER_MAJOR:-?}  host(/proc): ${HOST_GPU_COUNT}  mounted: ${MOUNTED_GPU_COUNT}  visible(nvidia-smi): ${VISIBLE_GPU_COUNT} (mask $(printf '0x%x' ${VISIBLE_BITMASK}))"
 find /proc/driver/nvidia/gpus -mindepth 1 -maxdepth 1 -type d -printf '      /proc GPU: %f\n' 2>/dev/null | head -8
 ls /dev/nvidia[0-9] 2>/dev/null | sed 's/^/      mounted: /'
 
@@ -268,23 +320,26 @@ case "${DPAD_NVENC_FIX:-auto}" in
     1) NVENC_FIX_ENABLED=1 ;;
     0) NVENC_FIX_ENABLED=0 ;;
     auto)
-        # integer-safe comparison: enable only when host has more GPUs than we
-        # have device nodes (i.e. we got a slice of a multi-GPU host) on 570..609
-        if (( ${HOST_GPU_COUNT:-0} > ${MOUNTED_GPU_COUNT:-0} )) \
-           && (( ${DRIVER_MAJOR:-0} >= 570 )) \
-           && (( ${DRIVER_MAJOR:-0} < 610 )); then
-            NVENC_FIX_ENABLED=1
+        # Enable when the container can't use ALL host GPUs: either a slice
+        # (host>mounted) or mounted-but-inaccessible GPUs (visible<mounted, which
+        # happens with NVIDIA_VISIBLE_DEVICES=void on Vast). driver 570..609.
+        if (( ${DRIVER_MAJOR:-0} >= 570 )) && (( ${DRIVER_MAJOR:-0} < 610 )); then
+            if (( ${HOST_GPU_COUNT:-0} > ${MOUNTED_GPU_COUNT:-0} )) \
+               || (( ${VISIBLE_GPU_COUNT:-0} < ${MOUNTED_GPU_COUNT:-0} )); then
+                NVENC_FIX_ENABLED=1
+            fi
         fi
         ;;
 esac
 if [ "$NVENC_FIX_ENABLED" = "1" ] && [ -f /opt/dpadcloud/libnvenc_fix.so ]; then
     export NVENC_FIX_DEBUG=1
-    echo "    DPAD_NVENC_FIX: ENABLED — libnvenc_fix.so will filter GET_ATTACHED_IDS (log: [nvenc_fix] on stderr)"
+    export NVENC_FIX_AVAILABLE="$(printf '0x%x' "$VISIBLE_BITMASK")"
+    echo "    DPAD_NVENC_FIX: ENABLED — filter GET_ATTACHED_IDS to visible GPUs (mask ${NVENC_FIX_AVAILABLE})"
 elif [ "$NVENC_FIX_ENABLED" = "1" ]; then
     echo "    DPAD_NVENC_FIX: requested but /opt/dpadcloud/libnvenc_fix.so missing — cannot enable"
     NVENC_FIX_ENABLED=0
 else
-    echo "    DPAD_NVENC_FIX: disabled (single-GPU/whole-host or driver<570 or >=610 — NVENC native)"
+    echo "    DPAD_NVENC_FIX: disabled (all host GPUs accessible or driver<570/>=610 — NVENC native)"
 fi
 
 # Joystick interposer (gamepad) + conditional flexgrip NVENC fix — assembled
@@ -294,6 +349,14 @@ DPAD_PRELOAD=""
 [ "$NVENC_FIX_ENABLED" = "1" ] && DPAD_PRELOAD="/opt/dpadcloud/libnvenc_fix.so"
 export LD_PRELOAD="${DPAD_PRELOAD}${DPAD_PRELOAD:+:}${SELKIES_INTERPOSER}${LD_PRELOAD:+:${LD_PRELOAD}}"
 mkdir -pm1777 /dev/input 2>/dev/null && touch /dev/input/js0 2>/dev/null && chmod 777 /dev/input/js* 2>/dev/null || true
+# /dev/uinput — Sunshine creates the virtual keyboard/mouse/touch devices here
+# when a stream starts. Without it Sunshine warns "Unable to create virtual
+# touch screen/pen tablet" and segfaults on input injection. Create the char
+# device (major 10, minor 223) world-writable so the desktop user can use it.
+if [ ! -e /dev/uinput ]; then
+    mknod /dev/uinput c 10 223 2>/dev/null || true
+fi
+chmod 666 /dev/uinput 2>/dev/null || true
 
 # --- Sunshine (native Moonlight host) ---
 SUNSHINE_BIN="$(command -v sunshine 2>/dev/null || echo /usr/bin/sunshine)"
@@ -398,19 +461,95 @@ as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_
 sleep 4
 pgrep -f "selkies-gstreamer" >/dev/null && echo "    Selkies running on 127.0.0.1:16100 (encoder=${SELKIES_ENC})" || { echo "    WARNING: selkies failed (see /tmp/selkies.log)"; tail -n 30 /tmp/selkies.log; }
 
-# --- cloudflared (B2b: HTTPS tunnel front for click-and-play) ---
-SELKIES_URL=""
+# --- moonlight-web-stream (PRIMARY browser path: Sunshine NVENC -> WebRTC) ---
+# mws is a Moonlight client that bridges Sunshine's h264_nvenc stream to a
+# browser over WebRTC, fronted by its own cloudflared tunnel. It reuses the
+# in-image coturn TURN (TCP) for the WebRTC media relay — same model as Selkies,
+# so on Vast only the 73478 TCP identity port needs exposing (no extra UDP range
+# as long as clients relay through TURN). First-run flow (in the browser UI):
+#   1) first login creates the mws admin user
+#   2) add a host -> address "localhost", port empty (Sunshine default 47989)
+#   3) click pair -> Sunshine shows the PIN in its Web UI -> enter it
+#   4) launch an app. (Future: the orchestrator automates pairing via Sunshine's API.)
+# Config: mws STRICTLY deserializes server/config.json and panics on a partial
+# config (missing required fields like first_login_create_admin). So we DON'T
+# hand-write it — we delete any stale one and let mws generate a schema-valid
+# default (bind 0.0.0.0:8080, first_login_create_admin=true), then drive the ICE
+# servers via env vars (cli.rs): DISABLE_DEFAULT_WEBRTC_ICE_SERVERS=true strips
+# the bundled Google STUN, and WEBRTC_ICE_SERVER_0_* appends our coturn TURN —
+# the only path that reaches mws on Vast (mws's own UDP port range isn't exposed).
+MWS_URL=""
+if [ -x /opt/mws/web-server ]; then
+    echo "[*] Configuring moonlight-web-stream (env -> coturn TURN)..."
+    mkdir -p /opt/mws/server
+    chown -R "${USER_NAME}:${USER_NAME}" /opt/mws
+    # Force fresh config generation each boot (avoids a stale/partial config
+    # panicking; data.json — users/hosts — is separate and persists if the
+    # /opt/mws/server volume is mounted).
+    rm -f /opt/mws/server/config.json
+    echo "[*] Starting moonlight-web-stream (web-server on 0.0.0.0:8080)..."
+    as_user "cd /opt/mws && \
+        DISABLE_DEFAULT_WEBRTC_ICE_SERVERS=true \
+        WEBRTC_NETWORK_TYPES=udp4,tcp4 \
+        WEBRTC_ICE_SERVER_0_URL='turn:${PUBLIC_IP:-127.0.0.1}:${TURN_PORT_EXT}?transport=tcp' \
+        WEBRTC_ICE_SERVER_0_USERNAME='${TURN_USER}' \
+        WEBRTC_ICE_SERVER_0_CREDENTIAL='${TURN_PASS}' \
+        ./web-server" >/tmp/mws.log 2>&1 &
+    # mws (Rust + actix) takes ~5-10s to initialize; wait for port 8080 to
+    # accept connections instead of a fixed sleep (a 4s pgrep was a false
+    # negative — mws was actually starting, just slowly).
+    MWS_UP=0
+    for i in $(seq 1 25); do
+        if curl -sS -o /dev/null --connect-timeout 1 --max-time 2 "http://127.0.0.1:8080/" 2>/dev/null; then MWS_UP=1; break; fi
+        sleep 1
+    done
+    if [ "$MWS_UP" = "1" ]; then
+        echo "    mws running on 0.0.0.0:8080 (Sunshine NVENC -> WebRTC)"
+    else
+        echo "    WARNING: mws web-server not listening on :8080 after 25s (see /tmp/mws.log):"; tail -n 30 /tmp/mws.log
+    fi
+else
+    echo "WARNING: moonlight-web-stream not found at /opt/mws/web-server"
+fi
+
+# --- mws <-> Sunshine auto-pairing (so the end user never sees a PIN) ---
+# A background one-shot drives mws's /api/pair + Sunshine's /api/pin. Disabled
+# with DPAD_MWS_AUTOPAIR=0. Only runs if mws came up. Logs to stdout +
+# /tmp/mws-autopair.log (included in the periodic log dump below).
+if [ "${DPAD_MWS_AUTOPAIR:-1}" = "1" ] && [ "${MWS_UP:-0}" = "1" ] && [ -x /opt/dpadcloud/mws-autopair ]; then
+    echo "[*] Launching mws<->Sunshine auto-pairing (background)..."
+    SUNSHINE_PASSWORD="${SUNSHINE_PASS}" /opt/dpadcloud/mws-autopair 2>&1 &
+fi
+
+# --- cloudflared (HTTPS tunnels for BOTH browser paths) ---
+# mws (primary, :8080) and Selkies (fallback, :16100) each get an HTTPS tunnel
+# so the secure-context gaming APIs (gamepad, WebCodecs, keyboard lock) work.
+# Production: ONE named tunnel with two ingress rules in the Cloudflare dashboard
+#   play-<id>.dpadcloud.com    -> http://localhost:8080  (mws, primary)
+#   selkies-<id>.dpadcloud.com -> http://localhost:16100 (fallback)
+# and pass CLOUDFLARED_TUNNEL_TOKEN + CLOUDFLARED_HOSTNAME (the mws/primary one).
+# MVP: each gets a quick trycloudflare.com URL (two cloudflared processes).
+start_quick_tunnel() {
+  local local_url="$1" logfile="$2"
+  cloudflared tunnel --no-autoupdate --url "$local_url" >"$logfile" 2>&1 &
+  sleep 8
+  grep -oE 'https://[a-z0-9.-]+trycloudflare\.com' "$logfile" 2>/dev/null | head -1
+}
 if [ -n "${CLOUDFLARED_TUNNEL_TOKEN:-}" ]; then
-    echo "[*] Starting cloudflared named tunnel..."
+    echo "[*] Starting cloudflared named tunnel (primary -> mws :8080)..."
     cloudflared tunnel --no-autoupdate run --token "${CLOUDFLARED_TUNNEL_TOKEN}" >/tmp/cloudflared.log 2>&1 &
-    SELKIES_URL="${CLOUDFLARED_HOSTNAME:-https://<your-tunnel-hostname>}"
-    echo "    Tunnel URL: ${SELKIES_URL}"
+    MWS_URL="${CLOUDFLARED_HOSTNAME:-https://<your-tunnel-hostname>}"
+    echo "    mws tunnel URL: ${MWS_URL}"
+    if command -v cloudflared >/dev/null 2>&1; then
+        SELKIES_URL="$(start_quick_tunnel http://localhost:16100 /tmp/cloudflared-selkies.log)"
+        [ -n "$SELKIES_URL" ] && echo "    Selkies fallback tunnel: ${SELKIES_URL}" || echo "    Selkies fallback tunnel not captured (see /tmp/cloudflared-selkies.log)"
+    fi
 elif command -v cloudflared >/dev/null 2>&1; then
-    echo "[*] Starting cloudflared quick tunnel (https://...trycloudflare.com)..."
-    cloudflared tunnel --no-autoupdate --url http://localhost:16100 >/tmp/cloudflared.log 2>&1 &
-    sleep 8
-    SELKIES_URL="$(grep -oE 'https://[a-z0-9.-]+trycloudflare\.com' /tmp/cloudflared.log 2>/dev/null | head -1)"
-    [ -n "$SELKIES_URL" ] && echo "    Tunnel URL: ${SELKIES_URL}" || { echo "    Tunnel URL not captured yet (see /tmp/cloudflared.log):"; tail -n 15 /tmp/cloudflared.log; }
+    echo "[*] Starting cloudflared quick tunnels (mws + Selkies)..."
+    MWS_URL="$(start_quick_tunnel http://localhost:8080 /tmp/cloudflared-mws.log)"
+    [ -n "$MWS_URL" ] && echo "    mws tunnel URL: ${MWS_URL}" || { echo "    mws tunnel URL not captured (see /tmp/cloudflared-mws.log):"; tail -n 15 /tmp/cloudflared-mws.log; }
+    SELKIES_URL="$(start_quick_tunnel http://localhost:16100 /tmp/cloudflared-selkies.log)"
+    [ -n "$SELKIES_URL" ] && echo "    Selkies tunnel URL: ${SELKIES_URL}" || { echo "    Selkies tunnel URL not captured (see /tmp/cloudflared-selkies.log):"; tail -n 15 /tmp/cloudflared-selkies.log; }
 fi
 
 # --- Tailscale (native-Moonlight enthusiast overlay) ---
@@ -437,12 +576,27 @@ echo "  Display:          ${DISPLAY_NUM} @ ${SCREEN_RES}"
 echo "  Encoder:           ${SELKIES_ENC}"
 [ -n "$PUBLIC_IP" ] && echo "  Public IP:        ${PUBLIC_IP}"
 echo ""
-echo "  ▶ Browser click-and-play (Selkies via HTTPS tunnel):"
+echo "  ▶ Browser click-and-play — PRIMARY (mws: Sunshine NVENC -> WebRTC):"
+if [ -n "$MWS_URL" ]; then
+    echo "      ${MWS_URL}"
+    if [ "${DPAD_MWS_AUTOPAIR:-1}" = "1" ]; then
+        echo "      Auto-pairs with Sunshine at boot — just log in and launch an app."
+        echo "      (mws login: ${MWS_ADMIN_USER:-dpad} / <SUNSHINE_PASSWORD>; host 'localhost' already paired)"
+    else
+        echo "      First login creates the admin user; then add host 'localhost',"
+        echo "      pair via Sunshine Web UI PIN, then launch an app."
+    fi
+else
+    echo "      (no tunnel — set CLOUDFLARED_TUNNEL_TOKEN or quick-tunnel failed)"
+    echo "      Local fallback: http://localhost:8080"
+fi
+echo ""
+echo "  ▶ Browser click-and-play — FALLBACK (Selkies):"
 if [ -n "$SELKIES_URL" ]; then
     echo "      ${SELKIES_URL}"
     echo "      Login: ${SELKIES_USER} / ${SELKIES_PASS}"
 else
-    echo "      (no tunnel — set CLOUDFLARED_TUNNEL_TOKEN or cloudflared quick-tunnel failed)"
+    echo "      (no tunnel — Selkies quick-tunnel failed)"
     echo "      Local fallback: http://localhost:16100  (Login: ${SELKIES_USER} / ${SELKIES_PASS})"
 fi
 echo ""
@@ -473,6 +627,12 @@ echo "=========================================="
         echo "=== /tmp/selkies.log (tail) ==="
         tail -n 100 /tmp/selkies.log 2>/dev/null || true
         echo "=== end selkies.log ==="
+        echo "=== /tmp/mws.log (tail) ==="
+        tail -n 60 /tmp/mws.log 2>/dev/null || true
+        echo "=== end mws.log ==="
+        echo "=== /tmp/mws-autopair.log (tail) ==="
+        tail -n 40 /tmp/mws-autopair.log 2>/dev/null || true
+        echo "=== end mws-autopair.log ==="
         echo "=== /tmp/sunshine.log (tail) ==="
         tail -n 60 /tmp/sunshine.log 2>/dev/null || true
         echo "=== end sunshine.log ==="
@@ -491,5 +651,9 @@ while true; do
     sleep 30
     pgrep -x Xvfb >/dev/null || { echo "WARNING: Xvfb died, restarting"; Xvfb "${DISPLAY_NUM}" -screen 0 "${SCREEN_RES}" -dpi 96 +extension GLX +extension RANDR +extension RENDER -ac -noreset -shmem & }
     pgrep -f "selkies-gstreamer" >/dev/null || echo "WARNING: selkies not running (see /tmp/selkies.log)"
+    # mws is launched as `./web-server` (cwd /opt/mws), so pgrep on the path
+    # doesn't match — check the port instead (returns 0 on any HTTP response,
+    # incl. the 401 for unauthenticated /, which still means it's listening).
+    curl -sS -o /dev/null --max-time 2 "http://127.0.0.1:8080/" 2>/dev/null || echo "WARNING: mws not listening on :8080 (see /tmp/mws.log)"
     pgrep -x sunshine >/dev/null || echo "WARNING: sunshine not running (see /tmp/sunshine.log)"
 done

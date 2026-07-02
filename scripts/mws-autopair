@@ -1,0 +1,142 @@
+#!/bin/bash
+# =============================================================================
+# mws-autopair — pre-pair moonlight-web-stream with Sunshine at boot so the end
+# user never sees/enters a pairing PIN.
+#
+# Flow (all on localhost, inside the container):
+#   1. wait for mws (:8080) + Sunshine (:47990) to be up
+#   2. POST mws /api/login {name,password}  -> first login creates the mws admin
+#      (cookie-jar auth for the rest); creds from MWS_ADMIN_USER/_PASSWORD
+#   3. GET mws /api/hosts (NDJSON); if a "localhost" host is already Paired, done.
+#      else POST mws /api/host {address:"localhost"} to add Sunshine as a host
+#   4. POST mws /api/pair {host_id}  -> NDJSON line 1 = {"Pin":"1234"} (mws picks
+#      the pin); the pair handshake to Sunshine runs async in mws
+#   5. POST Sunshine /api/pin {pin,name} (basic auth admin:SUNSHINE_PASSWORD,
+#      self-signed -> -k; curl is CSRF-exempt as a non-browser client) so Sunshine
+#      validates the in-flight handshake against that pin
+#   6. watch the mws pair NDJSON stream for {"Paired":...} or {"PairError":...}
+#
+# This is a one-shot launched in the background from entrypoint.sh. It logs to
+# stdout (-> Vast Logs tab) and /tmp/mws-autopair.log. Non-fatal: if anything
+# fails it just exits 0 and the user can still pair manually via the mws web UI.
+# =============================================================================
+set -uo pipefail
+
+MWS="${MWS_URL_BASE:-http://127.0.0.1:8080}"
+SUN="${SUNSHINE_API:-https://127.0.0.1:47990}"
+SUN_USER="${SUNSHINE_USER:-admin}"
+SUN_PASS="${SUNSHINE_PASSWORD:-dpadcloud}"
+MWS_USER="${MWS_ADMIN_USER:-dpad}"
+MWS_PASS="${MWS_ADMIN_PASSWORD:-${SUN_PASS}}"
+CLIENT_NAME="${MWS_CLIENT_NAME:-dpadcloud-web}"
+JAR=/tmp/mws-autopair-cookies
+PAIR_STREAM=/tmp/mws-pair-stream.jsonl
+LOG=/tmp/mws-autopair.log
+
+log() { printf '[mws-autopair] %s\n' "$*"; printf '[mws-autopair] %s\n' "$*" >> "$LOG"; }
+
+: > "$LOG"
+log "starting (mws=${MWS}, sunshine=${SUN}, mws_admin=${MWS_USER})"
+
+# 1. wait for both services
+for i in $(seq 1 90); do
+    curl -fsS -o /dev/null --max-time 2 "$MWS/" 2>/dev/null && \
+    curl -ksS -o /dev/null --max-time 2 "$SUN/" 2>/dev/null && break
+    sleep 1
+done
+if ! curl -fsS -o /dev/null --max-time 2 "$MWS/" 2>/dev/null; then log "mws not up — aborting (manual pairing still available)"; exit 0; fi
+if ! curl -ksS -o /dev/null --max-time 2 "$SUN/" 2>/dev/null; then log "Sunshine not up — aborting"; exit 0; fi
+log "both services up"
+
+# 2. login to mws (first login creates the admin user)
+rm -f "$JAR"
+curl -sS -c "$JAR" -H "Content-Type: application/json" \
+    --data-raw "{\"name\":\"${MWS_USER}\",\"password\":\"${MWS_PASS}\"}" \
+    --max-time 6 "$MWS/api/login" >/dev/null 2>&1 || true
+if [ ! -s "$JAR" ]; then log "mws login failed (no session cookie) — aborting"; exit 0; fi
+log "logged in to mws as ${MWS_USER}"
+
+# 3. find an existing host (and its paired state) or add the Sunshine host.
+#    GET /api/hosts is NDJSON: line 1 = {"hosts":[...]} (cached from storage),
+#    then one UndetailedHost line per re-discovered host. UndetailedHost has NO
+#    `address` field — it has `host_id`, `name`, `paired`, `server_state`. We
+#    grab the first host_id we can find (we only ever add the one Sunshine host).
+HOST_ID=""; PAIRED=""
+for attempt in 1 2 3; do
+    HOSTS_JSONL=$(curl -sS -b "$JAR" --max-time 10 "$MWS/api/hosts" 2>/dev/null || true)
+    # match a per-host line (.host_id) or the hosts-array line (.hosts[0].host_id)
+    HOST_ID=$(printf '%s\n' "$HOSTS_JSONL" | jq -r '(.host_id) // (.hosts[0].host_id) // empty' 2>/dev/null | grep -v '^$' | head -1)
+    if [ -n "$HOST_ID" ]; then
+        PAIRED=$(printf '%s\n' "$HOSTS_JSONL" | jq -r '(.paired) // (.hosts[0].paired) // empty' 2>/dev/null | grep -v '^$' | head -1)
+        break
+    fi
+    sleep 2
+done
+if [ -n "$HOST_ID" ]; then
+    log "existing host host_id=${HOST_ID} paired=${PAIRED}"
+    if [ "$PAIRED" = "Paired" ]; then log "already paired — nothing to do"; exit 0; fi
+else
+    log "adding localhost host (Sunshine :47989)…"
+    RESP=$(curl -sS -b "$JAR" -H "Content-Type: application/json" \
+        --data-raw '{"address":"localhost","http_port":null}' \
+        --max-time 10 "$MWS/api/host" 2>/dev/null || true)
+    # PostHostResponse = {"host":{...DetailedHost with host_id...}}
+    HOST_ID=$(printf '%s' "$RESP" | jq -r '.host.host_id // .host_id // empty' 2>/dev/null | head -1)
+    log "POST /api/host -> host_id=${HOST_ID} (resp: $(printf '%s' "$RESP" | head -c 200))"
+fi
+if [ -z "$HOST_ID" ]; then log "could not obtain a host_id — aborting"; exit 0; fi
+
+# 4. request pairing (mws generates the pin + drives the handshake with Sunshine)
+log "requesting pair (host_id=${HOST_ID})…"
+rm -f "$PAIR_STREAM"
+# -N / --no-buffer is ESSENTIAL: mws streams the pin as the first NDJSON chunk
+# (~15 bytes); without it curl buffers that tiny chunk to the output file and
+# doesn't flush until the next chunk (the PairError, ~90s later) or connection
+# close — so the pin would never be visible within our capture window.
+curl -N -sS -b "$JAR" -H "Content-Type: application/json" \
+    --data-raw "{\"host_id\":${HOST_ID}}" --max-time 60 "$MWS/api/pair" > "$PAIR_STREAM" 2>/dev/null &
+PAIR_PID=$!
+
+# read NDJSON line 1 = {"Pin":"1234"} (robustly via jq)
+PIN=""
+for i in $(seq 1 20); do
+    PIN=$(jq -r 'select(.Pin != null) | .Pin' "$PAIR_STREAM" 2>/dev/null | head -1)
+    [ -n "$PIN" ] && break
+    sleep 1
+done
+if [ -z "$PIN" ]; then
+    log "no PIN received from mws — aborting"
+    log "  stream size: $(wc -c < "$PAIR_STREAM" 2>/dev/null || echo 0) bytes"
+    log "  stream head: $(head -c 500 "$PAIR_STREAM" 2>/dev/null)"
+    exit 0
+fi
+log "mws generated PIN: ${PIN}"
+
+# 5. submit the PIN to Sunshine so it validates the in-flight handshake.
+#    (A short pause lets Sunshine's pairing session be active before we set the pin.)
+sleep 2
+PINRES=$(curl -ksS -u "${SUN_USER}:${SUN_PASS}" -H "Content-Type: application/json" \
+    --data-raw "{\"pin\":\"${PIN}\",\"name\":\"${CLIENT_NAME}\"}" \
+    --max-time 10 "$SUN/api/pin" 2>/dev/null || true)
+log "Sunshine /api/pin -> ${PINRES:-<no body>}"
+
+# 6. wait for mws to report the pair result (NDJSON: {"Paired":{...}} / {"PairError":...})
+RES=""
+for i in $(seq 1 30); do
+    if grep -q '"Paired"' "$PAIR_STREAM" 2>/dev/null; then RES="Paired"; break; fi
+    if grep -q '"PairError"' "$PAIR_STREAM" 2>/dev/null; then RES="PairError"; break; fi
+    sleep 1
+done
+wait "$PAIR_PID" 2>/dev/null || true
+
+if [ "$RES" = "Paired" ]; then
+    log "SUCCESS — mws is paired with Sunshine. The end user can just open the mws URL and play."
+elif [ "$RES" = "PairError" ]; then
+    log "pairing FAILED (mws reported PairError) — the user can retry pairing via the mws web UI."
+    tail -8 "$PAIR_STREAM" 2>/dev/null | sed 's/^/  /'
+else
+    log "pairing did not confirm within 30s — the user can pair manually via the mws web UI."
+    tail -8 "$PAIR_STREAM" 2>/dev/null | sed 's/^/  /'
+fi
+rm -f "$PAIR_STREAM"
+exit 0
