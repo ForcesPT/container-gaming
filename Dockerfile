@@ -185,6 +185,40 @@ RUN mkdir -p ${HOME}/.steam/root/compatibilitytools.d && \
     chown -R ${USERNAME}:${USERNAME} ${HOME}/.steam
 
 # =============================================================================
+# 5b. Install Valve Proton builds (Proton Experimental + latest Proton) via
+#     steamcmd anonymous download, into compatibilitytools.d alongside GE-Proton.
+#     Used by dpad-launch's Proton-direct path for Windows games (PROTONPATH).
+#     Proton tools are free Steam tools downloadable anonymously. Steam appids:
+#       Proton Experimental = 1493710  (rolling bleeding-edge)
+#       Proton 11.0-1 Beta5 = 4628710  (latest Proton; 11.0 stable pending)
+#     Each tool is ~1.5GB. We deliberately do NOT install the Steam Linux Runtime
+#     (sniper) — dpad-launch runs Proton DIRECTLY (not via Steam), and the proton
+#     script runs its bundled wine natively when no runtime is present (no
+#     pressure-vessel / no userns needed on Vast). Anonymous download failures
+#     are non-fatal (warn + continue) so a build never hard-fails if Valve
+#     changes anonymous access; the missing tool just won't be selectable.
+# =============================================================================
+RUN set -e; \
+    PROTON_TMP=/tmp/proton-dl && mkdir -p "$PROTON_TMP" ${HOME}/.steam/root/compatibilitytools.d; \
+    for appid in 1493710 4628710; do \
+      echo "[*] Downloading Proton tool $appid via steamcmd (anonymous) ..."; \
+      if steamcmd +force_install_dir "$PROTON_TMP" +login anonymous +app_update "$appid" validate +quit; then \
+        :; \
+      else \
+        echo "    WARN: steamcmd download of Proton $appid failed (continuing; that tool won't be available)."; \
+      fi; \
+    done; \
+    if [ -d "$PROTON_TMP/steamapps/common" ]; then \
+      for d in "$PROTON_TMP/steamapps/common"/*/; do \
+        name="$(basename "$d")"; \
+        [ -d "${HOME}/.steam/root/compatibilitytools.d/$name" ] && rm -rf "${HOME}/.steam/root/compatibilitytools.d/$name"; \
+        mv "$d" "${HOME}/.steam/root/compatibilitytools.d/" && echo "    installed Proton: $name"; \
+      done; \
+    fi; \
+    rm -rf "$PROTON_TMP"; \
+    chown -R ${USERNAME}:${USERNAME} ${HOME}/.steam ${HOME}/.local/share/Steam
+
+# =============================================================================
 # 6. Install Sunshine (host for native Moonlight AND the encoder for mws)
 #    .deb from GitHub, matched to the base (ubuntu-24.04-amd64).
 # =============================================================================

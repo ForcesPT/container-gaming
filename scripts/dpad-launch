@@ -4,18 +4,27 @@
 #
 # Headless Steam game launcher for Vast (and any unprivileged provider with no
 # user namespaces). This is the Vast product path: NO Steam UI, NO
-# pressure-vessel (both need userns, which Vast denies). Instead:
+# pressure-vessel (both need userns, which Vast denies).
 #
-#   1. steamcmd downloads the game into /home/dpad/games (force_install_dir).
-#   2. The game ships bundled with the Steam Linux Runtime (sniper) platform.
-#      We bypass pressure-vessel and run the game's NATIVE Linux binary
-#      directly, borrowing ONLY the version-pinned libs the system can't
-#      provide (ICU 67 vs system 74, OpenSSL 1.1 vs system 3.x, ...) from the
-#      sniper platform — into a clean compat-libs dir that NEVER contains glibc
-#      (loading the sniper's older libc.so.6 breaks every system binary).
-#   3. Launch on DISPLAY=:0 with LD_LIBRARY_PATH set INLINE (not exported) so
-#      the surrounding shell keeps using the system glibc. Selkies/mws capture
-#      the window from the X server.
+# It auto-detects the game platform after download:
+#
+#   NATIVE LINUX game (has a native ELF binary):
+#     The game ships bundled with the Steam Linux Runtime (sniper) platform.
+#     We bypass pressure-vessel and run the game's NATIVE Linux binary
+#     directly, borrowing ONLY the version-pinned libs the system can't
+#     provide (ICU 67 vs system 74, OpenSSL 1.1 vs system 3.x, ...) from the
+#     sniper platform — into a clean compat-libs dir that NEVER contains glibc
+#     (loading the sniper's older libc.so.6 breaks every system binary).
+#
+#   WINDOWS game (only .exe, no native ELF binary):
+#     Proton-DIRECT: run the Proton `proton` script directly (NOT via Steam,
+#     NOT via pressure-vessel). The proton script detects it's not under the
+#     Steam client and runs the bundled wine + DXVK/vkd3d-proton against the
+#     Vulkan present surface on the Xorg :0. Selkies/mws capture the window.
+#     Proton tool selected by DPAD_PROTON (default GE-Proton11-1).
+#
+# Both paths launch on DISPLAY=:0 with env set INLINE (not exported) so the
+# surrounding shell keeps using the system glibc.
 #
 # Env:
 #   STEAM_USER          (required) Steam account login name. Cached creds in
@@ -23,21 +32,30 @@
 #                       prompts for password + Steam Guard code (one-time per
 #                       machine; the test path).
 #   DPAD_INSTALL_DIR    (default /home/dpad/games) steamcmd force_install_dir.
-#   DPAD_GAME_BINARY    (optional) explicit path to the game's Linux binary,
-#                       bypassing auto-detection.
-#   DPAD_GAME_ARGS      (optional) extra args passed to the game binary.
+#   DPAD_GAME_BINARY    (optional) explicit path to the game's binary (.elf or
+#                       .exe), bypassing auto-detection.
+#   DPAD_GAME_ARGS      (optional) extra args passed to the game.
 #   DISPLAY             (default :0) X display to launch on.
+#
+#   DPAD_PROTON         (Windows path) Proton tool to use: a NAME found in
+#                       ~/.steam/root/compatibilitytools.d (e.g. "GE-Proton11-1",
+#                       "Proton Experimental", "Proton 11.0") or an absolute
+#                       path. Default: GE-Proton11-1.
+#   DPAD_FORCE_PROTON   (optional) =1 forces the Windows/Proton path even if a
+#                       native Linux binary is present.
 #
 # Requires: steamcmd on PATH; the SDL2 system libs (libsdl2-mixer-2.0-0,
 # libsdl2-image-2.0-0) are pre-installed in the image so native games can load
 # SDL2 add-ons from the system (matching SONAMEs) instead of the sniper cascade.
+# Proton tools are pre-installed in ~/.steam/root/compatibilitytools.d.
 # =============================================================================
 set -uo pipefail
 
 APPID="${1:-}"
 if [ -z "$APPID" ]; then
     echo "usage: dpad-launch <appid> [extra-steamcmd-args...]" >&2
-    echo "  env: STEAM_USER (required), DPAD_GAME_BINARY, DPAD_GAME_ARGS, DPAD_INSTALL_DIR, DISPLAY" >&2
+    echo "  env: STEAM_USER (required), DPAD_GAME_BINARY, DPAD_GAME_ARGS," >&2
+    echo "       DPAD_INSTALL_DIR, DISPLAY, DPAD_PROTON, DPAD_FORCE_PROTON" >&2
     exit 1
 fi
 shift || true
@@ -78,6 +96,8 @@ if [ -d "$STEAMCMD_HOME" ]; then
 fi
 
 # --- 2. Locate the bundled Steam Linux Runtime (sniper) platform -------------
+# (Only used by the native path. Windows games use Proton, which bundles its
+# own runtime.)
 SNIPER_ROOT="$(find "$INSTALL_DIR" -maxdepth 2 -type d -name 'sniper_platform_*' 2>/dev/null | head -1)"
 SNIPER_LIB=""
 if [ -n "$SNIPER_ROOT" ] && [ -d "$SNIPER_ROOT/files/lib/x86_64-linux-gnu" ]; then
@@ -87,109 +107,162 @@ if [ -n "$SNIPER_ROOT" ] && [ -d "$SNIPER_ROOT/files/lib/x86_64-linux-gnu" ]; th
     # every lib in the sniper dir. Idempotent. -n = don't touch the system cache.
     ldconfig -n "$SNIPER_LIB" 2>/dev/null || true
     [ -d "$SNIPER_LIB/pulseaudio" ] && ldconfig -n "$SNIPER_LIB/pulseaudio" 2>/dev/null || true
-else
-    echo "[dpad-launch] No sniper_platform_* found — game may not bundle the Steam Runtime."
-    echo "               (Pure-system-libs games launch with an empty compat-libs dir.)"
 fi
 
-# --- 3. Locate the game's main Linux binary ----------------------------------
-if [ -n "${DPAD_GAME_BINARY:-}" ] && [ -x "${DPAD_GAME_BINARY:-}" ]; then
-    GAME_BIN="$DPAD_GAME_BINARY"
-else
-    # Heuristic: the largest ELF executable under INSTALL_DIR, excluding the
-    # sniper runtime + pressure-vessel dirs + steamapps manifests. The main game
-    # binary is almost always the biggest ELF; runtime helpers are tiny.
-    GAME_BIN=""
-    while IFS= read -r f; do
-        if file "$f" 2>/dev/null | grep -qi 'ELF.*executable'; then
-            GAME_BIN="$f"
-            break
-        fi
-    done < <(find "$INSTALL_DIR" -type f -executable \
-                -not -path '*/sniper_platform_*/*' \
-                -not -path '*/pressure-vessel*' \
-                -not -path '*/steamapps/*' \
-                -not -path '*/_v2-entry-point' \
-                2>/dev/null \
-              | xargs -r ls -S 2>/dev/null)
-fi
+# --- 3. Detect platform: native Linux ELF vs Windows .exe --------------------
+# Force the Windows/Proton path with DPAD_FORCE_PROTON=1 (or by setting
+# DPAD_PROTON, which implies force). Otherwise: if a native ELF executable is
+# found, take the native path; else fall through to Windows/Proton.
+FORCE_PROTON="${DPAD_FORCE_PROTON:-${DPAD_PROTON:+1}}"
 
-if [ -z "$GAME_BIN" ] || [ ! -x "$GAME_BIN" ]; then
-    echo "[dpad-launch] ERROR: could not auto-detect the game's Linux binary." >&2
-    echo "    Set DPAD_GAME_BINARY=/path/to/binary and re-run." >&2
-    echo "    Candidate executables found:" >&2
-    find "$INSTALL_DIR" -type f -executable \
-         -not -path '*/sniper_platform_*/*' -not -path '*/pressure-vessel*' \
-         2>/dev/null | head -20 >&2
-    exit 1
-fi
-echo "[dpad-launch] Game binary: $GAME_BIN"
-
-# --- 4. Build a glibc-safe compat-libs dir -----------------------------------
-#     Symlink ONLY the version-pinned libs the system can't provide, pulled from
-#     the sniper platform. NEVER symlink the glibc family — the sniper's older
-#     libc.so.6 lacks GLIBC_2.3x symbols and breaks every system binary when
-#     placed on LD_LIBRARY_PATH (we hit this during testing). The system glibc
-#     satisfies the game (Steam Runtime games target glibc <= host).
-COMPAT="$INSTALL_DIR/compat-libs"
-rm -rf "$COMPAT"; mkdir -p "$COMPAT"
-
-# glibc family + loader + libgcc — always from system/host, never from sniper.
-GLIBC_RE='^(libc\.so\.6|libm\.so\.6|libdl\.so\.2|libpthread\.so\.0|librt\.so\.1|libresolv\.so\.2|libcrypt\.so\.1|libBrokenLocale\.so\.1|libanl\.so\.1|libcidn\.so\.2|libutil\.so\.1|libthread_db\.so\.1|ld-linux-x86-64\.so\.2|ld-linux\.so\.2|libgcc_s\.so\.1)$'
-
-missing_libs() {
-    # $1 = LD_LIBRARY_PATH to test under. Prints SONAMEs that are still not found.
-    LD_LIBRARY_PATH="$1" ldd "$GAME_BIN" 2>/dev/null \
-        | grep "not found" | awk '{print $1}' || true
-}
-
-if [ -n "$SNIPER_LIB" ]; then
-    # Iterate to a fixed point: each pass symlinks the currently-missing libs
-    # from the sniper platform, then re-checks (sniper libs may have their own
-    # pinned deps). Cap at 6 passes — in practice converges in 1-2.
-    for _ in 1 2 3 4 5 6; do
-        missing="$(missing_libs "$COMPAT")"
-        [ -z "$missing" ] && break
-        added=0
-        while IFS= read -r soname; do
-            [ -z "$soname" ] && continue
-            if echo "$soname" | grep -qE "$GLIBC_RE"; then
-                continue  # never pull glibc from sniper
-            fi
-            [ -e "$COMPAT/$soname" ] && continue  # already resolved
-            # Find the real file in the sniper dir (main lib dir or pulseaudio
-            # subdir, where PulseAudio stashes libpulsecommon-XX.so).
-            src="$(find "$SNIPER_LIB" "$SNIPER_LIB/pulseaudio" \
-                        -name "${soname}*" 2>/dev/null \
-                   | grep -vE "/${soname}$" | head -1)"
-            [ -z "$src" ] && src="$(find "$SNIPER_LIB" "$SNIPER_LIB/pulseaudio" \
-                                        -name "$soname" 2>/dev/null | head -1)"
-            if [ -n "$src" ]; then
-                ln -sf "$src" "$COMPAT/$soname"
-                added=$((added + 1))
-            else
-                echo "[dpad-launch] WARN: $soname not in sniper runtime — try: sudo apt install <pkg providing $soname>" >&2
-            fi
-        done <<< "$missing"
-        [ "$added" -eq 0 ] && break
-    done
-
-    remaining="$(missing_libs "$COMPAT")"
-    if [ -n "$remaining" ]; then
-        echo "[dpad-launch] Still missing after compat-libs (apt install needed):" >&2
-        echo "$remaining" | sed 's/^/      /' >&2
+NATIVE_BIN=""
+if [ -z "$FORCE_PROTON" ]; then
+    if [ -n "${DPAD_GAME_BINARY:-}" ] && [ -x "${DPAD_GAME_BINARY:-}" ] \
+       && file "${DPAD_GAME_BINARY}" 2>/dev/null | grep -qi 'ELF'; then
+        NATIVE_BIN="$DPAD_GAME_BINARY"
     else
-        echo "[dpad-launch] compat-libs ready — all deps resolved, glibc from system."
+        # Heuristic: the largest ELF executable under INSTALL_DIR, excluding
+        # the sniper runtime + pressure-vessel dirs + steamapps manifests. The
+        # main game binary is almost always the biggest ELF; helpers are tiny.
+        while IFS= read -r f; do
+            if file "$f" 2>/dev/null | grep -qi 'ELF.*executable'; then
+                NATIVE_BIN="$f"; break
+            fi
+        done < <(find "$INSTALL_DIR" -type f -executable \
+                    -not -path '*/sniper_platform_*/*' \
+                    -not -path '*/pressure-vessel*' \
+                    -not -path '*/steamapps/*' \
+                    -not -path '*/_v2-entry-point' \
+                    2>/dev/null \
+                 | xargs -r ls -S 2>/dev/null)
     fi
-else
-    echo "[dpad-launch] (no sniper runtime — launching with system libs only)"
 fi
 
-# --- 5. Launch on the display ------------------------------------------------
-# LD_LIBRARY_PATH is set INLINE (via env) so it applies ONLY to the game — the
-# calling shell keeps the system glibc and stays usable.
-GAMEDIR="$(dirname "$GAME_BIN")"
-echo "[dpad-launch] Launching:"
-echo "    cd $GAMEDIR && DISPLAY=$DISPLAY_NUM LD_LIBRARY_PATH=$COMPAT $GAME_BIN ${DPAD_GAME_ARGS:-}"
-cd "$GAMEDIR"
-exec env DISPLAY="$DISPLAY_NUM" LD_LIBRARY_PATH="$COMPAT" "$GAME_BIN" ${DPAD_GAME_ARGS:-}
+# =============================================================================
+#  PATH A — NATIVE LINUX (run the binary directly + glibc-safe compat-libs)
+# =============================================================================
+if [ -n "$NATIVE_BIN" ] && [ -z "$FORCE_PROTON" ]; then
+    GAME_BIN="$NATIVE_BIN"
+    echo "[dpad-launch] Native Linux binary: $GAME_BIN"
+
+    # --- Build a glibc-safe compat-libs dir ---------------------------------
+    # Symlink ONLY the version-pinned libs the system can't provide, pulled from
+    # the sniper platform. NEVER symlink the glibc family — the sniper's older
+    # libc.so.6 lacks GLIBC_2.3x symbols and breaks every system binary when
+    # placed on LD_LIBRARY_PATH (we hit this during testing). The system glibc
+    # satisfies the game (Steam Runtime games target glibc <= host).
+    COMPAT="$INSTALL_DIR/compat-libs"
+    rm -rf "$COMPAT"; mkdir -p "$COMPAT"
+
+    GLIBC_RE='^(libc\.so\.6|libm\.so\.6|libdl\.so\.2|libpthread\.so\.0|librt\.so\.1|libresolv\.so\.2|libcrypt\.so\.1|libBrokenLocale\.so\.1|libanl\.so\.1|libcidn\.so\.2|libutil\.so\.1|libthread_db\.so\.1|ld-linux-x86-64\.so\.2|ld-linux\.so\.2|libgcc_s\.so\.1)$'
+
+    missing_libs() {
+        LD_LIBRARY_PATH="$1" ldd "$GAME_BIN" 2>/dev/null \
+            | grep "not found" | awk '{print $1}' || true
+    }
+
+    if [ -n "$SNIPER_LIB" ]; then
+        for _ in 1 2 3 4 5 6; do
+            missing="$(missing_libs "$COMPAT")"
+            [ -z "$missing" ] && break
+            added=0
+            while IFS= read -r soname; do
+                [ -z "$soname" ] && continue
+                echo "$soname" | grep -qE "$GLIBC_RE" && continue
+                [ -e "$COMPAT/$soname" ] && continue
+                src="$(find "$SNIPER_LIB" "$SNIPER_LIB/pulseaudio" \
+                            -name "${soname}*" 2>/dev/null \
+                       | grep -vE "/${soname}$" | head -1)"
+                [ -z "$src" ] && src="$(find "$SNIPER_LIB" "$SNIPER_LIB/pulseaudio" \
+                                            -name "$soname" 2>/dev/null | head -1)"
+                if [ -n "$src" ]; then
+                    ln -sf "$src" "$COMPAT/$soname"
+                    added=$((added + 1))
+                else
+                    echo "[dpad-launch] WARN: $soname not in sniper runtime — try: sudo apt install <pkg providing $soname>" >&2
+                fi
+            done <<< "$missing"
+            [ "$added" -eq 0 ] && break
+        done
+        remaining="$(missing_libs "$COMPAT")"
+        if [ -n "$remaining" ]; then
+            echo "[dpad-launch] Still missing after compat-libs (apt install needed):" >&2
+            echo "$remaining" | sed 's/^/      /' >&2
+        else
+            echo "[dpad-launch] compat-libs ready — all deps resolved, glibc from system."
+        fi
+    else
+        echo "[dpad-launch] (no sniper runtime — launching with system libs only)"
+    fi
+
+    GAMEDIR="$(dirname "$GAME_BIN")"
+    echo "[dpad-launch] Launching (native):"
+    echo "    cd $GAMEDIR && DISPLAY=$DISPLAY_NUM LD_LIBRARY_PATH=$COMPAT $GAME_BIN ${DPAD_GAME_ARGS:-}"
+    cd "$GAMEDIR"
+    exec env DISPLAY="$DISPLAY_NUM" LD_LIBRARY_PATH="$COMPAT" "$GAME_BIN" ${DPAD_GAME_ARGS:-}
+
+# =============================================================================
+#  PATH B — WINDOWS game via Proton-DIRECT (no Steam, no pressure-vessel)
+# =============================================================================
+else
+    echo "[dpad-launch] No native Linux binary (or DPAD_FORCE_PROTON set) -> Windows/Proton path."
+
+    # Resolve the Proton tool. DPAD_PROTON = a NAME matched (case-insensitive
+    # substring) against dirs in compatibilitytools.d, OR an absolute path.
+    COMPATTOOLS="${HOME}/.steam/root/compatibilitytools.d"
+    PROTON_NAME="${DPAD_PROTON:-GE-Proton11-1}"
+    if [ -d "$PROTON_NAME" ] && [ -x "$PROTON_NAME/proton" ]; then
+        PROTONPATH="$PROTON_NAME"
+    else
+        PROTONPATH="$(find "$COMPATTOOLS" -maxdepth 1 -type d -iname "*${PROTON_NAME}*" 2>/dev/null | head -1)"
+        if [ -z "$PROTONPATH" ] || [ ! -x "$PROTONPATH/proton" ]; then
+            echo "[dpad-launch] ERROR: Proton tool '$PROTON_NAME' not found in $COMPATTOOLS." >&2
+            echo "    Available Proton tools:" >&2
+            ls -1 "$COMPATTOOLS" 2>/dev/null | sed 's/^/      /' >&2 || echo "      (none — install one)" >&2
+            echo "    Set DPAD_PROTON=<name|path>." >&2
+            exit 1
+        fi
+    fi
+    echo "[dpad-launch] Proton: $PROTONPATH"
+
+    # Find the game's main Windows .exe.
+    if [ -n "${DPAD_GAME_BINARY:-}" ] && [ -f "${DPAD_GAME_BINARY:-}" ]; then
+        GAME_EXE="$DPAD_GAME_BINARY"
+    else
+        # Heuristic: largest .exe under INSTALL_DIR (excludes runtime/tool dirs).
+        GAME_EXE="$(find "$INSTALL_DIR" -type f -iname '*.exe' \
+                        -not -path '*/sniper_platform_*/*' \
+                        -not -path '*/pressure-vessel*' \
+                        -not -path '*/steamapps/*' \
+                        2>/dev/null | xargs -r ls -S 2>/dev/null | head -1)"
+    fi
+    if [ -z "$GAME_EXE" ] || [ ! -f "$GAME_EXE" ]; then
+        echo "[dpad-launch] ERROR: no .exe found for the Windows/Proton launch." >&2
+        echo "    Set DPAD_GAME_BINARY=/path/to/game.exe and re-run." >&2
+        echo "    .exe files found:" >&2
+        find "$INSTALL_DIR" -type f -iname '*.exe' 2>/dev/null | head -20 | sed 's/^/      /' >&2
+        exit 1
+    fi
+    echo "[dpad-launch] Game .exe: $GAME_EXE"
+
+    # Per-game Wine prefix (Proton creates it on first launch). Persisting this
+    # across sessions is the orchestrator's job (like the Steam login token).
+    COMPATDATA="${HOME}/.steam/compatdata/${APPID}"
+    mkdir -p "$COMPATDATA"
+
+    # Proton-direct: the proton script runs the bundled wine + DXVK/vkd3d-proton
+    # against the Vulkan present surface on the Xorg :0 — NO Steam client, NO
+    # pressure-vessel, NO userns. Selkies/mws capture the window.
+    echo "[dpad-launch] Launching (Proton-direct):"
+    echo "    DISPLAY=$DISPLAY_NUM PROTONPATH=$PROTONPATH"
+    echo "      STEAM_COMPAT_DATA_PATH=$COMPATDATA"
+    echo "      STEAM_COMPAT_CLIENT_INSTALL_PATH=${HOME}/.steam/root"
+    echo "      $PROTONPATH/proton waitforexitandrun \"$GAME_EXE\" ${DPAD_GAME_ARGS:-}"
+    cd "$INSTALL_DIR"
+    exec env DISPLAY="$DISPLAY_NUM" \
+             PROTONPATH="$PROTONPATH" \
+             STEAM_COMPAT_DATA_PATH="$COMPATDATA" \
+             STEAM_COMPAT_CLIENT_INSTALL_PATH="${HOME}/.steam/root" \
+             STEAM_COMPAT_APP_ID="$APPID" \
+             "$PROTONPATH/proton" waitforexitandrun "$GAME_EXE" ${DPAD_GAME_ARGS:-}
+fi
