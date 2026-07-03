@@ -32,6 +32,9 @@
 #                       prompts for password + Steam Guard code (one-time per
 #                       machine; the test path).
 #   DPAD_INSTALL_DIR    (default /home/dpad/games) steamcmd force_install_dir.
+#   DPAD_SKIP_DOWNLOAD  (optional) =1 skips the steamcmd download step (use when
+#                       the game is already downloaded — avoids re-running
+#                       steamcmd's install-script evaluator, which segfaults).
 #   DPAD_GAME_BINARY    (optional) explicit path to the game's binary (.elf or
 #                       .exe), bypassing auto-detection.
 #   DPAD_GAME_ARGS      (optional) extra args passed to the game.
@@ -76,14 +79,40 @@ if ! command -v steamcmd >/dev/null 2>&1; then
     exit 1
 fi
 
-# --- 1. Download the game ----------------------------------------------------
-echo "[dpad-launch] Downloading app $APPID for user '$STEAM_USER' into $INSTALL_DIR ..."
-# force_install_dir MUST come before login. Cached creds => silent; otherwise
-# steamcmd prompts for password + Steam Guard code (interactive, one-time).
-steamcmd +force_install_dir "$INSTALL_DIR" \
-         +login "$STEAM_USER" \
-         +app_update "$APPID" validate $EXTRA_SC \
-         +quit
+# --- 1. Download the game (with retry — steamcmd segfaults on big downloads) --
+# steamcmd's 32-bit binary is fragile and segfaults partway through ~GB-scale
+# downloads; it resumes from where it left off on retry. Loop until it reports
+# fully installed (or the .exe appears). Set DPAD_SKIP_DOWNLOAD=1 to skip this
+# entirely (game already downloaded) — also avoids steamcmd re-running the
+# Windows install-script evaluator, which crashes steamcmd post-download.
+sc_done=0
+if [ "${DPAD_SKIP_DOWNLOAD:-0}" = "1" ]; then
+    echo "[dpad-launch] DPAD_SKIP_DOWNLOAD=1 — skipping steamcmd download."
+    sc_done=1
+else
+    echo "[dpad-launch] Downloading app $APPID for user '$STEAM_USER' into $INSTALL_DIR ..."
+    for attempt in $(seq 1 10); do
+        out=$(steamcmd +force_install_dir "$INSTALL_DIR" \
+                 +login "$STEAM_USER" \
+                 +app_update "$APPID" validate $EXTRA_SC \
+                 +quit 2>&1)
+        echo "$out" | tail -4
+        if echo "$out" | grep -q "Success! App '$APPID' fully installed"; then
+            sc_done=1; break
+        fi
+        # install-script evaluator may segfault steamcmd AFTER the files land;
+        # treat a present .exe as success too.
+        if find "$INSTALL_DIR" -type f -iname '*.exe' \
+                -not -path '*/steamapps/downloading/*' \
+                -not -path '*/steamapps/temp/*' 2>/dev/null | grep -q .; then
+            echo "[dpad-launch] Game files present (install-script evaluator may have crashed steamcmd — non-fatal)."
+            sc_done=1; break
+        fi
+        echo "[dpad-launch] attempt $attempt incomplete/segfaulted — retrying in 3s (steamcmd resumes) ..."
+        sleep 3
+    done
+    [ "$sc_done" != 1 ] && echo "[dpad-launch] WARN: steamcmd did not report success after 10 attempts — continuing anyway." >&2
+fi
 
 # Fix the steamcmd SDK symlinks (some games look for steamclient.so at
 # ~/.steam/sdk32/sdk64). steamcmd creates ~/.local/share/Steam/steamcmd on its
@@ -133,7 +162,8 @@ if [ -z "$FORCE_PROTON" ]; then
                     -not -path '*/steamrt*_platform_*/*' \
                     -not -path '*/pressure-vessel*' \
                     -not -path '*/steam-runtime/*' \
-                    -not -path '*/steamapps/*' \
+                    -not -path '*/steamapps/downloading/*' \
+                    -not -path '*/steamapps/temp/*' \
                     -not -path '*/_v2-entry-point' \
                     2>/dev/null \
                  | xargs -r ls -S 2>/dev/null)
@@ -237,7 +267,8 @@ else
                         -not -path '*/steamrt*_platform_*/*' \
                         -not -path '*/pressure-vessel*' \
                         -not -path '*/steam-runtime/*' \
-                        -not -path '*/steamapps/*' \
+                        -not -path '*/steamapps/downloading/*' \
+                        -not -path '*/steamapps/temp/*' \
                         2>/dev/null | xargs -r ls -S 2>/dev/null | head -1)"
     fi
     if [ -z "$GAME_EXE" ] || [ ! -f "$GAME_EXE" ]; then
