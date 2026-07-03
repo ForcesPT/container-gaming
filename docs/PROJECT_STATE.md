@@ -144,6 +144,46 @@ headless native-game path end-to-end. The `app_launch` scout-runtime approach
 raw Linux binary directly with a glibc-safe compat-libs dir works and is
 simpler. See the `dpad-launch` notes below for the exact recipe.
 
+VALIDATED 2026-07-03 (Windows 3D game via Proton-direct on Vast, RTX
+3060/driver-580): `dpad-launch` PATH B with GE-Proton11-1 — War of Dots
+(3902430, 2D) and Aimlabs (714010, 22GB Unity 3D FPS) downloaded via steamcmd
+and launched via `$PROTONPATH/proton waitforexitandrun game.exe` (no Steam UI,
+no pressure-vessel, no userns). DXVK found the NVIDIA RTX 3060 (`Found device:
+NVIDIA GeForce RTX 3060`), the game ran on the GPU (`nvidia-smi` shows
+`AimLab_tb.exe` at ~1.3GB VRAM, `C+G`), and **Selkies streamed the window**.
+The 3D engine renders on the GPU via the Xorg Vulkan present surface. Aimlabs
+itself stalls on loading because its UI/login is an embedded Chromium
+(Vuplex/CEF) whose GPU process can't init on the headless NULL-mode Xorg — a
+game-specific web-UI issue, NOT a Proton/GPU issue. Clean 3D games without an
+embedded browser (e.g. Alien Swarm 630, Source engine) launch to the menu.
+
+BOUNDARY 2026-07-03 (Steam-client login / cloud saves on Vast — NOT achievable):
+Full Steam integration (cloud saves / progress / achievements / online) needs
+the real Steam CLIENT logged in alongside the game. On Vast this is blocked:
+- Steam's webhelper (CEF/Chromium UI, used for the React login since
+  `-noreactlogin`/`-no-browser` were removed in 2023) is forced into the
+  sniper Steam Runtime / pressure-vessel, which needs user namespaces.
+- Vast has no userns → the entrypoint's bubbleroot shim emulates bwrap via
+  proot (ptrace) → **CEF crashes under proot's ptrace** (startcount climbs,
+  webhelper dies). The Steam core stays alive but **never logs in** (login
+  flow needs the CEF UI) → games see "No Steam" → no steamclient session.
+- `STEAM_RUNTIME=0` (run the client natively, no runtime/proot) is
+  **unsupported by Valve and Steam exits silently** after "Steam runtime
+  environment up-to-date!" — so the webhelper cannot be made to run natively.
+- SIGSTOP'ing the webhelper after start keeps the core alive but login still
+  doesn't complete (login needs the webhelper UI, not just the core).
+=> Decision: **Vast = Proton-direct single-player path.** Windows games run on
+the GPU + stream via Selkies, but in "No Steam" mode: the game's OWN local
+saves (in `~/.steam/compatdata/<appid>/pfx/...`) still work and are persisted
+per-user (like the login token) — just no Steam Cloud sync / achievements /
+online multiplayer. For full Steam (cloud/online), the image must run on a
+**userns-capable provider (RunPod / Lambda)** where pressure-vessel works →
+CEF works → Steam logs in → cloud saves. The image is provider-agnostic; the
+orchestrator routes by need (provider split). Also: a `zenity` wrapper that
+auto-answers the Steam proprietary-license dialog (`/usr/bin/zenity` -> exit 0
+for the "Steam installer / proprietary / binary-only" prompt) is needed for
+Steam to start non-interactively on userns hosts (Steam-Headless issue #218).
+
 **Headless architecture (Vast):**
 - `steamcmd +login <user> +app_update <appid> validate +quit` downloads a game
   (login caches a token after first Steam-Guard auth).
@@ -572,7 +612,7 @@ PipeWire's null-sink monitor **suspends when idle** (no driver node → graph do
 
 ---
 
-## Status: Ubuntu 24.04 + CUDA 12.5.1 · **Xorg + nvidia-DDX NULL mode = PRIMARY gaming path (Vulkan present → DXVK/Proton on GPU, validated on Vast: vkcube streams via Selkies)** · Xvfb+VGL = debug fallback · Selkies = browser stream (NVENC) · **Steam UI = BLOCKED on Vast** (pressure-vessel/userns; bubbleroot-proot crashes CEF) · **Vast product path = HEADLESS steamcmd + `dpad-launch`** · ✅ VALIDATED 2026-07-03: native-Linux game (Wesnoth 599390) AND Windows game (War of Dots 3902430 via GE-Proton11-1 Proton-direct) download + launch + Selkies streams, no Steam UI / no pressure-vessel / no userns · NEXT = orchestrator (Vast provider + per-user Steam token injection + dpad-launch invocation); polish: steamcmd segfault-retry, Valve Proton per-session download helper
+## Status: Ubuntu 24.04 + CUDA 12.5.1 · **Xorg + nvidia-DDX NULL mode = PRIMARY gaming path (Vulkan present → DXVK/Proton on GPU, validated on Vast: vkcube streams via Selkies)** · Xvfb+VGL = debug fallback · Selkies = browser stream (NVENC) · **Steam UI / Steam-client login = BLOCKED on Vast** (CEF webhelper forced into pressure-vessel → bubbleroot/proot → CEF crashes under ptrace; STEAM_RUNTIME=0 unsupported → Steam exits; login needs CEF UI → no steamclient session → "No Steam") · **Vast product path = HEADLESS steamcmd + `dpad-launch`** (Proton-direct, single-player, local saves persisted per-user; no Steam Cloud/online) · ✅ VALIDATED 2026-07-03: native-Linux (Wesnoth 599390) AND Windows 3D (Aimlabs 714010 via GE-Proton11-1 Proton-direct, DXVK on RTX 3060, Selkies streams) · **Provider split: full Steam (cloud/online) needs RunPod/Lambda (userns); Vast = cheap single-player path** · NEXT = orchestrator (Vast + RunPod providers, per-user Steam token + compatdata injection, dpad-launch invocation)
 
 ### What was built (Ubuntu 24.04 move + mws)
 - **Dockerfile**: base `nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu24.04` (default `12.5.1`/`12-5`, single tag `ubuntu24.04`; `12.8.1`/`12-8` → `ubuntu24.04-rtx50` for Blackwell). noble t64 apt renames applied ONLY where actually renamed (libasound2t64, libssl3t64, libgtk-3-0t64); libpulse0/libva2/libvdpau1/libwayland-egl1/libjack-jackd2-0 keep plain names, libvpx7→libvpx9; libgl1-mesa-glx dropped; pipewire packages dropped — we use PulseAudio). Sunshine deb → `sunshine-ubuntu-24.04-amd64.deb`. Selkies tarball/deb auto-resolve to `*_ubuntu24.04_*` via `${UBUNTU_VER}`. `PIP_BREAK_SYSTEM_PACKAGES=1` for noble pip3.
