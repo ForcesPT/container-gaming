@@ -131,6 +131,19 @@ VALIDATED 2026-07-02 (steamcmd on Vast, RTX 3060): `steamcmd +login anonymous
 +quit` starts, loads Steam API, connects to Steam — NO userns / pressure-vessel
 error. => the headless path is viable on Vast.
 
+VALIDATED 2026-07-03 (steamcmd REAL login + native game launch on Vast, RTX
+3060/driver-580, image `forcespt/dpadcloud-gaming:ubuntu24.04`): `dpad-launch
+599390` (Battle for Wesnoth, free native-Linux) — steamcmd logged in with a
+real account (Steam Guard code `set_steam_guard_code` round-trip on first
+login; cached credentials => silent re-login after), downloaded the game
+(`+force_install_dir /home/dpad/games +app_update 599390 validate`), and the
+game window rendered on the NULL-mode Xorg `:0` AND **Selkies streamed it in
+the browser**. NO pressure-vessel / NO userns / NO Steam UI. This clears the
+headless native-game path end-to-end. The `app_launch` scout-runtime approach
+(needs `reaper` + `steam-launch-wrapper`) was NOT needed — running the game's
+raw Linux binary directly with a glibc-safe compat-libs dir works and is
+simpler. See the `dpad-launch` notes below for the exact recipe.
+
 **Headless architecture (Vast):**
 - `steamcmd +login <user> +app_update <appid> validate +quit` downloads a game
   (login caches a token after first Steam-Guard auth).
@@ -152,14 +165,17 @@ error. => the headless path is viable on Vast.
   minus the userns-dependent parts.
 
 **PENDING validation (resume here):**
-1. steamcmd: login with a real account + download a small NATIVE Linux game
-   (Stardew Valley 413150 / Terraria 105600 / Celeste 404410 — all native Linux,
-   ~0.5-1.5GB) + `app_launch` it -> confirm the game window renders on the GPU
-   and Selkies streams it (with audio).
-2. Windows game via Proton-direct (no pressure-vessel) -> confirm DXVK renders.
-3. Then: add `steamcmd` + a `dpad-launch <appid>` wrapper to the Dockerfile
-   (auto login/download/launch; pick native vs Proton-direct), and build the
-   orchestrator's Vast provider around it.
+1. ✅ DONE (2026-07-03) — steamcmd real login + download + native-Linux game
+   launch + Selkies stream. Validated with Battle for Wesnoth (599390) via
+   `dpad-launch`. See VALIDATED block above.
+2. Windows game via Proton-direct (no pressure-vessel) -> confirm DXVK renders
+   on the NULL-mode Xorg. Likely a `dpad-launch` extension that, for a Windows
+   app, runs `$PROTONPATH/proton waitforexitandrun game.exe` under
+   `STEAM_COMPAT_DATA_PATH` / `STEAM_COMPAT_CLIENT_INSTALL_PATH` (Proton-GE is
+   already installed in the image at `${HOME}/.steam/root/compatibilitytools.d/`).
+3. ✅ DONE (2026-07-03) — `steamcmd` + the `dpad-launch <appid>` wrapper are now
+   baked into the Dockerfile (step 4b + `scripts/dpad-launch`). Remaining:
+   build the orchestrator's Vast provider around `dpad-launch`.
 
 **`DPAD_BUBBLEROOT` is now a dead-end for the Steam UI** (CEF crashes under
 proot). Keep the code as opt-in (`DPAD_BUBBLEROOT=1`) for experimentation, but
@@ -242,6 +258,13 @@ docker build -t forcespt/dpadcloud-gaming:ubuntu24.04 .   # build (CUDA 12.5.1/1
   names); Sunshine `sunshine-ubuntu-24.04-amd64.deb`; Selkies 24.04 tarball; mws v2.10
   prebuilt; `PIP_BREAK_SYSTEM_PACKAGES=1`; `libglu1-mesa` pre-installed for VirtualGL;
   `nvenc_fix.c` built → `/opt/dpadcloud/libnvenc_fix.so`; `.gitattributes` enforces LF.
+  **Step 4b (2026-07-03):** enables multiverse+universe on noble's deb822 sources,
+  preseeds the Steam License (`steam steam/question select "I AGREE"` +
+  `steam steam/license note ''` via `debconf-set-selections` — otherwise the
+  steamcmd preinst DECLINES the license and the build fails), and installs
+  `steamcmd` + `libsdl2-mixer-2.0-0` + `libsdl2-image-2.0-0` (system SDL2
+  add-ons so native games load SDL2 from the system instead of the sniper
+  runtime's codec cascade).
 - `entrypoint.sh`: raises `ulimit -u/-n` + prints cgroup pids; `nvidia-smi`-visible GPU bitmask
   (`NVENC_FIX_AVAILABLE`, PCI-bus→minor + index fallback) + broadened flexgrip enable
   (`host>mounted OR visible<mounted` on driver 570..609); `mknod /dev/uinput` + `chmod 666`;
@@ -250,6 +273,34 @@ docker build -t forcespt/dpadcloud-gaming:ubuntu24.04 .   # build (CUDA 12.5.1/1
   cloudflared tunnels (mws + Selkies); health loop uses port checks not pgrep paths.
 - `scripts/nvenc_fix.c`: `NVENC_FIX_AVAILABLE` env override in `get_available_devices()`.
 - `scripts/mws-autopair`: full auto-pair (login→add host→pair→submit pin to Sunshine→confirm).
+- `scripts/dpad-launch` (2026-07-03, VALIDATED): headless Steam game launcher — the Vast
+  product path. `dpad-launch <appid>` runs steamcmd (`+force_install_dir
+  /home/dpad/games +login $STEAM_USER +app_update <appid> validate`), fixes the
+  steamcmd SDK symlinks (`~/.steam/sdk32/sdk64`), then runs the game's NATIVE
+  Linux binary DIRECTLY (no pressure-vessel / no userns). The key trick: native
+  games ship bundled with the Steam Linux Runtime (sniper) platform whose libs
+  are version-pinned (ICU 67 vs system 74, OpenSSL 1.1 vs system 3.x). The
+  wrapper builds a clean `compat-libs/` dir by iteratively symlinking ONLY the
+  libs missing from the system (via `ldd ... | grep "not found"`) from the
+  sniper platform's `files/lib/x86_64-linux-gnu` (+ its `pulseaudio/` subdir for
+  `libpulsecommon-XX.so`), to a fixed point — **NEVER the glibc family**
+  (`libc.so.6`/`libm.so.6`/`libpthread.so.0`/…; loading the sniper's older glibc
+  breaks every system binary with missing `GLIBC_2.3x` symbols — hit during
+  testing). `ldconfig -n $SNIPER_LIB` creates the SONAME symlinks first. Launch
+  uses `DISPLAY=:0 LD_LIBRARY_PATH=compat-libs <binary>` set INLINE (not
+  exported) so the surrounding shell keeps the system glibc. Env: `STEAM_USER`
+  (required), `DPAD_GAME_BINARY` (override auto-detect), `DPAD_GAME_ARGS`,
+  `DPAD_INSTALL_DIR`. First login on a fresh machine prompts for password +
+  Steam Guard code (one-time; token caches in `~/.steam` => silent after).
+  Validated with Battle for Wesnoth (599390): game window renders on the
+  NULL-mode Xorg `:0` + Selkies streams it in the browser.
+  **Steam credential persistence for the product (DEFERRED):** instances are
+  ephemeral so the cached token (`~/.steam/config/config.vdf` +
+  `loginusers.vdf`) is lost on destroy. The orchestrator will store an encrypted
+  blob (per user, from a one-time "Link Steam" flow) and inject it into each
+  new instance so `steamcmd +login` is silent from boot — no Steam Guard
+  round-trip per session. Refresh tokens expire after ~30d inactivity but each
+  login refreshes the window; re-auth flow handles expiry.
 
 ### Known host-class notes
 - **nproc=50 hosts** (some RTX 3090/driver-595 instances): hard cap → MUST pass
@@ -313,6 +364,7 @@ driver≥570 is via mws+Sunshine, NOT Selkies.
 - ✅ **NVENC**: Works on RTX 3060 Ti, 3080 Ti (driver ~535), and any single-GPU host on any driver (`gpu_frac=1`). On multi-GPU hosts with only a slice assigned + driver 570/580, the flexgrip interposer is implemented (opt-in, pending Vast validation) to fix #1249; x264 fallback remains the safety net. See "NVENC: What We Know".
 - ✅ **Boot diagnostics**: NVENC/CUDA diag prints driver, visible GPUs, lib presence, compute_mode, cuInit, cuCtxCreate
 - ✅ **Periodic log dump**: selkies.log + sunshine.log + mws.log + pulse.log to stdout (Vast Logs tab) — no SSH needed
+- ✅ **Headless steamcmd + `dpad-launch` (Vast product path — VALIDATED 2026-07-03)**: `steamcmd` is baked in (step 4b, multiverse + Steam-License debconf preseed) and `dpad-launch <appid>` downloads a native Linux game via steamcmd and runs the binary directly (NO Steam UI, NO pressure-vessel, NO userns). The wrapper builds a glibc-safe `compat-libs` dir from the bundled Steam Linux Runtime (sniper) platform — symlinks only the version-pinned libs the system can't provide (ICU 67, OpenSSL 1.1), never glibc — and launches on `:0` with inline `LD_LIBRARY_PATH`. Confirmed on Vast (RTX 3060/driver-580): Battle for Wesnoth (599390) downloads, launches, and **Selkies streams the game window in the browser**. Steam-Guard first-login round-trip works; cached token => silent re-login.
 
 ## What Doesn't Work Yet
 
@@ -338,7 +390,10 @@ dpadcloud/container-gaming/
 ├── scripts/
 │   ├── install-display-drivers  # Ported from vast-ai/base-image — extracts matched .run OpenGL/EGL/Vulkan libs for compute-only Vast hosts
 │   ├── nvenc_fix.c              # Vendored flexgrip interposer (NVENC #1249 multi-GPU fix) → /opt/dpadcloud/libnvenc_fix.so
-│   ├── vgl-steam proton-wined3d vgl-test   # VirtualGL launchers
+│   ├── dpad-launch              # Headless Steam game launcher (steamcmd download + sniper compat-libs + native binary launch) — the Vast product path, VALIDATED
+│   ├── mws-autopair             # mws↔Sunshine auto-pair at boot
+│   ├── bubbleroot               # proot-based bwrap shim (dead-end for Steam UI; opt-in)
+│   ├── vgl-steam proton-wined3d vgl-test   # VirtualGL launchers (Xvfb debug path)
 │   └── (joystick interposer is from the Selkies deb)
 ├── README.md               # Deploy instructions, env vars, architecture
 └── docs/
@@ -367,6 +422,8 @@ ENV DISPLAY=:0  PUID=1001  XDG_RUNTIME_DIR=/run/user/1001  PULSE_SERVER=unix:/ru
 2. User: dpad (uid 1001, sudo, audio/video/input/games groups)
 3. cuda-nvrtc-${CUDA_PKG} + cuda-compat-${CUDA_PKG}   (NVRTC for nvh264enc, forward-compat for datacenter GPUs)
 4. Steam (steam-installer)
+4b. steamcmd + libsdl2-mixer-2.0-0 + libsdl2-image-2.0-0 (multiverse+universe enabled;
+    Steam License preseeded via debconf — the headless launcher path)
 5. Proton-GE (GE-Proton9-25, from GitHub releases)
 6. Sunshine (sunshine-ubuntu-22.04-amd64.deb from GitHub)
 7. Selkies-GStreamer (gstreamer GPL tarball v1.6.2 + python wheel + web app + joystick interposer)
@@ -376,7 +433,7 @@ ENV DISPLAY=:0  PUID=1001  XDG_RUNTIME_DIR=/run/user/1001  PULSE_SERVER=unix:/ru
 9c. VirtualGL 3.1.4 (GPU-accelerated GL into headless Xvfb)
 9d. flexgrip nvenc_fix.c → /opt/dpadcloud/libnvenc_fix.so  (NVENC #1249 multi-GPU fix, opt-in at runtime)
 10. pulseaudio pulseaudio-utils xsel (late apt install)
-11. COPY configs/ + entrypoint.sh + healthcheck.sh + scripts/{vgl-steam,proton-wined3d,vgl-test,install-display-drivers}
+11. COPY configs/ + entrypoint.sh + healthcheck.sh + scripts/{vgl-steam,proton-wined3d,vgl-test,install-display-drivers,mws-autopair,bubbleroot,dpad-launch}
 12. EXPOSE 16100/tcp 3478/tcp 47989/tcp 47990/tcp 41641/udp
 13. ENTRYPOINT ["/opt/dpadcloud/entrypoint.sh"]
 ```
@@ -508,7 +565,7 @@ PipeWire's null-sink monitor **suspends when idle** (no driver node → graph do
 
 ---
 
-## Status: Ubuntu 24.04 + CUDA 12.5.1 · **Xorg + nvidia-DDX NULL mode = PRIMARY gaming path (Vulkan present → DXVK/Proton on GPU, validated on Vast: vkcube streams via Selkies)** · Xvfb+VGL = debug fallback · Selkies = browser stream (NVENC) · **Steam UI = BLOCKED on Vast** (pressure-vessel/userns; bubbleroot-proot crashes CEF) · **Vast product path = HEADLESS steamcmd + Proton-direct** (steamcmd validated; native game launch + Windows via Proton-direct = PENDING) · NEXT = validate steamcmd native-game launch + Proton-direct, then orchestrator
+## Status: Ubuntu 24.04 + CUDA 12.5.1 · **Xorg + nvidia-DDX NULL mode = PRIMARY gaming path (Vulkan present → DXVK/Proton on GPU, validated on Vast: vkcube streams via Selkies)** · Xvfb+VGL = debug fallback · Selkies = browser stream (NVENC) · **Steam UI = BLOCKED on Vast** (pressure-vessel/userns; bubbleroot-proot crashes CEF) · **Vast product path = HEADLESS steamcmd + `dpad-launch`** · ✅ VALIDATED 2026-07-03: steamcmd real login + native-Linux game (Wesnoth 599390) downloads + launches + Selkies streams via `dpad-launch` (no Steam UI / no pressure-vessel / no userns) · NEXT = Windows game via Proton-direct (extend dpad-launch), then orchestrator
 
 ### What was built (Ubuntu 24.04 move + mws)
 - **Dockerfile**: base `nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu24.04` (default `12.5.1`/`12-5`, single tag `ubuntu24.04`; `12.8.1`/`12-8` → `ubuntu24.04-rtx50` for Blackwell). noble t64 apt renames applied ONLY where actually renamed (libasound2t64, libssl3t64, libgtk-3-0t64); libpulse0/libva2/libvdpau1/libwayland-egl1/libjack-jackd2-0 keep plain names, libvpx7→libvpx9; libgl1-mesa-glx dropped; pipewire packages dropped — we use PulseAudio). Sunshine deb → `sunshine-ubuntu-24.04-amd64.deb`. Selkies tarball/deb auto-resolve to `*_ubuntu24.04_*` via `${UBUNTU_VER}`. `PIP_BREAK_SYSTEM_PACKAGES=1` for noble pip3.
@@ -522,12 +579,13 @@ PipeWire's null-sink monitor **suspends when idle** (no driver node → graph do
 - Latest Sunshine added XDG/Pipewire/KWin direct screencast + Vulkan encoding on Linux — a better match for 24.04 (though headless-Xvfb capture path still needs validation; we may stay on the ximagesrc/KMS path).
 
 ### NEXT steps (in order)
-1. **Build + boot on Vast** (driver 535 single-GPU for the wide-pool/compat check, and a driver ≥570 host for the mws NVENC path). Read the boot log: `mws running on 0.0.0.0:8080`, `mws tunnel URL:`, `Sunshine running`, `Selected encoder:` (Selkies). Watch for noble t64 apt failures in the build (one-line fix if any).
-2. **Validate mws↔Sunshine end-to-end**: open the mws tunnel URL → first login creates admin → add host `localhost` → pair → enter PIN in Sunshine Web UI → launch an app → confirm browser streams with `h264_nvenc` (check `/tmp/sunshine.log` for `Found H.264 encoder: h264_nvenc`). Confirm gamepad + audio. **Gate:** mws streams in browser with NVENC → ship mws as primary and drop Selkies. Else debug pairing/capture/audio.
-3. **Validate Selkies fallback** on the same host (regression): `Selected encoder: nvh264enc` (hardware via `nvcudah264enc`) on BOTH driver 580 and 595 hosts; `x264enc` only on genuine NVENC failure.
-4. **Orchestrator** — Vast provider in `apps/api` with the NVENC-safe offer predicate (`cuda_max_good>=12.1`), per-GPU CUDA-variant selection (RTX 50 → `ubuntu24.04-rtx50`, else `ubuntu24.04`), provision via Vast API, read boot log for the mws tunnel URL + encoder, create named Cloudflare tunnel (two ingress: `play-<id>`→8080, `selkies-<id>`→16100), return URL to website. mws↔Sunshine pairing is already auto-handled in-image (`scripts/mws-autopair` at boot); the orchestrator just sets `MWS_ADMIN_USER`/`MWS_ADMIN_PASSWORD` per session so the end user logs in with a session token (or fronts mws with the forwarded-header reverse-proxy auth so no mws login is shown).
-5. (Later, data-driven) **Present-surface decision** — gamescope / 24.04 was already done / cage, to unlock true DXVK + DX12 + DLSS.
-6. (Cleanup) **Drop Selkies** once mws+Sunshine is validated.
+1. ✅ DONE (2026-07-02..03) — Build + boot on Vast; noble t64 apt clean; Xorg NULL-mode + Selkies streaming validated (vkcube); `dpad-launch` native-Linux game launch validated (Wesnoth 599390).
+2. **Validate mws↔Sunshine end-to-end** (PARKED behind `/dev/uinput` — see CURRENT STATUS): `--privileged` is the remaining lever to try for uinput; else mws video-only. Lower priority now that Selkies delivers hardware browser NVENC + the headless game path works via Selkies.
+3. ✅ DONE — Selkies fallback: `nvh264enc` (hardware via `nvcudah264enc`) on BOTH driver 580 and 595 (encoder-probe fix).
+4. **Windows game via Proton-direct (no pressure-vessel)** — extend `dpad-launch`: for a Windows appid, after steamcmd download, locate the game .exe and run `$PROTONPATH/proton waitforexitandrun game.exe` under `STEAM_COMPAT_DATA_PATH` / `STEAM_COMPAT_CLIENT_INSTALL_PATH` (Proton-GE already installed at `${HOME}/.steam/root/compatibilitytools.d/`). DXVK uses Vulkan present on the NULL-mode Xorg (proven by vkcube). Confirm the game window renders + Selkies streams. This is the last gaming-path validation before the orchestrator.
+5. **Orchestrator** — Vast provider in `apps/api` with the NVENC-safe offer predicate (`cuda_max_good>=12.1`), per-GPU CUDA-variant selection (RTX 50 → `ubuntu24.04-rtx50`, else `ubuntu24.04`), provision via Vast API, read boot log for the Selkies tunnel URL + encoder, create named Cloudflare tunnel, return URL to website. Per-session: inject the user's encrypted Steam credential blob (`config.vdf` + `loginusers.vdf`) so `dpad-launch` is silent from boot (DEFERRED auth design — see `scripts/dpad-launch` notes), set `SELKIES_BASIC_AUTH_PASSWORD` to a session token. Launch games by calling `dpad-launch <appid>` in the container (native → raw binary; Windows → Proton-direct once #4 is done).
+6. (Later, data-driven) **Present-surface decision** — gamescope / cage, to unlock true DX12 + DLSS scaling (DXVK already works via the Xorg present surface).
+7. (Cleanup) **Drop Selkies** once mws+Sunshine is validated (only if mws input is solved).
 
 ---
 

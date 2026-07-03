@@ -1,0 +1,195 @@
+#!/bin/bash
+# =============================================================================
+# dpad-launch <appid> [extra-steamcmd-args...]
+#
+# Headless Steam game launcher for Vast (and any unprivileged provider with no
+# user namespaces). This is the Vast product path: NO Steam UI, NO
+# pressure-vessel (both need userns, which Vast denies). Instead:
+#
+#   1. steamcmd downloads the game into /home/dpad/games (force_install_dir).
+#   2. The game ships bundled with the Steam Linux Runtime (sniper) platform.
+#      We bypass pressure-vessel and run the game's NATIVE Linux binary
+#      directly, borrowing ONLY the version-pinned libs the system can't
+#      provide (ICU 67 vs system 74, OpenSSL 1.1 vs system 3.x, ...) from the
+#      sniper platform — into a clean compat-libs dir that NEVER contains glibc
+#      (loading the sniper's older libc.so.6 breaks every system binary).
+#   3. Launch on DISPLAY=:0 with LD_LIBRARY_PATH set INLINE (not exported) so
+#      the surrounding shell keeps using the system glibc. Selkies/mws capture
+#      the window from the X server.
+#
+# Env:
+#   STEAM_USER          (required) Steam account login name. Cached creds in
+#                       ~/.steam => silent login. No cached creds => steamcmd
+#                       prompts for password + Steam Guard code (one-time per
+#                       machine; the test path).
+#   DPAD_INSTALL_DIR    (default /home/dpad/games) steamcmd force_install_dir.
+#   DPAD_GAME_BINARY    (optional) explicit path to the game's Linux binary,
+#                       bypassing auto-detection.
+#   DPAD_GAME_ARGS      (optional) extra args passed to the game binary.
+#   DISPLAY             (default :0) X display to launch on.
+#
+# Requires: steamcmd on PATH; the SDL2 system libs (libsdl2-mixer-2.0-0,
+# libsdl2-image-2.0-0) are pre-installed in the image so native games can load
+# SDL2 add-ons from the system (matching SONAMEs) instead of the sniper cascade.
+# =============================================================================
+set -uo pipefail
+
+APPID="${1:-}"
+if [ -z "$APPID" ]; then
+    echo "usage: dpad-launch <appid> [extra-steamcmd-args...]" >&2
+    echo "  env: STEAM_USER (required), DPAD_GAME_BINARY, DPAD_GAME_ARGS, DPAD_INSTALL_DIR, DISPLAY" >&2
+    exit 1
+fi
+shift || true
+EXTRA_SC="$*"
+
+STEAM_USER="${STEAM_USER:-}"
+INSTALL_DIR="${DPAD_INSTALL_DIR:-/home/dpad/games}"
+DISPLAY_NUM="${DISPLAY:-:0}"
+
+if [ -z "$STEAM_USER" ]; then
+    echo "[dpad-launch] ERROR: STEAM_USER is not set." >&2
+    echo "    export STEAM_USER=<Steam account name>  (or pass -e STEAM_USER=... to docker)" >&2
+    exit 1
+fi
+
+if ! command -v steamcmd >/dev/null 2>&1; then
+    echo "[dpad-launch] ERROR: steamcmd not on PATH. Install it (apt install steamcmd)." >&2
+    exit 1
+fi
+
+# --- 1. Download the game ----------------------------------------------------
+echo "[dpad-launch] Downloading app $APPID for user '$STEAM_USER' into $INSTALL_DIR ..."
+# force_install_dir MUST come before login. Cached creds => silent; otherwise
+# steamcmd prompts for password + Steam Guard code (interactive, one-time).
+steamcmd +force_install_dir "$INSTALL_DIR" \
+         +login "$STEAM_USER" \
+         +app_update "$APPID" validate $EXTRA_SC \
+         +quit
+
+# Fix the steamcmd SDK symlinks (some games look for steamclient.so at
+# ~/.steam/sdk32/sdk64). steamcmd creates ~/.local/share/Steam/steamcmd on its
+# first self-update; mirror the official steamcmd/docker image's symlink fix.
+STEAMCMD_HOME="${HOME}/.local/share/Steam/steamcmd"
+if [ -d "$STEAMCMD_HOME" ]; then
+    mkdir -p "${HOME}/.steam"
+    [ -e "${HOME}/.steam/sdk32" ] || ln -sf "$STEAMCMD_HOME/linux32" "${HOME}/.steam/sdk32"
+    [ -e "${HOME}/.steam/sdk64" ] || ln -sf "$STEAMCMD_HOME/linux64" "${HOME}/.steam/sdk64"
+fi
+
+# --- 2. Locate the bundled Steam Linux Runtime (sniper) platform -------------
+SNIPER_ROOT="$(find "$INSTALL_DIR" -maxdepth 2 -type d -name 'sniper_platform_*' 2>/dev/null | head -1)"
+SNIPER_LIB=""
+if [ -n "$SNIPER_ROOT" ] && [ -d "$SNIPER_ROOT/files/lib/x86_64-linux-gnu" ]; then
+    SNIPER_LIB="$SNIPER_ROOT/files/lib/x86_64-linux-gnu"
+    echo "[dpad-launch] Steam Linux Runtime (sniper) found: $SNIPER_ROOT"
+    # Create SONAME symlinks (e.g. libicui18n.so.67 -> libicui18n.so.67.1) for
+    # every lib in the sniper dir. Idempotent. -n = don't touch the system cache.
+    ldconfig -n "$SNIPER_LIB" 2>/dev/null || true
+    [ -d "$SNIPER_LIB/pulseaudio" ] && ldconfig -n "$SNIPER_LIB/pulseaudio" 2>/dev/null || true
+else
+    echo "[dpad-launch] No sniper_platform_* found — game may not bundle the Steam Runtime."
+    echo "               (Pure-system-libs games launch with an empty compat-libs dir.)"
+fi
+
+# --- 3. Locate the game's main Linux binary ----------------------------------
+if [ -n "${DPAD_GAME_BINARY:-}" ] && [ -x "${DPAD_GAME_BINARY:-}" ]; then
+    GAME_BIN="$DPAD_GAME_BINARY"
+else
+    # Heuristic: the largest ELF executable under INSTALL_DIR, excluding the
+    # sniper runtime + pressure-vessel dirs + steamapps manifests. The main game
+    # binary is almost always the biggest ELF; runtime helpers are tiny.
+    GAME_BIN=""
+    while IFS= read -r f; do
+        if file "$f" 2>/dev/null | grep -qi 'ELF.*executable'; then
+            GAME_BIN="$f"
+            break
+        fi
+    done < <(find "$INSTALL_DIR" -type f -executable \
+                -not -path '*/sniper_platform_*/*' \
+                -not -path '*/pressure-vessel*' \
+                -not -path '*/steamapps/*' \
+                -not -path '*/_v2-entry-point' \
+                2>/dev/null \
+              | xargs -r ls -S 2>/dev/null)
+fi
+
+if [ -z "$GAME_BIN" ] || [ ! -x "$GAME_BIN" ]; then
+    echo "[dpad-launch] ERROR: could not auto-detect the game's Linux binary." >&2
+    echo "    Set DPAD_GAME_BINARY=/path/to/binary and re-run." >&2
+    echo "    Candidate executables found:" >&2
+    find "$INSTALL_DIR" -type f -executable \
+         -not -path '*/sniper_platform_*/*' -not -path '*/pressure-vessel*' \
+         2>/dev/null | head -20 >&2
+    exit 1
+fi
+echo "[dpad-launch] Game binary: $GAME_BIN"
+
+# --- 4. Build a glibc-safe compat-libs dir -----------------------------------
+#     Symlink ONLY the version-pinned libs the system can't provide, pulled from
+#     the sniper platform. NEVER symlink the glibc family — the sniper's older
+#     libc.so.6 lacks GLIBC_2.3x symbols and breaks every system binary when
+#     placed on LD_LIBRARY_PATH (we hit this during testing). The system glibc
+#     satisfies the game (Steam Runtime games target glibc <= host).
+COMPAT="$INSTALL_DIR/compat-libs"
+rm -rf "$COMPAT"; mkdir -p "$COMPAT"
+
+# glibc family + loader + libgcc — always from system/host, never from sniper.
+GLIBC_RE='^(libc\.so\.6|libm\.so\.6|libdl\.so\.2|libpthread\.so\.0|librt\.so\.1|libresolv\.so\.2|libcrypt\.so\.1|libBrokenLocale\.so\.1|libanl\.so\.1|libcidn\.so\.2|libutil\.so\.1|libthread_db\.so\.1|ld-linux-x86-64\.so\.2|ld-linux\.so\.2|libgcc_s\.so\.1)$'
+
+missing_libs() {
+    # $1 = LD_LIBRARY_PATH to test under. Prints SONAMEs that are still not found.
+    LD_LIBRARY_PATH="$1" ldd "$GAME_BIN" 2>/dev/null \
+        | grep "not found" | awk '{print $1}' || true
+}
+
+if [ -n "$SNIPER_LIB" ]; then
+    # Iterate to a fixed point: each pass symlinks the currently-missing libs
+    # from the sniper platform, then re-checks (sniper libs may have their own
+    # pinned deps). Cap at 6 passes — in practice converges in 1-2.
+    for _ in 1 2 3 4 5 6; do
+        missing="$(missing_libs "$COMPAT")"
+        [ -z "$missing" ] && break
+        added=0
+        while IFS= read -r soname; do
+            [ -z "$soname" ] && continue
+            if echo "$soname" | grep -qE "$GLIBC_RE"; then
+                continue  # never pull glibc from sniper
+            fi
+            [ -e "$COMPAT/$soname" ] && continue  # already resolved
+            # Find the real file in the sniper dir (main lib dir or pulseaudio
+            # subdir, where PulseAudio stashes libpulsecommon-XX.so).
+            src="$(find "$SNIPER_LIB" "$SNIPER_LIB/pulseaudio" \
+                        -name "${soname}*" 2>/dev/null \
+                   | grep -vE "/${soname}$" | head -1)"
+            [ -z "$src" ] && src="$(find "$SNIPER_LIB" "$SNIPER_LIB/pulseaudio" \
+                                        -name "$soname" 2>/dev/null | head -1)"
+            if [ -n "$src" ]; then
+                ln -sf "$src" "$COMPAT/$soname"
+                added=$((added + 1))
+            else
+                echo "[dpad-launch] WARN: $soname not in sniper runtime — try: sudo apt install <pkg providing $soname>" >&2
+            fi
+        done <<< "$missing"
+        [ "$added" -eq 0 ] && break
+    done
+
+    remaining="$(missing_libs "$COMPAT")"
+    if [ -n "$remaining" ]; then
+        echo "[dpad-launch] Still missing after compat-libs (apt install needed):" >&2
+        echo "$remaining" | sed 's/^/      /' >&2
+    else
+        echo "[dpad-launch] compat-libs ready — all deps resolved, glibc from system."
+    fi
+else
+    echo "[dpad-launch] (no sniper runtime — launching with system libs only)"
+fi
+
+# --- 5. Launch on the display ------------------------------------------------
+# LD_LIBRARY_PATH is set INLINE (via env) so it applies ONLY to the game — the
+# calling shell keeps the system glibc and stays usable.
+GAMEDIR="$(dirname "$GAME_BIN")"
+echo "[dpad-launch] Launching:"
+echo "    cd $GAMEDIR && DISPLAY=$DISPLAY_NUM LD_LIBRARY_PATH=$COMPAT $GAME_BIN ${DPAD_GAME_ARGS:-}"
+cd "$GAMEDIR"
+exec env DISPLAY="$DISPLAY_NUM" LD_LIBRARY_PATH="$COMPAT" "$GAME_BIN" ${DPAD_GAME_ARGS:-}

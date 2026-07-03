@@ -143,6 +143,37 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # =============================================================================
+# 4b. Install steamcmd (headless Steam console client — the Vast product path:
+#     NO Steam UI, NO pressure-vessel needed; downloads native games and the
+#     dpad-launch wrapper runs the binary directly). steamcmd is 32-bit (i386,
+#     already enabled in step 1) and lives in multiverse, which the nvidia/cuda
+#     base does NOT enable by default — so we add multiverse (and universe, for
+#     the SDL2 libs) to noble's deb822 sources first (idempotent). Also
+#     pre-install the SYSTEM SDL2 mixer/image libs so native Linux games that
+#     ship against the Steam Linux Runtime (sniper) can load SDL2 add-ons from
+#     the SYSTEM (matching SONAMEs libSDL2_mixer-2.0.so.0 /
+#     libSDL2_image-2.0.so.0) instead of pulling the whole sniper SDL2 stack +
+#     its codec cascade (FLAC/opus). dpad-launch still symlinks version-pinned
+#     libs the system can't provide (ICU 67 vs system 74, OpenSSL 1.1 vs
+#     system 3.x) from the bundled sniper platform at runtime — see
+#     scripts/dpad-launch.
+# =============================================================================
+RUN set -e; \
+    SRC=/etc/apt/sources.list.d/ubuntu.sources; \
+    if [ -f "$SRC" ]; then \
+        sed -i '/^Components:/ { /multiverse/! s/$/ multiverse/; /universe/! s/$/ universe/; }' "$SRC"; \
+    elif [ -f /etc/apt/sources.list ]; then \
+        sed -i '/^# deb .* multiverse$/s/^# //; /^# deb .* universe$/s/^# //' /etc/apt/sources.list; \
+    fi; \
+    echo steam steam/question select "I AGREE" | debconf-set-selections; \
+    echo steam steam/license note "" | debconf-set-selections; \
+    apt-get update && apt-get install -y --no-install-recommends \
+      steamcmd libsdl2-mixer-2.0-0 libsdl2-image-2.0-0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ( command -v steamcmd || ln -sf /usr/games/steamcmd /usr/bin/steamcmd ) \
+    && command -v steamcmd
+
+# =============================================================================
 # 5. Install Proton-GE (Windows game compatibility, Steam-Deck-grade)
 # =============================================================================
 RUN mkdir -p ${HOME}/.steam/root/compatibilitytools.d && \
@@ -281,16 +312,18 @@ RUN gcc -shared -fPIC -O2 -o /opt/dpadcloud/libnvenc_fix.so /opt/dpadcloud/src/n
 COPY configs/ ${HOME}/.config/
 COPY configs/xorg/xorg.conf.template /opt/dpadcloud/xorg.conf.template
 COPY entrypoint.sh healthcheck.sh /opt/dpadcloud/
-COPY scripts/vgl-steam scripts/proton-wined3d scripts/vgl-test scripts/install-display-drivers scripts/mws-autopair scripts/bubbleroot /opt/dpadcloud/
+COPY scripts/vgl-steam scripts/proton-wined3d scripts/vgl-test scripts/install-display-drivers scripts/mws-autopair scripts/bubbleroot scripts/dpad-launch /opt/dpadcloud/
 # Strip any CR (CRLF) line endings — the repo is edited on Windows and
 # `#!/bin/bash\r` fails to exec with "no such file or directory". Defense-in-depth.
 RUN sed -i 's/\r$//' /opt/dpadcloud/entrypoint.sh /opt/dpadcloud/healthcheck.sh \
         /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \
         /opt/dpadcloud/install-display-drivers /opt/dpadcloud/mws-autopair /opt/dpadcloud/bubbleroot \
+        /opt/dpadcloud/dpad-launch \
         ${HOME}/.config/sunshine/sunshine.conf 2>/dev/null || true && \
     chmod +x /opt/dpadcloud/*.sh \
         /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \
-        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/mws-autopair /opt/dpadcloud/bubbleroot && \
+        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/mws-autopair /opt/dpadcloud/bubbleroot \
+        /opt/dpadcloud/dpad-launch && \
     chown -R ${USERNAME}:${USERNAME} ${HOME}/.config && \
     rm -f ${HOME}/.config/autostart/*.desktop 2>/dev/null || true
 
@@ -338,7 +371,8 @@ ENV LC_ALL=en_US.UTF-8
 # survives that reset.
 RUN ln -sf /opt/dpadcloud/vgl-steam /usr/local/bin/vgl-steam && \
     ln -sf /opt/dpadcloud/vgl-test /usr/local/bin/vgl-test && \
-    ln -sf /opt/dpadcloud/proton-wined3d /usr/local/bin/proton-wined3d
+    ln -sf /opt/dpadcloud/proton-wined3d /usr/local/bin/proton-wined3d && \
+    ln -sf /opt/dpadcloud/dpad-launch /usr/local/bin/dpad-launch
 
 # xserver-xorg-legacy reads this to allow a headless Xorg started by root (and
 # non-root via the wrapper) to acquire the server — required for the real
