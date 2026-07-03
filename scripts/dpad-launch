@@ -130,7 +130,9 @@ if [ -z "$FORCE_PROTON" ]; then
             fi
         done < <(find "$INSTALL_DIR" -type f -executable \
                     -not -path '*/sniper_platform_*/*' \
+                    -not -path '*/steamrt*_platform_*/*' \
                     -not -path '*/pressure-vessel*' \
+                    -not -path '*/steam-runtime/*' \
                     -not -path '*/steamapps/*' \
                     -not -path '*/_v2-entry-point' \
                     2>/dev/null \
@@ -232,7 +234,9 @@ else
         # Heuristic: largest .exe under INSTALL_DIR (excludes runtime/tool dirs).
         GAME_EXE="$(find "$INSTALL_DIR" -type f -iname '*.exe' \
                         -not -path '*/sniper_platform_*/*' \
+                        -not -path '*/steamrt*_platform_*/*' \
                         -not -path '*/pressure-vessel*' \
+                        -not -path '*/steam-runtime/*' \
                         -not -path '*/steamapps/*' \
                         2>/dev/null | xargs -r ls -S 2>/dev/null | head -1)"
     fi
