@@ -141,6 +141,28 @@ ensure_nct() {
     fi
 }
 
+# -----------------------------------------------------------------------------
+# Phase 2b: enable unprivileged user namespaces on the VM host
+# -----------------------------------------------------------------------------
+# Steam (and pressure-vessel/Flatpak) running as the non-root dpad user needs
+# UNPRIVILEGED userns, not just root's CAP_SYS_ADMIN userns. The gating sysctls
+# are host-level (VM kernel) and can't be set from inside a non-privileged
+# container, so set them here on the VM host. The container launch also passes
+# --security-opt seccomp=unconfined --security-opt apparmor=unconfined.
+# -----------------------------------------------------------------------------
+ensure_userns() {
+    local f=/etc/sysctl.d/99-dpad-userns.conf
+    cat > "$f" <<'EOF'
+kernel.unprivileged_userns_clone=1
+kernel.apparmor_restrict_unprivileged_userns=0
+EOF
+    sysctl --system >/dev/null 2>&1 || true
+    local u a
+    u="$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || echo ?)"
+    a="$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo ?)"
+    log "unprivileged userns: unprivileged_userns_clone=${u}  apparmor_restrict_unprivileged_userns=${a}"
+}
+
 ensure_git() {
     have git && return 0
     log "installing git"
@@ -226,6 +248,7 @@ isolation_args() {
         # master. --device /dev/uinput for Sunshine input. nofile bumped (the
         # non-privileged hard cap is 1024, too low for Steam/Selkies).
         printf '%s\n' --runtime=nvidia --cap-add SYS_ADMIN --device /dev/uinput \
+            --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
             -e "NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=${idx}"
     fi
 }
@@ -359,6 +382,7 @@ bootstrap() {
     systemctl start docker 2>/dev/null || true
     ensure_modeset            # may reboot once; resumes here after
     ensure_nct                || return 1
+    ensure_userns
     ensure_image              || return 1
     run_all_containers        || return 1
     report_all_urls           || return 1
