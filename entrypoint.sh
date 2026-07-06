@@ -210,6 +210,10 @@ start_gamescope_session() {
 
     # gamescope headless + Steam (as dpad, with the session env). Unset DISPLAY/
     # WAYLAND_DISPLAY so gamescope doesn't try to nest; VK_ICD pins the NVIDIA ICD.
+    # chown ~dpad first — a root boot process (D-Bus/install-display-drivers) can
+    # create ~/.local root-owned, which makes Steam's `mkdir ~/.local/share/icons`
+    # EPERM and abort the launch (gamescope then 'Primary child shut down').
+    chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}" 2>/dev/null || true
     echo "[*] Launching gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}"
     as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
     local gs_pid=$!
