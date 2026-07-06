@@ -173,6 +173,21 @@ RUN set -e; \
     && ( command -v steamcmd || ln -sf /usr/games/steamcmd /usr/bin/steamcmd ) \
     && command -v steamcmd
 
+# -----------------------------------------------------------------------------
+# 4c. zenity license wrapper — auto-accept the Steam "proprietary (binary-only)"
+# license dialog (Steam-Headless issue #218) so the interactive Steam UI starts
+# non-interactively on userns hosts (Vast KVM VM / RunPod Secure Cloud). Other
+# zenity calls pass through to the real binary. Only matters for the full-Steam
+# (DFP) path; harmless on the headless (Vast Docker) path.
+# -----------------------------------------------------------------------------
+RUN if command -v zenity >/dev/null 2>&1; then \
+      mv /usr/bin/zenity /usr/bin/zenity.real; \
+      printf '%s\n' '#!/bin/bash' \
+        'for a in "$@"; do case "$a" in *"Steam is proprietary"*|*"binary-only"*) exit 0;; esac; done' \
+        'exec /usr/bin/zenity.real "$@"' > /usr/bin/zenity; \
+      chmod +x /usr/bin/zenity; \
+    fi
+
 # =============================================================================
 # 5. Install Proton-GE (Windows game compatibility, Steam-Deck-grade)
 # =============================================================================

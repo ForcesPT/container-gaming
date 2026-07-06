@@ -35,6 +35,123 @@ TURN_USER="${TURN_USERNAME:-turnuser}"
 TURN_PASS="${TURN_PASSWORD:-${OPEN_TOKEN}}"
 TURN_PORT_EXT="${VAST_UDP_PORT_73478:-${VAST_TCP_PORT_73478:-3478}}"
 
+# --- Provider: RunPod (userns-capable; no UDP; TCP port proxying) ------------
+# RunPod has no UDP and maps each TCP port to publicIp:<externalPort> where
+# externalPort != the internal port by default. The RunPod *console UI* also
+# caps port numbers at 65535, so the >70000 "symmetrical port" request tokens
+# (which the REST API accepts as a special signal) cannot be entered via the UI.
+# So we expose coturn's listening port (3478, the standard TURN port) as a normal
+# TCP port: coturn binds 3478 internally (TURN_PORT_LISTEN), and the entrypoint
+# queries the RunPod API for the mapped EXTERNAL port (portMappings["3478"]) +
+# the pod publicIp, then points the browser's TURN ICE server at
+# publicIp:<externalPort> (TURN_PORT_EXT).
+# Why a single normal port is enough: when both WebRTC peers are TURN clients of
+# the SAME coturn, media relays internally over their two control connections to
+# coturn's listening port; the per-allocation relay ports are never contacted
+# externally. So only coturn's listening port needs to be reachable. The web UI
+# still rides on cloudflared quick tunnels (outbound HTTPS -> zero inbound HTTP
+# ports), exactly like Vast.
+DPAD_PROVIDER="${DPAD_PROVIDER:-}"
+if [ -z "$DPAD_PROVIDER" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then
+    DPAD_PROVIDER="runpod"
+fi
+TURN_PORT_LISTEN="${TURN_PORT_LISTEN:-${TURN_PORT_EXT}}"   # port coturn binds (internal)
+if [ "$DPAD_PROVIDER" = "runpod" ]; then
+    RUNPOD_COTURN_PORT="${DPAD_COTURN_PORT:-3478}"   # internal port coturn binds + the TCP port you expose (≤65535 for the RunPod UI)
+    TURN_PORT_LISTEN="$RUNPOD_COTURN_PORT"
+fi
+
+# --- Display mode: DFP (connected virtual monitor) vs NULL (NoScanout) -------
+# DFP gives CEF's browser composer a real connected monitor so the Steam UI
+# window maps — needs DRM master (userns-capable host + --privileged + nothing
+# else holding DRM master, e.g. Vast KVM VM `ubuntu_terminal` / RunPod Secure
+# Cloud). NULL mode runs the nvidia DDX WITHOUT KMS (the Vast-Docker path: no
+# userns, no DRM master) — desktop/Games render on the GPU but the Steam UI
+# window can't be created (CEF "Could not find display info"), so on NULL hosts
+# the product path is headless steamcmd + dpad-launch.
+# auto = DFP if `unshare -U` works AND nvidia_drm.modeset=Y, else NULL.
+DPAD_DISPLAY_MODE="${DPAD_DISPLAY_MODE:-auto}"
+if [ "$DPAD_DISPLAY_MODE" = "auto" ]; then
+    if unshare -U true 2>/dev/null && [ "$(cat /sys/module/nvidia_drm/parameters/modeset 2>/dev/null)" = "Y" ]; then
+        DPAD_DISPLAY_MODE=dfp
+    else
+        DPAD_DISPLAY_MODE=null
+    fi
+fi
+echo "[*] Display mode: ${DPAD_DISPLAY_MODE} (userns=$(unshare -U true 2>/dev/null && echo yes || echo no), nvidia_drm.modeset=$(cat /sys/module/nvidia_drm/parameters/modeset 2>/dev/null || echo ?))"
+
+# CEF/Chrome needs a large /dev/shm for shared memory; Docker's default 64 MB
+# makes steamwebhelper crash-loop ("Failed creating offscreen shared JS context"
+# → "steamwebhelper is not responding"). On a --privileged container we remount
+# it bigger; else the launcher must pass --shm-size=2g (or --ipc=host). Only
+# matters for the DFP/full-Steam path.
+if [ "${DPAD_DISPLAY_MODE}" = "dfp" ]; then
+    if mount -o remount,size=2g /dev/shm 2>/dev/null; then
+        echo "    /dev/shm enlarged to 2G for CEF shared memory (was $(df -h /dev/shm 2>/dev/null | tail -1 | awk '{print $2}'))"
+    else
+        echo "    NOTE: /dev/shm remount failed ($(df -h /dev/shm 2>/dev/null | tail -1 | awk '{print $2}')) — if steamwebhelper crash-loops, re-launch with --shm-size=2g or --ipc=host"
+    fi
+fi
+
+# Resolve the RunPod public IP + mapped external TURN port. Idempotent: manual
+# overrides (DPAD_TURN_PUBLIC_IP / DPAD_TURN_EXTERNAL_PORT) win and short-circuit;
+# otherwise query the RunPod API. portMappings/publicIp are empty during early
+# init, so this is called AGAIN lazily right before Selkies/mws launch (~60s
+# in), when the data is reliably populated.
+runpod_resolve_turn() {
+  [ "$DPAD_PROVIDER" = "runpod" ] || return 0
+  # Priority (highest first):
+  #   1. Manual override envs (DPAD_TURN_PUBLIC_IP / DPAD_TURN_EXTERNAL_PORT)
+  #   2. RunPod-injected envs: RUNPOD_PUBLIC_IP + RUNPOD_TCP_PORT_<internal>
+  #      (RunPod auto-injects RUNPOD_PUBLIC_IP and, for each exposed TCP port N,
+  #      RUNPOD_TCP_PORT_N = the external mapped port. See RunPod env-vars docs.
+  #      This is the reliable, zero-config path — no API call, no manual lookup.)
+  #   3. RunPod REST API (best-effort; the injected envs above usually suffice)
+  # PUBLIC_IP was also pre-resolved via checkip at the top of the entrypoint
+  # (on RunPod Community Cloud the egress IP usually == the public IP).
+  if [ -n "${DPAD_TURN_PUBLIC_IP:-}" ]; then
+    PUBLIC_IP="$DPAD_TURN_PUBLIC_IP"
+  elif [ -n "${RUNPOD_PUBLIC_IP:-}" ]; then
+    PUBLIC_IP="$RUNPOD_PUBLIC_IP"
+  fi
+  if [ -n "${DPAD_TURN_EXTERNAL_PORT:-}" ]; then
+    TURN_PORT_EXT="$DPAD_TURN_EXTERNAL_PORT"
+  else
+    # RUNPOD_TCP_PORT_<internal> (e.g. RUNPOD_TCP_PORT_3478) = external mapped port
+    local rp_var="RUNPOD_TCP_PORT_${RUNPOD_COTURN_PORT}"
+    local rp_ext="${!rp_var:-}"
+    if [ -n "$rp_ext" ]; then
+      TURN_PORT_EXT="$rp_ext"
+    fi
+  fi
+  # If the injected envs gave us both, done — no API needed.
+  if [ -n "${RUNPOD_PUBLIC_IP:-}" ] && [ -n "${!RUNPOD_TCP_PORT_${RUNPOD_COTURN_PORT}:-}" ]; then
+    return 0
+  fi
+  # API fallback for whatever's still missing (RUNPOD_API_KEY is pod-scoped).
+  if [ -n "${RUNPOD_API_KEY:-}" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then
+    local ip="" ext="" json=""
+    for i in 1 2 3 4 5; do
+      json="$(curl -fsS -m 5 -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
+          "https://rest.runpod.io/v1/pods/${RUNPOD_POD_ID}" 2>/dev/null || true)"
+      [ -z "$ip" ] && [ -z "${RUNPOD_PUBLIC_IP:-}" ] && [ -z "${DPAD_TURN_PUBLIC_IP:-}" ] \
+        && ip="$(printf '%s' "$json" | sed -n 's/.*"publicIp"[[:space:]]*:[[:space:]]*"\([0-9.]*\)".*/\1/p' | head -1)"
+      [ -z "$ext" ] && [ -z "${!RUNPOD_TCP_PORT_${RUNPOD_COTURN_PORT}:-}" ] && [ -z "${DPAD_TURN_EXTERNAL_PORT:-}" ] \
+        && ext="$(printf '%s' "$json" | sed -n "s/.*\"${RUNPOD_COTURN_PORT}\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" | head -1)"
+      [ -n "$ip" ] && [ -n "$ext" ] && break
+      sleep 3
+    done
+    [ -n "$ip" ] && [ -z "${RUNPOD_PUBLIC_IP:-}" ] && [ -z "${DPAD_TURN_PUBLIC_IP:-}" ] && PUBLIC_IP="$ip"
+    [ -n "$ext" ] && [ -z "${!RUNPOD_TCP_PORT_${RUNPOD_COTURN_PORT}:-}" ] && [ -z "${DPAD_TURN_EXTERNAL_PORT:-}" ] && TURN_PORT_EXT="$ext"
+  fi
+}
+runpod_resolve_turn   # early best-effort (RunPod injects RUNPOD_PUBLIC_IP + RUNPOD_TCP_PORT_<n> at boot, so this usually resolves immediately)
+if [ "$DPAD_PROVIDER" = "runpod" ]; then
+    _rp_port_var="RUNPOD_TCP_PORT_${RUNPOD_COTURN_PORT}"
+    echo "[*] Provider: RunPod  coturn_listen=${TURN_PORT_LISTEN}  turn_ext=${TURN_PORT_EXT}  public_ip=${PUBLIC_IP:-<pending>}"
+    echo "    RunPod env: RUNPOD_PUBLIC_IP=${RUNPOD_PUBLIC_IP:-<unset>}  ${_rp_port_var}=${!_rp_port_var:-<unset>}  RUNPOD_POD_ID=${RUNPOD_POD_ID:-<unset>}"
+fi
+
 # --- Helper: wait for a unix socket ---
 wait_sock() {
   local sock="$1" name="${2:-socket}"
@@ -192,18 +309,21 @@ generate_xorg_conf() {
     if command -v nvidia-xconfig >/dev/null 2>&1; then
         local DRVMAJ
         DRVMAJ="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | cut -d. -f1)"
+        # Display device: DFP (connected virtual monitor) on userns-capable hosts
+        # that can be DRM master (Vast KVM VM / RunPod Secure Cloud with
+        # --privileged) — CEF's browser composer needs a real connected monitor
+        # to create the Steam UI window ("Could not find display info" in NULL
+        # mode). NULL/NoScanout on Vast Docker (no userns / no DRM master): the
+        # nvidia DDX runs WITHOUT KMS, Xorg still comes up, GL/Vulkan render on
+        # the GPU, capture via XGetImage on the root window (backing store).
+        # DPAD_DISPLAY_MODE is auto-detected above (dfp if userns + modeset=Y).
+        local DD_ARGS=(--use-display-device=None --connected-monitor=None)
+        if [ "${DPAD_DISPLAY_MODE:-null}" = "dfp" ]; then
+            DD_ARGS=(--use-display-device=DFP-0 --connected-monitor=DFP-0)
+        fi
         local NVXCFG_ARGS=(--virtual="${SCREEN_W}x${SCREEN_H}" --depth="$SCREEN_D" \
             --mode="$MODE_NAME" --allow-empty-initial-configuration --no-probe-all-gpus \
-            --only-one-x-screen --no-sli --no-base-mosaic \
-            --use-display-device=None --connected-monitor=None)
-        # NOTE: NULL/NoScanout mode (UseDisplayDevice=None) is REQUIRED on Vast:
-        # Vast strips --cap-add SYS_ADMIN, so we CANNOT become DRM master, which
-        # the DFP/virtual-monitor path needs ("Failed to acquire modesetting
-        # permission"). NULL mode runs the nvidia DDX WITHOUT KMS, so Xorg comes
-        # up and GL/Vulkan render on the GPU. Capture is via XGetImage on the root
-        # window (backing store enabled) -- works for Selkies. Vulkan present to
-        # an X window goes through the DDX Present path (no DRM master needed);
-        # DXVK/Proton on this path to be validated.
+            --only-one-x-screen --no-sli --no-base-mosaic "${DD_ARGS[@]}")
         [ -n "$BUSID" ] && NVXCFG_ARGS+=(--busid="$BUSID")
         # --no-multigpu was removed in driver 550; only pass it on older drivers.
         if [ -z "$DRVMAJ" ] || [ "$DRVMAJ" -lt 550 ]; then NVXCFG_ARGS+=(--no-multigpu); fi
@@ -245,8 +365,30 @@ if [ "${DPAD_XORG}" = "1" ] && [ -x /usr/bin/Xorg ] && [ -f /usr/lib/xorg/module
         -dpms -s off -nolisten tcp -ac -iglx -verbose vt7 >/tmp/xorg.log 2>&1 &
     sleep 3
     if pgrep -x Xorg >/dev/null; then
-        echo "    Xorg running (nvidia DDX)"
+        echo "    Xorg running (nvidia DDX, mode=${DPAD_DISPLAY_MODE})"
         X_SERVER=Xorg
+    elif [ "${DPAD_DISPLAY_MODE:-null}" = "dfp" ] && grep -q "Failed to acquire modesetting" /tmp/xorg.log 2>/dev/null; then
+        # DFP needs DRM master; if something else holds it (e.g. the VM's own
+        # SDDM/desktop X) or we're not --privileged, fall back to NULL-mode Xorg
+        # (GPU renders, but CEF/Steam UI needs DFP — use ubuntu_terminal VM
+        # template or stop SDDM to get DRM master free for full Steam).
+        echo "    DFP Xorg failed (DRM master unavailable — VM's own X holds it, or not --privileged). Falling back to NULL-mode Xorg."
+        DPAD_DISPLAY_MODE=null
+        generate_xorg_conf
+        rm -f /tmp/.X${DISPLAY_NUM#:}-lock /tmp/.X11-unix/X${DISPLAY_NUM#:}
+        /usr/bin/Xorg "${DISPLAY_NUM}" -config /etc/X11/xorg.conf -noreset -novtswitch \
+            -sharevts +extension RANDR +extension RENDER +extension GLX +extension XVideo \
+            +extension DOUBLE-BUFFER +extension DAMAGE +extension COMPOSITE +extension XTEST \
+            -dpms -s off -nolisten tcp -ac -iglx -verbose vt7 >/tmp/xorg.log 2>&1 &
+        sleep 3
+        if pgrep -x Xorg >/dev/null; then
+            echo "    Xorg running (nvidia DDX, NULL-mode fallback)"
+            X_SERVER=Xorg
+        else
+            echo "    WARNING: NULL-mode Xorg also failed — falling back to Xvfb. /tmp/xorg.log tail:"
+            tail -n 20 /tmp/xorg.log 2>/dev/null | sed 's/^/      /'
+            rm -f /tmp/.X${DISPLAY_NUM#:}-lock /tmp/.X11-unix/X${DISPLAY_NUM#:}
+        fi
     else
         echo "    WARNING: Xorg failed to start — falling back to Xvfb. /tmp/xorg.log tail:"
         tail -n 20 /tmp/xorg.log 2>/dev/null | sed 's/^/      /'
@@ -342,9 +484,18 @@ fi
 # desktop session comes up — same pattern Steam-Headless uses. Under a real
 # Xorg+nvidia screen Steam + Proton/DXVK render on the GPU directly (no vglrun);
 # under Xvfb (debug) we wrap with vgl-steam so the VGL bridge still applies.
-# STEAM_ARGS defaults to -silent (override e.g. -tenfoot for Big Picture).
-# Disable with DPAD_AUTOSTART_STEAM=0 to boot a bare desktop for debugging.
-STEAM_ARGS="${STEAM_ARGS:--silent}"
+# STEAM_ARGS: on the DFP/full-Steam path we WANT the window visible (no -silent);
+# on the NULL/headless path -silent is fine (the Steam UI can't show there anyway
+# and the product path is steamcmd + dpad-launch). Set STEAM_ARGS explicitly to
+# override (e.g. -tenfoot for Big Picture). Disable autostart with
+# DPAD_AUTOSTART_STEAM=0.
+if [ -z "${STEAM_ARGS+x}" ]; then
+    if [ "${DPAD_DISPLAY_MODE:-null}" = "dfp" ]; then STEAM_ARGS=""; else STEAM_ARGS="-silent"; fi
+fi
+# A root boot process (Xorg/D-Bus helpers) can create ~/.local (or other XDG
+# dirs) root-owned, which makes Steam's `mkdir ~/.local/share/icons` EPERM and
+# aborts the install. Re-claim the home dir right before Steam launches.
+chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}" 2>/dev/null || true
 mkdir -p "${USER_HOME}/.config/autostart"
 if [ "${DPAD_AUTOSTART_STEAM:-1}" = "1" ]; then
     if [ "${X_SERVER}" = "Xorg" ]; then
@@ -442,8 +593,9 @@ if [ -n "${TURN_SERVER:-}" ]; then
 else
     turnserver -n -a --log-file=/tmp/coturn.log --lt-cred-mech --fingerprint \
         --no-stun --no-multicast-peers --no-cli --no-tlsv1 --no-tlsv1_1 \
+        --listening-ip=0.0.0.0 --listening-ip=:: \
         --realm="dpadcloud" --user="${TURN_USER}:${TURN_PASS}" \
-        -p "${TURN_PORT_EXT}" -X "${PUBLIC_IP:-localhost}" >/tmp/coturn.log 2>&1 &
+        -p "${TURN_PORT_LISTEN:-${TURN_PORT_EXT}}" -X "${PUBLIC_IP:-localhost}" >/tmp/coturn.log 2>&1 &
     sleep 2
     pgrep -x turnserver >/dev/null && echo "    coturn running" || echo "    WARNING: coturn failed (see /tmp/coturn.log)"
 fi
@@ -561,6 +713,10 @@ fi
 
 # --- Selkies-GStreamer (browser WebRTC streaming, bound to localhost) ---
 echo "[*] Starting Selkies-GStreamer..."
+# On RunPod, re-resolve the TURN external port + public IP now (~60s in): the
+# portMappings/publicIp are reliably populated by this point (they're often
+# empty at boot T=0). Idempotent — overrides / prior resolution short-circuit it.
+runpod_resolve_turn
 [ -f /opt/gstreamer/gst-env ] && . /opt/gstreamer/gst-env
 
 # Force a FRESH GStreamer registry at runtime. A registry baked during
@@ -690,7 +846,33 @@ rm -rf "${USER_HOME}/.cache/gstreamer-1.0"/* 2>/dev/null || true
 # also expose a UDP relay range.
 SELKIES_TURN_PROTOCOL="${SELKIES_TURN_PROTOCOL:-tcp}"
 
-as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=${PIPEWIRE_LATENCY} GST_DEBUG=${GST_DEBUG} LD_PRELOAD='${LD_PRELOAD}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${SELKIES_ENC} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --turn_host='${PUBLIC_IP:-127.0.0.1}' --turn_port=${TURN_PORT_EXT} --turn_protocol=${SELKIES_TURN_PROTOCOL} --turn_username='${TURN_USER}' --turn_password='${TURN_PASS}' --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
+# --- RunPod dual-ICE TURN config -------------------------------------------
+# On RunPod, the container usually can't reach its own public IP:port (no NAT
+# loopback/hairpin), so Selkies (in-container) can't gather a relay candidate
+# if --turn_host points at the public address. Fix: give BOTH peers a TURN server
+# they can each reach, both landing on the SAME coturn (which short-circuits the
+# media internally over the two control connections, so only the listening port
+# needs to be exposed):
+#   - Selkies (in-container)  -> turn:127.0.0.1:3478   (local, always works)
+#   - browser (on the internet) -> turn:<publicIp>:<externalPort> (RunPod TCP map)
+# We write an rtc_config.json with BOTH iceServers and pass it via --rtc_config_json
+# (which Selkies serves to the browser AND uses for its own peer). On Vast the
+# single --turn_host path still applies (hairpin works there).
+SELKIES_RTC_CONFIG=""
+if [ "$DPAD_PROVIDER" = "runpod" ] && [ -n "${PUBLIC_IP:-}" ] && [ "${TURN_PORT_EXT}" != "${TURN_PORT_LISTEN}" ]; then
+    SELKIES_RTC_CONFIG="/opt/dpadcloud/rtc_config.json"
+    cat > "$SELKIES_RTC_CONFIG" <<EOF
+{"iceServers":[{"urls":["turn:127.0.0.1:${TURN_PORT_LISTEN}?transport=${SELKIES_TURN_PROTOCOL}"],"username":"${TURN_USER}","credential":"${TURN_PASS}"},{"urls":["turn:${PUBLIC_IP}:${TURN_PORT_EXT}?transport=${SELKIES_TURN_PROTOCOL}"],"username":"${TURN_USER}","credential":"${TURN_PASS}"}],"iceTransportPolicy":"all"}
+EOF
+    chown root:root "$SELKIES_RTC_CONFIG"; chmod 644 "$SELKIES_RTC_CONFIG"   # trusted: root-owned, not group/world-writable
+    echo "[*] RunPod dual-ICE rtc_config.json written ($SELKIES_RTC_CONFIG): local 127.0.0.1:${TURN_PORT_LISTEN} + public ${PUBLIC_IP}:${TURN_PORT_EXT}"
+fi
+
+if [ -n "$SELKIES_RTC_CONFIG" ]; then
+    as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=${PIPEWIRE_LATENCY} GST_DEBUG=${GST_DEBUG} LD_PRELOAD='${LD_PRELOAD}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${SELKIES_ENC} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --rtc_config_json='${SELKIES_RTC_CONFIG}' --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
+else
+    as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=${PIPEWIRE_LATENCY} GST_DEBUG=${GST_DEBUG} LD_PRELOAD='${LD_PRELOAD}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${SELKIES_ENC} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --turn_host='${PUBLIC_IP:-127.0.0.1}' --turn_port=${TURN_PORT_EXT} --turn_protocol=${SELKIES_TURN_PROTOCOL} --turn_username='${TURN_USER}' --turn_password='${TURN_PASS}' --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
+fi
 sleep 4
 pgrep -f "selkies-gstreamer" >/dev/null && echo "    Selkies running on 127.0.0.1:16100 (encoder=${SELKIES_ENC})" || { echo "    WARNING: selkies failed (see /tmp/selkies.log)"; tail -n 30 /tmp/selkies.log; }
 
@@ -727,6 +909,7 @@ if [ -x /opt/mws/web-server ]; then
         WEBRTC_ICE_SERVER_0_URL='turn:${PUBLIC_IP:-127.0.0.1}:${TURN_PORT_EXT}?transport=tcp' \
         WEBRTC_ICE_SERVER_0_USERNAME='${TURN_USER}' \
         WEBRTC_ICE_SERVER_0_CREDENTIAL='${TURN_PASS}' \
+        $(if [ "$DPAD_PROVIDER" = "runpod" ] && [ "${TURN_PORT_EXT}" != "${TURN_PORT_LISTEN}" ]; then echo "WEBRTC_ICE_SERVER_1_URL='turn:127.0.0.1:${TURN_PORT_LISTEN}?transport=tcp' WEBRTC_ICE_SERVER_1_USERNAME='${TURN_USER}' WEBRTC_ICE_SERVER_1_CREDENTIAL='${TURN_PASS}'"; fi) \
         ./web-server" >/tmp/mws.log 2>&1 &
     # mws (Rust + actix) takes ~5-10s to initialize; wait for port 8080 to
     # accept connections instead of a fixed sleep (a 4s pgrep was a false

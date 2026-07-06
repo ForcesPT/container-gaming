@@ -1,5 +1,175 @@
 # DpadCloud Container Gaming — Project State & Continuation Guide
 
+> **UPDATE 2026-07-06 — Vast KVM VM = FULL-STEAM provider VALIDATED (cloud saves / online).**
+> Vast.ai now offers **KVM VMs** (`vastai/kvm:ubuntu_cli_22.04-2025-11-21` / `:ubuntu_desktop_24.04`,
+> SSH-only, full kernel → user namespaces + ptrace + Docker-in-Docker). Running our
+> `forcespt/dpadcloud-gaming:SteamUbuntu24.04` container **inside** a Vast VM with
+> `--privileged --gpus all --shm-size=2g` gives **full interactive Steam** (pressure-vessel
+> + CEF webhelper stable → Steam UI logs in → cloud saves / achievements / online) —
+> the exact thing blocked on Vast Docker (no userns) and RunPod Community Cloud (no
+> userns). Cheapest full-Steam provider found so far.
+>
+> **The chain of three unblocks (each was a Vast-Docker assumption):**
+> 1. **userns → pressure-vessel → CEF** — the VM's real kernel allows `unshare -U`, so
+>    Steam's pressure-vessel + CEF/webhelper run natively (no bubbleroot/proot → no
+>    ptrace crash-loop). `[userns: YES]`, webhelper `startcount` stays 0 (was 45–100 on
+>    Vast Docker).
+> 2. **`/dev/shm` too small (CEF crash-loop)** — Docker defaults `/dev/shm` to 64 MB;
+>    Chrome/CEF needs more → "Failed creating offscreen shared JS context" →
+>    steamwebhelper crash-loops → "steamwebhelper is not responding". **Fix:
+>    `--shm-size=2g`** (or `--ipc=host`). NOT a Vast/Steam bug — a Docker default.
+> 3. **NULL-mode Xorg → CEF "Could not find display info"** — the image ran Xorg with
+>    `UseDisplayDevice=None`/`NoScanout` because Vast Docker can't be DRM master.
+>    CEF's browser composer needs a **connected monitor** to create the login window
+>    (`CreateOutputWindow: failed to create window: Could not find display info`).
+>    Fix: **connected DFP** (`--use-display-device=DFP-0 --connected-monitor=DFP-0`),
+>    which needs **DRM master** — available on the VM via `--privileged` IF nothing
+>    else holds it. The `ubuntu_desktop` VM's **SDDM** X server holds DRM master, so
+>    **use the `ubuntu_cli_22.04-2025-11-21` VM image** (no desktop) OR stop SDDM
+>    (`systemctl isolate multi-user.target`) before launching. With DRM master free
+>    + `nvidia_drm.modeset=Y`, the container's Xorg sets a real `DFP-0:1920x1080` mode
+>    → CEF creates the login window → **Steam UI appears**.
+>
+> **Other fixes found during validation (must bake into the image):**
+> - `chown -R dpad:dpad /home/dpad` after boot — a root boot process created
+>   `~/.local` root-owned → Steam's `mkdir ~/.local/share/icons` EPERM → install
+>   aborts.
+> - **zenity license wrapper** (`/usr/bin/zenity` → exit 0 for the "Steam is
+>   proprietary (binary-only)" prompt, exec `zenity.real` otherwise) — Steam-Headless
+>   #218, needed for non-interactive first launch on any userns host.
+> - drop `-silent` from the Steam autostart (STEAM_ARGS) for the VM path, or the
+>   window hides even after CEF maps it.
+>
+> **Multi-tenant (VM + nested Docker — why this beats one-VM-one-session):**
+> the VM runs **Docker-in-Docker** (a listed VM feature) — run N `dpadcloud-gaming`
+> containers on one VM, one per user session. Constraints: NVENC session cap
+> (~5 on consumer GPUs/driver ≥470, unlimited on datacenter; `keylase/nvidia-patch`
+> removes the consumer cap), VRAM per session, GPU compute sharing (MPS/time-slicing,
+> or **MIG** on A100/H100 for isolated slices). Install `nvidia-container-toolkit`
+> IN the VM; the GPU is passed through to the VM via PCIe passthrough. Enterprise-GPU
+> multi-tenant path; single-session-per-VM (Option A) is the MVP.
+>
+> **Image is STALE → needs rebuild.** The published `forcespt/dpadcloud-gaming:
+> SteamUbuntu24.04` lacks the RunPod dual-ICE entrypoint AND the VM fixes above
+> (it ran NULL-mode, no `chown`, no zenity wrapper, no `--shm-size` handling —
+> `runpod refs: 0` in /opt/dpadcloud/entrypoint.sh). The LOCAL `entrypoint.sh` has
+> the RunPod dual-ICE code but NOT the VM fixes. **NEXT:** update the local files
+> (entrypoint: gate DFP Xorg to the VM path via a userns/DRM-master probe, add the
+> chown + zenity wrapper + `--shm-size` note; Dockerfile: bake the zenity wrapper),
+> rebuild + push a new image tag, then build the orchestrator's **Vast-VM provider**
+> (provision `ubuntu_cli_22.04-2025-11-21` VM, run the container with `--privileged --gpus all
+> --shm-size=2g`, read the boot log for the Selkies tunnel URL, return it to the
+> website).
+>
+> **Revised provider split:**
+> - **Vast Docker** — cheapest, no userns → headless `steamcmd + dpad-launch`,
+>   single-player, local saves. (unchanged)
+> - **Vast KVM VM (`ubuntu_cli_22.04-2025-11-21`) + nested Docker** — **FULL Steam** (cloud /
+>   online / achievements), userns + DRM master. New validated path. Multi-tenant
+>   possible on enterprise GPUs (MIG).
+> - **RunPod Secure Cloud** — full Steam (userns) — untested; RunPod Community
+>   Cloud has NO userns (same class as Vast Docker → headless only).
+
+## Vast KVM VM — build, launch & continuation checklist (2026-07-06)
+
+**The image files are now updated for the VM path** (in this repo):
+- `entrypoint.sh`: auto-detects `DPAD_DISPLAY_MODE` (dfp if `unshare -U` + `nvidia_drm.modeset=Y`, else null); DFP Xorg with `--use-display-device=DFP-0 --connected-monitor=DFP-0`, falls back to NULL-mode if DRM master unavailable; auto-remounts `/dev/shm` to 2G on the dfp path; `chown -R dpad:dpad /home/dpad` before Steam; `STEAM_ARGS` defaults to `""` (window visible) on dfp, `-silent` on null.
+- `Dockerfile`: bakes the **zenity license wrapper** (step 4c) so Steam's "proprietary (binary-only)" dialog auto-accepts.
+- The SAME image works on Vast Docker (null/headless), Vast VM (dfp/full-Steam), and RunPod (community=null, secure=dfp) — only the launch manifest differs.
+
+**Build + push the VM tag:**
+```bash
+cd dpadcloud/container-gaming
+docker build -t forcespt/dpadcloud-gaming:SteamUbuntu24.04VM .
+# RTX-50/Blackwell variant: --build-arg CUDA_VERSION=12.8.1 --build-arg CUDA_PKG=12-8 -t forcespt/dpadcloud-gaming:SteamUbuntu24.04VM-rtx50
+docker push forcespt/dpadcloud-gaming:SteamUbuntu24.04VM
+```
+
+**Launch on a Vast KVM VM (use the `vastai/kvm:ubuntu_cli_22.04-2025-11-21` image — the freshest no-desktop CLI VM tag; NO SDDM so no DRM-master conflict. If you use `ubuntu_desktop`, run `sudo systemctl isolate multi-user.target` or `sudo systemctl stop sddm` first):**
+```bash
+docker run -d --name dpad --privileged --gpus all --shm-size=2g \
+  -p 3478:3478 \
+  -e DPAD_PROVIDER=runpod -e DPAD_COTURN_PORT=3478 \
+  -e DPAD_TURN_PUBLIC_IP=127.0.0.1 -e DPAD_TURN_EXTERNAL_PORT=3478 \
+  -e SUNSHINE_PASSWORD=pass -e SELKIES_BASIC_AUTH_USER=dpad -e SELKIES_BASIC_AUTH_PASSWORD=pass \
+  forcespt/dpadcloud-gaming:SteamUbuntu24.04VM
+```
+For a browser stream from a laptop over SSH: `ssh -p <port> root@<ip> -L 3478:localhost:3478`, then open the **Selkies tunnel URL** printed by `docker logs dpad`. (The `DPAD_PROVIDER=runpod` env just triggers the proven dual-ICE TURN config — the VM's networking model matches RunPod's TCP-only one-port model.)
+
+**Critical VM launch requirements (each is a validation finding):**
+- `--privileged` → DRM master (DFP Xorg) + caps + `/dev/uinput` (Sunshine input).
+- `--shm-size=2g` (or `--ipc=host`) → CEF shared memory; without it steamwebhelper crash-loops ("Failed creating offscreen shared JS context"). The entrypoint also auto-remounts `/dev/shm` to 2G if `--privileged` (safety net).
+- **`vastai/kvm:ubuntu_cli_22.04-2025-11-21` VM image, NOT `ubuntu_desktop`** — the desktop's SDDM X holds DRM master; `--privileged` can't take it. (`ubuntu_desktop` only works if you stop SDDM first.) Note: the plain `vastai/kvm:ubuntu_terminal` tag is stale (last updated 2024-11-11); `ubuntu_cli_22.04-2025-11-21` is the freshest no-desktop build (2025-11-24).
+- `nvidia_drm.modeset=Y` on the VM (the vastai/kvm images set it; verify with `cat /sys/module/nvidia_drm/parameters/modeset`).
+
+**Continuation checklist (resume here):**
+1. **Build + push** `forcespt/dpadcloud-gaming:SteamUbuntu24.04VM` (files updated in this repo; pending: actually build on a Docker host + push).
+2. **Re-validate on a fresh `vastai/kvm:ubuntu_cli_22.04-2025-11-21` VM** with the new image — confirm: `Display mode: dfp` in `docker logs`, the Selkies tunnel URL, the **Steam login window appears**, log in + Steam Guard → **Library online with cloud-sync**, and a native (e.g. Wesnoth 599390) + a Windows/Proton (e.g. War of Dots 3902430) game launch + stream.
+3. **Orchestrator Vast-VM provider** in `apps/api`:
+   - Provision via Vast API: `vastai/kvm:ubuntu_cli_22.04-2025-11-21` VM image, `vms_enabled=true` filter, NVENC-safe offer predicate (`compute_cap>=750 cuda_max_good>=12.1 gpu_display_active=false rentable=true verified=true`).
+   - On-start / over SSH (VMs are SSH-only): `docker run --privileged --gpus all --shm-size=2g ... :SteamUbuntu24.04VM`.
+   - Read `docker logs` for the Selkies tunnel URL + `Display mode: dfp` + `Selected encoder`.
+   - Return the URL to the website; per-session auth via `SELKIES_BASIC_AUTH_PASSWORD`.
+4. **Per-user Steam credentials** — inject an encrypted `config.vdf` + `loginusers.vdf` blob so Steam auto-logs-in (no Steam Guard per session).
+5. **Multi-tenant (later, enterprise GPU)** — Docker-in-Docker N containers/VM; gate to MIG-capable GPUs (A100/H100) or MPS + `keylase/nvidia-patch` (removes the ~5-session consumer NVENC cap) on consumer cards.
+6. **Sunshine/mws on the VM** — now unblocked (`/dev/uinput` works under `--privileged`); worth validating as the NVENC-on-all-drivers browser path (lower priority — Selkies already streams).
+
+**Proven (don't re-test):** userns→pressure-vessel→CEF stable (`--shm-size=2g`); DFP Xorg needs DRM master (stop SDDM / use `ubuntu_cli_22.04-2025-11-21`); Steam UI logs in on the VM. The three unblocks + `chown` + zenity wrapper + no-`-silent` are all baked into the files now.
+
+---
+
+> **UPDATE 2026-07-03 — RunPod provider VALIDATED end-to-end.** The same image
+> (`forcespt/dpadcloud-gaming:SteamUbuntu24.04`) now boots + streams on RunPod
+> with **zero manual networking config**. Key enablers (all in `entrypoint.sh`, gated
+> to RunPod via `RUNPOD_POD_ID`, dormant on Vast):
+> 1. **Auto-discovery via RunPod-injected env vars** (no API, no manual override):
+>    `RUNPOD_PUBLIC_IP` → public IP; `RUNPOD_TCP_PORT_3478` → the external port
+>    RunPod mapped to our exposed `3478/tcp` (same `RUNPOD_TCP_PORT_<internal>`
+>    pattern RunPod's SSH setup uses for `RUNPOD_TCP_PORT_22`). The entrypoint reads
+>    these directly. Boot log prints `RunPod env: RUNPOD_PUBLIC_IP=... RUNPOD_TCP_PORT_3478=...`
+>    for confirmation.
+> 2. **coturn binds `0.0.0.0:3478`** (`--listening-ip=0.0.0.0`). Without this,
+>    coturn auto-bound only `127.0.0.1` + the container eth0 IP and RunPod's TCP
+>    forward couldn't reach it → zero TURN allocations → "Connection failed".
+> 3. **Dual-ICE TURN config** (Selkies `--rtc_config_json` + mws `WEBRTC_ICE_SERVER_1_*`):
+>    two TURN entries — `turn:127.0.0.1:3478` (Selkies/mws reach coturn locally, no
+>    NAT hairpin needed — RunPod has none) + `turn:<publicIp>:<externalPort>`
+>    (browser reaches coturn via the RunPod TCP map). Both peers are TURN clients of
+>    the SAME coturn → it short-circuits media internally over the two control
+>    connections → only the listening port needs exposing. Verified in Selkies'
+>    source that `--rtc_config_json` is served to the browser AND used by the local peer.
+>
+> **VALIDATED 2026-07-03 (RunPod Community Cloud, RTX 2000 Ada / driver 580, 8-GPU
+> host):** GPU renders on Xorg+nvidia-DDX (`NVIDIA RTX 2000 Ada`), Selkies hardware
+> `nvh264enc`, mws auto-pairs with Sunshine (Sunshine did **not** segfault — unlike
+> Vast where `/dev/uinput` EPERM kills it; → mws input likely works on RunPod),
+> cloudflared tunnels up, **browser stream connects**. No `--ulimit` needed (RunPod
+> gives sane nproc). No UDP used (TCP-only coturn TURN). The 8-GPU host exercised the
+> flexgrip NVENC #1249 interposer (filtered 8→1, kept the assigned minor) — NVENC OK.
+>
+> **RunPod launch config (zero manual networking):** image `:SteamUbuntu24.04`,
+> 32GB container disk, 0GB volume, **no HTTP ports**, TCP `3478/tcp` (label TURN),
+> env `SUNSHINE_PASSWORD` / `SELKIES_BASIC_AUTH_USER` / `SELKIES_BASIC_AUTH_PASSWORD`
+> / `STEAM_USER`. That's it — `RUNPOD_PUBLIC_IP` + `RUNPOD_TCP_PORT_3478` are injected
+> by RunPod. See `docs/RUNPOD.md`.
+>
+> **Provider split confirmed:** Vast = cheap single-player/headless (no userns,
+> Sunshine input blocked → mws video-only, Selkies works); RunPod Community Cloud =
+> Sunshine input works (mws primary viable) but STILL no userns → Steam UI blocked the
+> SAME way as Vast (VALIDATED 2026-07-03: bubbleroot/proot wraps pressure-vessel,
+> CEF webhelper crash-loops under ptrace — startcount climbed to ~20 in 3 min, no
+> Steam window ever appeared; `wmctrl -l` empty). ROOT ACCESS DOES NOT HELP — verified
+> 2026-07-03: even `root` gets `unshare -U` → EPERM; the gating sysctls are permissive
+> (`apparmor_restrict_unprivileged_userns=0`, `unprivileged_userns_clone=1`) so the block is
+> the CONTAINER RUNTIME's seccomp profile + missing `cap_sys_admin` (CapBnd = Docker's
+> default 14 caps, no cap_sys_admin/cap_sys_ptrace), enforced by RunPod's pod runtime,
+> not relaxable from inside. Same restriction class as Vast. So RunPod Community Cloud is NOT the
+> full-Steam provider either; headless `steamcmd + dpad-launch` is the path on both.
+> Both providers share ONE image; only the launch manifest + entrypoint branches
+> differ. The Steam UI would need a userns-capable host (RunPod **Secure Cloud**
+> untested — worth a check; or another provider). NEXT: `apps/api` RunPod provider
+> module + validate `dpad-launch` on RunPod.
+>
 > **UPDATE 2026-07-01 — Ubuntu 24.04 move (mws primary browser path).** The base is
 > now `nvidia/cuda:12.5.1-runtime-ubuntu24.04` (single tag `ubuntu24.04`). Two
 > things drove this:
@@ -556,6 +726,7 @@ RTX 50/Blackwell requires the **cuda-12.8 image variant** (driver ≥570) — us
 | `SELKIES_ENCODER` | (auto-probe) | Force encoder: nvh264enc, x264enc, etc. |
 | `DPAD_NVENC_FIX` | `auto` | NVENC #1249 fix: `auto` (enable when host GPUs > mounted `/dev/nvidiaX` on driver 570..609), `1` (force on), `0` (force off). Uses `/opt/dpadcloud/libnvenc_fix.so`. |
 | `DPAD_XORG` | `1` | Display server: `1` = real **Xorg + nvidia DDX** (gaming path — Vulkan present surface so DXVK/Proton render on GPU; Steam + Proton render directly, no vglrun). `0` = Xvfb + Mesa + VirtualGL (debug/fallback only — no Vulkan present, Windows games can't render). |
+| `DPAD_DISPLAY_MODE` | `auto` | Xorg display device: `dfp` = connected virtual monitor `DFP-0` (CEF/Steam UI needs this — requires DRM master: userns-capable host + `--privileged` + nothing holding DRM master, e.g. Vast KVM VM `ubuntu_cli_22.04-2025-11-21` / RunPod Secure Cloud). `null` = `UseDisplayDevice=None`/NoScanout (Vast Docker / no userns — headless `dpad-launch` path, Steam UI can't show). `auto` = `dfp` if `unshare -U` works AND `nvidia_drm.modeset=Y`, else `null`. The entrypoint auto-remounts `/dev/shm` to 2G on `dfp` (CEF shared memory). |
 | `DPAD_AUTOSTART_STEAM` | `1` | `1` writes an XFCE autostart `Steam.desktop` so Steam launches on desktop login (Steam-Headless pattern); `0` boots a bare desktop for debugging the Xorg/DXVK path. |
 | `STEAM_ARGS` | `-silent` | Args passed to the autostarted Steam (e.g. `-tenfoot` for Big Picture). |
 | `DPAD_BUBBLEROOT` | `auto` | proot-based `bwrap` shim for Steam/Proton when user namespaces are unavailable (Vast). `auto` enables when `unshare -U` fails; `1` force on; `0` force off. Sets `BWRAP`+`PRESSURE_VESSEL_BWRAP` to `/opt/dpadcloud/bubbleroot` and symlinks `/usr/local/bin/bwrap`. GPU/Vulkan render natively; only FS syscalls are ptrace-emulated (some loading overhead). Experimental — if a game misbehaves, set `DPAD_BUBBLEROOT=0` (needs a host with real userns). |
