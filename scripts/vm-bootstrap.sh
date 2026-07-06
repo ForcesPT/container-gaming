@@ -45,8 +45,9 @@ set -uo pipefail
 REPO_URL="${DPAD_REPO_URL:-https://github.com/ForcesPT/container-gaming.git}"
 REPO_DIR="${DPAD_REPO_DIR:-/opt/dpadcloud/container-gaming}"
 SCRIPT_PATH="/opt/dpadcloud/vm-bootstrap.sh"
-IMAGE_TAG_BLACKWELL="forcespt/dpadcloud-gaming:SteamUbuntu24.04VM-rtx50"
-IMAGE_TAG_DEFAULT="forcespt/dpadcloud-gaming:SteamUbuntu24.04VM"
+# Single tag (matches the PROJECT_STATE convention). The CUDA build args below
+# still vary by GPU arch; the tag name stays the same.
+IMAGE_TAG="forcespt/dpadcloud-gaming:SteamUbuntu24.04VM"
 CONTAINER_NAME="dpad"
 URL_FILE="/opt/dpadcloud/selkies-url.txt"
 TAG_FILE="/opt/dpadcloud/.image-tag"
@@ -155,22 +156,22 @@ detect_build_args() {
     log "first GPU compute_cap = ${cc:-?}" >&2
     if [ -n "$major" ] && [ "$major" -ge 12 ] 2>/dev/null; then
         # Blackwell (sm_120+) needs CUDA >= 12.8
-        echo "12.8.1 12-8 ${IMAGE_TAG_BLACKWELL}"
+        echo "12.8.1 12-8"
     else
-        echo "12.5.1 12-5 ${IMAGE_TAG_DEFAULT}"
+        echo "12.5.1 12-5"
     fi
 }
 
 ensure_image() {
-    local cuda_ver cuda_pkg img_tag
-    read -r cuda_ver cuda_pkg img_tag <<< "$(detect_build_args)"
-    log "building image $img_tag (CUDA $cuda_ver / $cuda_pkg)"
+    local cuda_ver cuda_pkg
+    read -r cuda_ver cuda_pkg <<< "$(detect_build_args)"
+    log "building image ${IMAGE_TAG} (CUDA $cuda_ver / $cuda_pkg)"
     docker build \
         --build-arg "CUDA_VERSION=${cuda_ver}" \
         --build-arg "CUDA_PKG=${cuda_pkg}" \
-        -t "$img_tag" "$REPO_DIR" || { err "docker build failed"; return 1; }
-    echo "$img_tag" > "$TAG_FILE"
-    log "image built: $img_tag"
+        -t "${IMAGE_TAG}" "$REPO_DIR" || { err "docker build failed"; return 1; }
+    echo "${IMAGE_TAG}" > "$TAG_FILE"
+    log "image built: ${IMAGE_TAG}"
 }
 
 # -----------------------------------------------------------------------------
@@ -259,17 +260,23 @@ bootstrap() {
 install_self() {
     log "installing systemd service ($SERVICE_NAME)"
     mkdir -p /opt/dpadcloud
-    # ensure a local copy exists at the canonical path
-    if [ ! -f "$SCRIPT_PATH" ] || [ "$0" != "$SCRIPT_PATH" ]; then
-        # if invoked via curl|bash, $0 is bash; re-fetch to disk
-        if [ ! -f "$SCRIPT_PATH" ]; then
-            curl -fsSL "$REPO_URL" 2>/dev/null >/dev/null # warm network
+    # Place a copy at the canonical path. Prefer the local repo checkout
+    # (already correct, no network/CDN lag), then a sibling file (scp'd), then
+    # the curl'd raw URL. Keeps the systemd ExecStart pointing at a known-good
+    # script even on private repos or right after a push.
+    if [ ! -f "$SCRIPT_PATH" ] || [ "$(readlink -f "$0" 2>/dev/null)" != "$SCRIPT_PATH" ]; then
+        local src=""
+        [ -f "$REPO_DIR/scripts/vm-bootstrap.sh" ] \
+            && src="$REPO_DIR/scripts/vm-bootstrap.sh"
+        if [ -z "$src" ] && [ -f "$(dirname "$0")/vm-bootstrap.sh" ] \
+            && [ "$(readlink -f "$0" 2>/dev/null)" != "$(dirname "$0")/vm-bootstrap.sh" ]; then
+            src="$(dirname "$0")/vm-bootstrap.sh"
+        fi
+        if [ -z "$src" ]; then
             curl -fsSL "https://raw.githubusercontent.com/ForcesPT/container-gaming/main/scripts/vm-bootstrap.sh" \
-                -o "$SCRIPT_PATH" || {
-                # fallback: copy from a local checkout if present
-                if [ -f "$(dirname "$0")/vm-bootstrap.sh" ]; then cp "$(dirname "$0")/vm-bootstrap.sh" "$SCRIPT_PATH";
-                else err "could not place $SCRIPT_PATH"; return 1; fi
-            }
+                -o "$SCRIPT_PATH" || { err "could not fetch $SCRIPT_PATH"; return 1; }
+        else
+            cp "$src" "$SCRIPT_PATH"
         fi
         chmod +x "$SCRIPT_PATH"
     fi
