@@ -149,7 +149,10 @@ detect_build_args() {
     local cc major
     cc="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')"
     major="${cc%%.*}"
-    log "first GPU compute_cap = ${cc:-?}"
+    # NOTE: this diagnostic MUST go to stderr — stdout is captured by the caller
+    # (`read -r ... <<< "$(detect_build_args)"`), so stdout may carry ONLY the
+    # 3 tokens below.
+    log "first GPU compute_cap = ${cc:-?}" >&2
     if [ -n "$major" ] && [ "$major" -ge 12 ] 2>/dev/null; then
         # Blackwell (sm_120+) needs CUDA >= 12.8
         echo "12.8.1 12-8 ${IMAGE_TAG_BLACKWELL}"
