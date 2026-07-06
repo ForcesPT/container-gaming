@@ -1,0 +1,303 @@
+#!/usr/bin/env bash
+# =============================================================================
+# DpadCloud — Vast KVM VM on-start bootstrap
+# =============================================================================
+# Takes a fresh `vastai/kvm:ubuntu_cli_22.04-2025-11-21` VM from boot to a
+# running `forcespt/dpadcloud-gaming` container with the Selkies tunnel URL
+# printed to the console.
+#
+# Phases (each idempotent — safe to re-run, safe across the one reboot below):
+#   1. ensure  nvidia_drm.modeset = Y   (REQUIRED for the DFP / full-Steam path;
+#          if the VM boots with N, set it persistently + reload, or reboot once)
+#   2. install nvidia-container-toolkit (needed for `docker run --gpus all`)
+#   3. clone / pull  https://github.com/ForcesPT/container-gaming.git
+#   4. build the image, auto-picking the CUDA variant by GPU arch
+#          (Blackwell sm_120+ → CUDA 12.8.1 / 12-8, tag ...VM-rtx50 ;
+#           else              → CUDA 12.5.1 / 12-5, tag ...VM)
+#   5. run the container  ( --privileged --gpus all --shm-size=2g -p 3478:3478 )
+#   6. wait for the Selkies tunnel URL in `docker logs` and print it
+#
+# Reboot safety: phase 1 may `reboot` once. To survive that, this script installs
+# itself as a systemd oneshot service (dpadcloud-bootstrap.service) which re-runs
+# at every boot; after the reboot modeset is already Y and phases 2-6 continue.
+#
+# Usage:
+#   Live test (run as root on the VM):
+#       curl -fsSL https://raw.githubusercontent.com/ForcesPT/container-gaming/main/scripts/vm-bootstrap.sh \
+#         | bash -s -- install
+#     ...or, after cloning:
+#       ./scripts/vm-bootstrap.sh install        # install systemd unit + start it
+#       ./scripts/vm-bootstrap.sh               # just run the phases (no install)
+#       journalctl -u dpadcloud-bootstrap -f     # follow progress
+#
+#   As a Vast on-start script (paste into the instance on-start field):
+#       mkdir -p /opt/dpadcloud && \
+#       curl -fsSL https://raw.githubusercontent.com/ForcesPT/container-gaming/main/scripts/vm-bootstrap.sh \
+#         -o /opt/dpadcloud/vm-bootstrap.sh && \
+#       chmod +x /opt/dpadcloud/vm-bootstrap.sh && \
+#       /opt/dpadcloud/vm-bootstrap.sh install
+#
+# Env overrides (optional): SUNSHINE_PASSWORD, SELKIES_BASIC_AUTH_USER,
+#   SELKIES_BASIC_AUTH_PASSWORD, DPAD_REPO_URL, DPAD_REPO_DIR
+# =============================================================================
+set -uo pipefail
+
+REPO_URL="${DPAD_REPO_URL:-https://github.com/ForcesPT/container-gaming.git}"
+REPO_DIR="${DPAD_REPO_DIR:-/opt/dpadcloud/container-gaming}"
+SCRIPT_PATH="/opt/dpadcloud/vm-bootstrap.sh"
+IMAGE_TAG_BLACKWELL="forcespt/dpadcloud-gaming:SteamUbuntu24.04VM-rtx50"
+IMAGE_TAG_DEFAULT="forcespt/dpadcloud-gaming:SteamUbuntu24.04VM"
+CONTAINER_NAME="dpad"
+URL_FILE="/opt/dpadcloud/selkies-url.txt"
+TAG_FILE="/opt/dpadcloud/.image-tag"
+SERVICE_NAME="dpadcloud-bootstrap.service"
+SUNSHINE_PASSWORD="${SUNSHINE_PASSWORD:-pass}"
+SELKIES_USER="${SELKIES_BASIC_AUTH_USER:-dpad}"
+SELKIES_PASS="${SELKIES_BASIC_AUTH_PASSWORD:-pass}"
+
+log()  { echo "[dpadcloud-bootstrap] $*"; }
+err()  { echo "[dpadcloud-bootstrap][ERROR] $*" >&2; }
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# -----------------------------------------------------------------------------
+# Phase 1: nvidia_drm.modeset = Y  (DFP Xorg / DRM master / Steam UI need KMS)
+# -----------------------------------------------------------------------------
+ensure_modeset() {
+    local cur
+    cur="$(cat /sys/module/nvidia_drm/parameters/modeset 2>/dev/null || true)"
+    log "nvidia_drm.modeset = ${cur:-?} (need Y)"
+    [ "$cur" = "Y" ] && { log "modeset already Y"; return 0; }
+
+    # persist across reboots
+    echo 'options nvidia_drm modeset=Y' > /etc/modprobe.d/nvidia-drm-modeset.conf
+    update-initramfs -u >/dev/null 2>&1 || true
+
+    # try a live module reload (works if nothing is holding the GPU)
+    if modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia 2>/dev/null; then
+        modprobe nvidia_drm modeset=1
+        cur="$(cat /sys/module/nvidia_drm/parameters/modeset 2>/dev/null || true)"
+        if [ "$cur" = "Y" ]; then
+            log "modeset flipped to Y live (no reboot needed)"
+            return 0
+        fi
+    fi
+
+    # still not Y → reboot once; the systemd service resumes phases 2-6 after
+    log "modeset still not Y after live reload — rebooting ONCE to apply"
+    log "(the dpadcloud-bootstrap service will continue automatically after reboot)"
+    sync
+    sleep 3
+    reboot
+    exit 0   # never reached
+}
+
+# -----------------------------------------------------------------------------
+# Phase 2: nvidia-container-toolkit  (for `docker run --gpus all`)
+# -----------------------------------------------------------------------------
+ensure_nct() {
+    if have nvidia-ctk; then
+        log "nvidia-container-toolkit already installed"
+    else
+        log "installing nvidia-container-toolkit"
+        curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+            | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+        curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+            | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+            > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-container-toolkit
+    fi
+    # (re)configure the docker runtime + restart docker (idempotent)
+    nvidia-ctk runtime configure --runtime=docker
+    systemctl restart docker
+    # sanity: GPU visible inside a container?
+    if ! docker run --rm --gpus all nvidia/cuda:12.8.1-runtime-ubuntu24.04 nvidia-smi >/dev/null 2>&1; then
+        err "container cannot see the GPU after nvidia-container-toolkit install"
+        docker run --rm --gpus all nvidia/cuda:12.8.1-runtime-ubuntu24.04 nvidia-smi || true
+        return 1
+    fi
+    log "GPU visible inside a container (nvidia-container-toolkit OK)"
+}
+
+ensure_git() {
+    have git && return 0
+    log "installing git"
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y git
+}
+
+# -----------------------------------------------------------------------------
+# Phase 3: clone / pull the image source
+# -----------------------------------------------------------------------------
+ensure_repo() {
+    ensure_git
+    if [ -d "$REPO_DIR/.git" ]; then
+        log "updating repo at $REPO_DIR"
+        git -C "$REPO_DIR" pull --ff-only || log "pull failed — continuing with existing checkout"
+    else
+        log "cloning $REPO_URL → $REPO_DIR"
+        mkdir -p "$(dirname "$REPO_DIR")"
+        git clone --depth 1 "$REPO_URL" "$REPO_DIR" || { err "git clone failed"; return 1; }
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Phase 4: build the image (auto-pick CUDA variant by GPU compute capability)
+# -----------------------------------------------------------------------------
+detect_build_args() {
+    local cc major
+    cc="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')"
+    major="${cc%%.*}"
+    log "first GPU compute_cap = ${cc:-?}"
+    if [ -n "$major" ] && [ "$major" -ge 12 ] 2>/dev/null; then
+        # Blackwell (sm_120+) needs CUDA >= 12.8
+        echo "12.8.1 12-8 ${IMAGE_TAG_BLACKWELL}"
+    else
+        echo "12.5.1 12-5 ${IMAGE_TAG_DEFAULT}"
+    fi
+}
+
+ensure_image() {
+    local cuda_ver cuda_pkg img_tag
+    read -r cuda_ver cuda_pkg img_tag <<< "$(detect_build_args)"
+    log "building image $img_tag (CUDA $cuda_ver / $cuda_pkg)"
+    docker build \
+        --build-arg "CUDA_VERSION=${cuda_ver}" \
+        --build-arg "CUDA_PKG=${cuda_pkg}" \
+        -t "$img_tag" "$REPO_DIR" || { err "docker build failed"; return 1; }
+    echo "$img_tag" > "$TAG_FILE"
+    log "image built: $img_tag"
+}
+
+# -----------------------------------------------------------------------------
+# Phase 5: run the container
+# -----------------------------------------------------------------------------
+run_container() {
+    local img_tag
+    img_tag="$(cat "$TAG_FILE" 2>/dev/null || true)"
+    if [ -z "$img_tag" ]; then
+        err "no image tag file ($TAG_FILE) — build phase must run first"; return 1
+    fi
+
+    if docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q true; then
+        log "container $CONTAINER_NAME already running — leaving it"
+        return 0
+    fi
+    if docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
+        log "removing stopped container $CONTAINER_NAME"
+        docker rm -f "$CONTAINER_NAME" >/dev/null
+    fi
+
+    log "launching container $CONTAINER_NAME (image $img_tag)"
+    docker run -d --name "$CONTAINER_NAME" \
+        --privileged --gpus all --shm-size=2g \
+        -p 3478:3478 \
+        -e DPAD_PROVIDER=runpod -e DPAD_COTURN_PORT=3478 \
+        -e DPAD_TURN_PUBLIC_IP=127.0.0.1 -e DPAD_TURN_EXTERNAL_PORT=3478 \
+        -e "SUNSHINE_PASSWORD=${SUNSHINE_PASSWORD}" \
+        -e "SELKIES_BASIC_AUTH_USER=${SELKIES_USER}" \
+        -e "SELKIES_BASIC_AUTH_PASSWORD=${SELKIES_PASS}" \
+        "$img_tag" || { err "docker run failed"; return 1; }
+    log "container launched"
+}
+
+# -----------------------------------------------------------------------------
+# Phase 6: wait for the Selkies tunnel URL and announce it
+# -----------------------------------------------------------------------------
+report_url() {
+    log "waiting for the Selkies tunnel URL in container logs (up to 6 min)..."
+    local deadline url
+    deadline=$(( $(date +%s) + 360 ))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        url="$(docker logs "$CONTAINER_NAME" 2>&1 \
+               | grep -oiE 'https://[a-z0-9.-]+\.trycloudflare\.com' | tail -1)"
+        if [ -n "$url" ]; then
+            echo "$url" > "$URL_FILE"
+            {
+                echo "============================================================"
+                echo "  DpadCloud READY."
+                echo "  Selkies tunnel URL: $url"
+                echo "  Browser login: ${SELKIES_USER} / ${SELKIES_PASS}"
+                echo "  (also saved to $URL_FILE)"
+                echo "  From your laptop, open the URL above. If the stream needs the"
+                echo "  TURN port over SSH:  ssh -p <vm_ssh_port> root@<vm_ip> -L 3478:localhost:3478"
+                echo "============================================================"
+            } | tee /dev/console 2>/dev/null || true
+            log "ready — URL: $url"
+            return 0
+        fi
+        sleep 5
+    done
+    err "timed out waiting for the tunnel URL. Last 80 log lines:"
+    docker logs --tail 80 "$CONTAINER_NAME" 2>&1 || true
+    return 1
+}
+
+# -----------------------------------------------------------------------------
+# The full bootstrap (phases 1-6), in order, with the one reboot in phase 1
+# -----------------------------------------------------------------------------
+bootstrap() {
+    log "=== DpadCloud VM bootstrap starting ==="
+    systemctl start docker 2>/dev/null || true
+    ensure_modeset            # may reboot once; resumes here after
+    ensure_nct                || return 1
+    ensure_repo               || return 1
+    ensure_image              || return 1
+    run_container             || return 1
+    report_url                || return 1
+    log "=== DpadCloud VM bootstrap complete ==="
+}
+
+# -----------------------------------------------------------------------------
+# Install this script as a systemd oneshot so it (re)runs at every boot and
+# survives the phase-1 reboot. Used by the Vast on-start payload.
+# -----------------------------------------------------------------------------
+install_self() {
+    log "installing systemd service ($SERVICE_NAME)"
+    mkdir -p /opt/dpadcloud
+    # ensure a local copy exists at the canonical path
+    if [ ! -f "$SCRIPT_PATH" ] || [ "$0" != "$SCRIPT_PATH" ]; then
+        # if invoked via curl|bash, $0 is bash; re-fetch to disk
+        if [ ! -f "$SCRIPT_PATH" ]; then
+            curl -fsSL "$REPO_URL" 2>/dev/null >/dev/null # warm network
+            curl -fsSL "https://raw.githubusercontent.com/ForcesPT/container-gaming/main/scripts/vm-bootstrap.sh" \
+                -o "$SCRIPT_PATH" || {
+                # fallback: copy from a local checkout if present
+                if [ -f "$(dirname "$0")/vm-bootstrap.sh" ]; then cp "$(dirname "$0")/vm-bootstrap.sh" "$SCRIPT_PATH";
+                else err "could not place $SCRIPT_PATH"; return 1; fi
+            }
+        fi
+        chmod +x "$SCRIPT_PATH"
+    fi
+
+    cat > "/etc/systemd/system/${SERVICE_NAME}" <<UNIT
+[Unit]
+Description=DpadCloud VM bootstrap (modeset -> nvidia-container-toolkit -> build -> run)
+After=network-online.target docker.service
+Wants=network-online.target
+ConditionPathExists=/usr/bin/docker
+
+[Service]
+Type=oneshot
+ExecStart=${SCRIPT_PATH}
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=60min
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+    systemctl daemon-reload
+    systemctl enable "${SERVICE_NAME}"
+    log "starting ${SERVICE_NAME} (follow: journalctl -u ${SERVICE_NAME%.service} -f)"
+    systemctl restart "${SERVICE_NAME}"
+}
+
+case "${1:-run}" in
+    install) install_self ;;
+    run)     bootstrap ;;
+    *) echo "usage: $0 [install|run]" >&2; exit 1 ;;
+esac
