@@ -206,7 +206,11 @@ bootstrap_steam_on_xvfb() {
         rm -rf "${USER_HOME}/.steam/root"
         ln -s "${steam_install}" "${USER_HOME}/.steam/root"
     fi
-    chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}/.steam" 2>/dev/null || true
+    # chown ALL of ~dpad (not just .steam) — a root boot process (D-Bus /
+    # install-display-drivers) can create ~/.local root-owned, which makes
+    # Steam's `mkdir ~/.local/share/icons` EPERM and abort the bootstrap.
+    # Mirrors the DFP path's chown.
+    chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}" 2>/dev/null || true
 
     echo "[*] Bootstrapping Steam client on Xvfb (first-run GL updater needs software GL, not gamescope Xwayland) — downloads ~300MB once..."
     as_user "Xvfb :8 -screen 0 1280x720x24 +extension GLX +extension RANDR >/tmp/xvfb-bootstrap.log 2>&1 &" 2>/dev/null
