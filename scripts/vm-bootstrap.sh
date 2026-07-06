@@ -173,15 +173,24 @@ detect_build_args() {
 }
 
 ensure_image() {
-    local cuda_ver cuda_pkg
-    read -r cuda_ver cuda_pkg <<< "$(detect_build_args)"
-    log "building image ${IMAGE_TAG} (CUDA $cuda_ver / $cuda_pkg)"
-    docker build \
-        --build-arg "CUDA_VERSION=${cuda_ver}" \
-        --build-arg "CUDA_PKG=${cuda_pkg}" \
-        -t "${IMAGE_TAG}" "$REPO_DIR" || { err "docker build failed"; return 1; }
+    # Default = PULL the prebuilt image from Docker Hub (fast, no source needed,
+    # works with a private repo). Set DPAD_BUILD=1 to clone + build instead
+    # (dev/rebuild path; needs the repo reachable).
+    if [ "${DPAD_BUILD:-0}" = "1" ]; then
+        ensure_repo || return 1
+        local cuda_ver cuda_pkg
+        read -r cuda_ver cuda_pkg <<< "$(detect_build_args)"
+        log "building image ${IMAGE_TAG} (CUDA $cuda_ver / $cuda_pkg)"
+        docker build \
+            --build-arg "CUDA_VERSION=${cuda_ver}" \
+            --build-arg "CUDA_PKG=${cuda_pkg}" \
+            -t "${IMAGE_TAG}" "$REPO_DIR" || { err "docker build failed"; return 1; }
+    else
+        log "pulling image ${IMAGE_TAG} from Docker Hub"
+        docker pull "${IMAGE_TAG}" || { err "docker pull failed"; return 1; }
+    fi
     echo "${IMAGE_TAG}" > "$TAG_FILE"
-    log "image built: ${IMAGE_TAG}"
+    log "image ready: ${IMAGE_TAG}"
 }
 
 # -----------------------------------------------------------------------------
@@ -249,9 +258,9 @@ report_url() {
                 echo "  DpadCloud READY."
                 echo "  Selkies tunnel URL: $url"
                 echo "  Browser login: ${SELKIES_USER} / ${SELKIES_PASS}"
+                echo "  TURN (browser reaches coturn directly): ${PUBLIC_IPADDR:-<ip>}:${VAST_TCP_PORT_3478:-3478}"
                 echo "  (also saved to $URL_FILE)"
-                echo "  From your laptop, open the URL above. If the stream needs the"
-                echo "  TURN port over SSH:  ssh -p <vm_ssh_port> root@<vm_ip> -L 3478:localhost:3478"
+                echo "  From your laptop, just open the URL above — no SSH tunnel needed."
                 echo "============================================================"
             } | tee /dev/console 2>/dev/null || true
             log "ready — URL: $url"
@@ -272,8 +281,7 @@ bootstrap() {
     systemctl start docker 2>/dev/null || true
     ensure_modeset            # may reboot once; resumes here after
     ensure_nct                || return 1
-    ensure_repo               || return 1
-    ensure_image              || return 1
+    ensure_image              || return 1   # pull (default) or build (DPAD_BUILD=1)
     run_container             || return 1
     report_url                || return 1
     log "=== DpadCloud VM bootstrap complete ==="
