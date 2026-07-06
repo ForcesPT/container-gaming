@@ -1,5 +1,25 @@
 # DpadCloud Container Gaming — Project State & Continuation Guide
 
+> **UPDATE 2026-07-06 (GAMESCOPE BREAKTHROUGH) — multi-tenant full-Steam in ONE VM is feasible: Steam UI runs in `gamescope --backend headless` on NVIDIA, NO DRM master → no nvidia-modeset singleton → N sessions on N GPUs possible.**
+> The nvidia-modeset singleton (1 DRM master per VM) blocked N Xorgs. `gamescope --backend headless` sidesteps it: it renders Steam on the GPU via Vulkan/gamescope-WSI and exposes a **PipeWire** video node for capture, with **no DRM/KMS output and no DRM master**. Validated on the 1-GPU VM (RTX 3060, driver 580, CDI container, `--cap-add SYS_ADMIN --security-opt seccomp/apparmor=unconfined` + host unprivileged-userns sysctls):
+> - `gamescope --backend headless -- vkcube` → composites vkcube on the GPU at 60fps, stays up (`[Gamescope WSI] Creating swapchain …`). The `vkGetPhysicalDeviceFormatProperties2 returned zero modifiers` NVIDIA errors are **non-fatal** in headless mode (unlike the nested-Wayland abort in gamescope #2081).
+> - `gamescope --backend headless -e -W 1920 -H 1080 -- steam -gamepadui` → **Steam + steamwebhelper (CEF, Big Picture) run inside headless gamescope** (steam.sh → steam binary → pressure-vessel → `./steamwebhelper` with `[Gamescope WSI] Executable name: steamwebhelper` + `Add STEAM_GAME to kAtomsToCache`). Steam UI rendering into gamescope, NO DRM master. Stable (background updater ran 2 min later).
+>
+> **Requirements discovered (must bake into the image / entrypoint):**
+> - gamescope installed via the **3v1n0 PPA** (`ppa:3v1n0/gamescope` — gamescope isn't in Ubuntu 24.04 repos). Binary lands in `/usr/games/` (NOT in PATH) → symlink `/usr/games/gamescope{,reaper,stream,ctl}` → `/usr/bin/` so gamescope can find `gamescopereaper`.
+> - Steam must run **as the `dpad` user WITH the entrypoint session env** (`DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR=/run/user/1001`, `PULSE_SERVER=unix:/run/user/1001/pulse/native`, `HOME=/home/dpad`, `USER=dpad`). Without it, Steam's updater completes but the steam client binary exits silently at the pressure-vessel handoff (no `console-linux.txt`). The entrypoint has this env natively; `docker exec` does not (so a `DPAD_GAMESCOPE=1` **entrypoint mode** is the real integration, not a `docker exec` launch).
+> - PipeWire must be running (`pipewire` + `wireplumber`) BEFORE gamescope starts, else `pw_context_new failed` and the capture node is unavailable.
+> - Input via **libei** (gamescope headless already inits it: `Successfully initialized libei for input emulation!`) — feed Sunshine/Selkies input → libei → gamescope.
+>
+> **Remaining integration (plumbing — no more NVIDIA walls):**
+> 1. `DPAD_GAMESCOPE=1` entrypoint mode: start pipewire+wireplumber, then `gamescope --backend headless -e -- steam -gamepadui` (with the session env, as dpad) instead of Xorg+Steam.
+> 2. Capture: gamescope PipeWire video node → Sunshine/Selkies (NVENC) → WebRTC → coturn. (Sunshine supports PipeWire capture; configure it to grab the gamescope node.)
+> 3. Input: Sunshine/Selkies → libei → gamescope.
+> 4. N sessions on N GPUs: the bootstrap runs one CDI container per GPU in `DPAD_GAMESCOPE` mode → N Steam UIs, N PipeWire→NVENC streams, **no modesetting contention** (none are DRM masters). This is the in-VM multi-tenant full-Steam answer.
+> 5. gamescope-dbus (ShadowBlip) can manage sessions for the orchestrator later.
+>
+> **Status:** rendering proven (vkcube + Steam UI in headless gamescope on NVIDIA). Capture/input/N-on-N + entrypoint bake = next build. This does NOT replace the validated DFP single-user path (still the shipping MVP); it's the multi-tenant path for multi-GPU VMs.
+
 > **UPDATE 2026-07-06 (LATE) — SINGLE-USER FULL-STEAM = END-TO-END VALIDATED, no `--privileged`, no SSH tunnel.**
 > On a `vastai/kvm:ubuntu_cli_22.04` VM (1 GPU, `nvidia_drm.modeset=Y`, expose `-p 3478:3478`),
 > the container boots to a **live Steam login window in the browser via Selkies**, GPU-rendered,
