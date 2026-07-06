@@ -356,6 +356,28 @@ RUN gcc -shared -fPIC -O2 -o /opt/dpadcloud/libnvenc_fix.so /opt/dpadcloud/src/n
     ls -l /opt/dpadcloud/libnvenc_fix.so
 
 # =============================================================================
+# 9e. gamescope + PipeWire — the multi-tenant full-Steam path (DPAD_GAMESCOPE).
+#     gamescope --backend headless renders Steam on the GPU via Vulkan/gamescope-WSI
+#     with NO DRM master (so N sessions on N GPUs don't contend for the
+#     nvidia-modeset singleton), and exposes a PipeWire video node for capture.
+#     gamescope isn't in Ubuntu 24.04 repos; use the 3v1n0 PPA (latest prebuilt
+#     for noble). The binary lands in /usr/games (NOT in PATH) — symlink the
+#     gamescope helpers to /usr/bin so gamescope can find gamescopereaper/stream/ctl.
+#     PipeWire + wireplumber must run before gamescope for the capture node.
+#     libeis-dev for gamescope's libei input emulation (input integration later).
+# =============================================================================
+RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common && \
+    add-apt-repository -y ppa:3v1n0/gamescope && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        gamescope pipewire wireplumber pipewire-audio-client-libraries \
+        libeis-dev gstreamer1.0-pipewire libpipewire-0.3-dev && \
+    for b in gamescope gamescopereaper gamescopestream gamescopectl; do \
+        [ -e /usr/games/$b ] && ln -sf /usr/games/$b /usr/bin/$b; \
+    done && \
+    (command -v gamescope && gamescope --version 2>&1 | head -1) && \
+    rm -rf /var/lib/apt/lists/*
+
+# =============================================================================
 # 10. Copy configs + entrypoint + launcher scripts + display-driver installer
 # =============================================================================
 COPY configs/ ${HOME}/.config/

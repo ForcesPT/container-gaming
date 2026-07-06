@@ -177,6 +177,66 @@ wait_sock() {
 
 as_user() { su -s /bin/bash "${USER_NAME}" -c "$1"; }
 
+# --- DPAD_GAMESCOPE mode: gamescope --backend headless + Steam (multi-tenant) ---
+# Renders the Steam UI on the GPU via Vulkan/gamescope-WSI with NO DRM master, so
+# N sessions on N GPUs in one VM don't contend for the nvidia-modeset singleton.
+# Steam runs as dpad with the entrypoint session env (DBUS/XDG/PULSE/HOME/USER).
+# PipeWire+wireplumber run first so gamescope's capture node is available.
+# NOTE: capture/stream (PipeWire -> NVENC -> WebRTC) is wired in a later stage;
+# this function currently gets the Steam UI rendering in headless gamescope.
+start_gamescope_session() {
+    echo "[*] DPAD_GAMESCOPE mode: gamescope --backend headless + Steam (no DRM master)"
+    local GS_W GS_H STEAM_ARGS
+    GS_W="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f1)"
+    GS_H="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f2)"
+    [ -z "$GS_W" ] && GS_W=1920
+    [ -z "$GS_H" ] && GS_H=1080
+    STEAM_ARGS="${DPAD_STEAM_ARGS:--gamepadui}"
+
+    # PipeWire + wireplumber (as dpad, with the session env) — gamescope's
+    # capture node needs pipewire running before it starts.
+    echo "[*] Starting PipeWire + wireplumber..."
+    as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME}; pipewire >/tmp/pipewire.log 2>&1 & sleep 1; wireplumber >/tmp/wireplumber.log 2>&1 &"
+    local pw_wait=0
+    while [ $pw_wait -lt 15 ]; do
+        as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pw-cli info 0 >/dev/null 2>&1" && break
+        sleep 1; pw_wait=$((pw_wait+1))
+    done
+    if as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pw-cli info 0 >/dev/null 2>&1"; then
+        echo "    PipeWire ready"
+    else
+        echo "    WARNING: PipeWire not ready after 15s — see /tmp/pipewire.log (gamescope capture node may be unavailable)"
+    fi
+
+    # gamescope headless + Steam (as dpad, with the session env). Unset DISPLAY/
+    # WAYLAND_DISPLAY so gamescope doesn't try to nest; VK_ICD pins the NVIDIA ICD.
+    echo "[*] Launching gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}"
+    as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
+    local gs_pid=$!
+
+    sleep 20
+    if pgrep -x gamescope >/dev/null && pgrep -x steam >/dev/null; then
+        echo "[*] GAMESCOPE SESSION READY — Steam UI rendering in headless gamescope (no DRM master)."
+    else
+        echo "[*] WARNING: gamescope/steam not both up after 20s — check /tmp/gamescope-steam.log"
+    fi
+    echo "    gamescope+steam log: /tmp/gamescope-steam.log"
+    echo "    GPU: $(nvidia-smi -L 2>/dev/null | head -1)"
+    echo "    NOTE: capture/stream (PipeWire -> NVENC -> WebRTC) not yet wired in this mode."
+
+    # health loop — restart the gamescope+steam session if gamescope dies
+    while true; do
+        sleep 30
+        if ! pgrep -x gamescope >/dev/null; then
+            echo "[*] WARNING: gamescope died — restarting session..."
+            kill $gs_pid 2>/dev/null; pkill -9 -x steam 2>/dev/null; pkill -9 -x steamwebhelper 2>/dev/null; sleep 2
+            rm -f ${USER_HOME}/.steam/steam/steam.pid ${USER_HOME}/.steam/debian-installation/steam.pid 2>/dev/null
+            as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
+            gs_pid=$!
+        fi
+    done
+}
+
 # --- Raise thread/file limits (best-effort) ---
 # Some Vast hosts default to low RLIMIT_NPROC/NOFILE, which makes Sunshine, mws,
 # and XFCE fail to spawn threads ("Resource temporarily unavailable" / EAGAIN ->
@@ -288,6 +348,15 @@ else
     echo "    WARNING: D-Bus session bus address not captured — XFCE components will likely fail."
 fi
 sleep 1
+
+# --- DPAD_GAMESCOPE: gamescope headless + Steam (multi-tenant full-Steam path) ---
+# If set, run the gamescope session INSTEAD of the Xorg/XFCE/Selkies/Sunshine
+# path and stay there (the rest of this script is the DFP/single-user path).
+DPAD_GAMESCOPE="${DPAD_GAMESCOPE:-0}"
+if [ "${DPAD_GAMESCOPE}" = "1" ]; then
+    start_gamescope_session
+    exit 0
+fi
 
 # --- Display server: REAL Xorg + nvidia DDX (gaming) or Xvfb+Mesa (debug) ---
 # DPAD_XORG=1 (default): a real Xorg with the nvidia DDX driver so Vulkan gets a

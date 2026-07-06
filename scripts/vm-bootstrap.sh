@@ -283,6 +283,12 @@ run_container_for() {
     while IFS= read -r a; do iso+=( "$a" ); done < <(isolation_args "$idx")
 
     log "launching $name : GPU $idx, coturn ${port} -> ext ${ext_port}, public ${pub_ip:-<?>}"
+    # DPAD_GAMESCOPE=1 switches the container to the gamescope headless + Steam
+    # multi-tenant path (no DRM master). Pass-through DPAD_GAMESCOPE/DPAD_STEAM_ARGS
+    # so the on-start can opt in without editing the bootstrap.
+    local -a gs_env=()
+    [ -n "${DPAD_GAMESCOPE:-}" ]  && gs_env+=( -e "DPAD_GAMESCOPE=${DPAD_GAMESCOPE}" )
+    [ -n "${DPAD_STEAM_ARGS:-}" ] && gs_env+=( -e "DPAD_STEAM_ARGS=${DPAD_STEAM_ARGS}" )
     docker run -d --name "$name" \
         "${iso[@]}" --shm-size=2g --ulimit nofile=1048576:1048576 \
         -p "${port}:${port}" \
@@ -291,6 +297,7 @@ run_container_for() {
         -e "SUNSHINE_PASSWORD=${sess_pass}" \
         -e "SELKIES_BASIC_AUTH_USER=${SELKIES_USER}" \
         -e "SELKIES_BASIC_AUTH_PASSWORD=${sess_pass}" \
+        "${gs_env[@]}" \
         "$img_tag" || { err "docker run $name failed"; return 1; }
     log "$name launched (login ${SELKIES_USER}/${sess_pass})"
 }
