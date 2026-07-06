@@ -191,21 +191,12 @@ RUN if command -v zenity >/dev/null 2>&1; then \
 # =============================================================================
 # 5. Install Proton-GE (Windows game compatibility, Steam-Deck-grade)
 # =============================================================================
-# Put Proton-GE in the REAL Steam install root's compatibilitytools.d
-# (~/.steam/debian-installation, where the Debian steam-installer bootstraps on
-# first run) and make ~/.steam/root a SYMLINK to that install. steam.sh does
-# `rm -f ~/.steam/root && ln -s $STEAMROOT ~/.steam/root`; a real directory there
-# makes the rm fail, and under gamescope headless Xwayland that corrupt state
-# makes Steam's first-run GL updater UI abort ("UpdateUI CreateGlFont regular
-# failed"). A symlink lets steam.sh recreate it cleanly.
-RUN mkdir -p ${HOME}/.steam/debian-installation/compatibilitytools.d && \
+RUN mkdir -p ${HOME}/.steam/root/compatibilitytools.d && \
     cd /tmp && wget -q --show-progress \
       "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/${PROTONGE_VERSION}/${PROTONGE_VERSION}.tar.gz" \
       -O proton-ge.tar.gz && \
-    tar -xzf proton-ge.tar.gz -C ${HOME}/.steam/debian-installation/compatibilitytools.d/ && \
+    tar -xzf proton-ge.tar.gz -C ${HOME}/.steam/root/compatibilitytools.d/ && \
     rm proton-ge.tar.gz && \
-    rm -rf ${HOME}/.steam/root && \
-    ln -s ${HOME}/.steam/debian-installation ${HOME}/.steam/root && \
     chown -R ${USERNAME}:${USERNAME} ${HOME}/.steam
 
 # =============================================================================
@@ -385,6 +376,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     done && \
     (command -v gamescope && gamescope --version 2>&1 | head -1) && \
     rm -rf /var/lib/apt/lists/*
+
+# =============================================================================
+# 9f. Fix ~/.steam/root: step 5 created it as a real directory (for Proton-GE),
+#     but steam.sh expects a symlink it can `rm -f` and recreate. A real dir
+#     there makes steam.sh's rm fail, and under gamescope headless Xwayland that
+#     corrupt state makes Steam's first-run GL updater UI abort
+#     ("UpdateUI CreateGlFont regular failed" -> gamescope segfault loop).
+#     Relocate Proton-GE to the real install root's compatibilitytools.d and
+#     replace root with a symlink. The entrypoint's bootstrap_steam_on_xvfb()
+#     does the same fix at runtime as a safety net. Done LATE in the layer order
+#     so the big-download steps (5..9) stay cached.
+# =============================================================================
+RUN mkdir -p ${HOME}/.steam/debian-installation/compatibilitytools.d && \
+    if [ -d ${HOME}/.steam/root/compatibilitytools.d ]; then \
+      for d in ${HOME}/.steam/root/compatibilitytools.d/*; do \
+        [ -d "$d" ] && mv "$d" ${HOME}/.steam/debian-installation/compatibilitytools.d/ 2>/dev/null; \
+      done; \
+    fi && \
+    rm -rf ${HOME}/.steam/root && \
+    ln -s ${HOME}/.steam/debian-installation ${HOME}/.steam/root && \
+    chown -R ${USERNAME}:${USERNAME} ${HOME}/.steam
 
 # =============================================================================
 # 10. Copy configs + entrypoint + launcher scripts + display-driver installer
