@@ -211,11 +211,22 @@ bootstrap_steam_on_xvfb() {
     echo "[*] Bootstrapping Steam client on Xvfb (first-run GL updater needs software GL, not gamescope Xwayland) — downloads ~300MB once..."
     as_user "Xvfb :8 -screen 0 1280x720x24 +extension GLX +extension RANDR >/tmp/xvfb-bootstrap.log 2>&1 &" 2>/dev/null
     sleep 2
+    # Use the /usr/bin/steam wrapper (Debian steam-installer) — on a fresh
+    # container that goes straight to gamescope mode, ~/.steam/debian-installation/
+    # steam.sh doesn't exist yet; the wrapper extracts bootstraplinux_ubuntu12_32
+    # tar.xz into ~/.steam/debian-installation/ on first run, then execs steam.sh.
+    local steam_cmd="/usr/bin/steam"
+    [ -x "$steam_cmd" ] || steam_cmd="${steam_install}/steam.sh"
+    if [ ! -x "$steam_cmd" ]; then
+        echo "[*] WARNING: no Steam launcher found (/usr/bin/steam nor ${steam_install}/steam.sh) — bootstrap aborted"
+        pkill -9 -u "${USER_NAME}" -x Xvfb 2>/dev/null
+        return 1
+    fi
     local tries=0 ok=0
     while [ $tries -lt 3 ] && [ $ok -eq 0 ]; do
         tries=$((tries+1))
         rm -f "${USER_HOME}/.steam/steam.pid" "${steam_install}/steam.pid" "${USER_HOME}/.steam/steam.pipe" 2>/dev/null
-        as_user "cd ${USER_HOME}; export DISPLAY=:8 HOME=${USER_HOME} USER=${USER_NAME} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}'; exec ${steam_install}/steam.sh -gamepadui" >/tmp/steam-bootstrap.log 2>&1 &
+        as_user "cd ${USER_HOME}; export DISPLAY=:8 HOME=${USER_HOME} USER=${USER_NAME} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}'; exec ${steam_cmd} -gamepadui" >/tmp/steam-bootstrap.log 2>&1 &
         local sp=$! waited=0
         while [ $waited -lt 360 ]; do
             [ -x "${steam_install}/ubuntu12_64/steam" ] && { ok=1; break; }
