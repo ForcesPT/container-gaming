@@ -73,7 +73,9 @@ TAG_FILE="/opt/dpadcloud/.image-tag"
 SERVICE_NAME="dpadcloud-bootstrap.service"
 SELKIES_USER="${SELKIES_BASIC_AUTH_USER:-dpad}"
 TURN_BASE_PORT="${DPAD_TURN_BASE_PORT:-3478}"
-ISOLATION="${DPAD_ISOLATION:-privileged}"
+# CDI (default) = per-GPU isolation + DRM device + userns/DFP, no --privileged.
+# legacy = old --privileged --gpus device=i (no isolation; use only to debug).
+ISOLATION="${DPAD_ISOLATION:-cdi}"
 
 log()  { echo "[dpadcloud-bootstrap] $*"; }
 err()  { echo "[dpadcloud-bootstrap][ERROR] $*" >&2; }
@@ -126,6 +128,17 @@ ensure_nct() {
         return 1
     fi
     log "GPU visible inside a container (nvidia-container-toolkit OK)"
+    # Generate a CDI spec so each container can be pinned to one GPU with its
+    # full device set (/dev/nvidiaX + /dev/dri/cardX + renderDXXX) via
+    # `--runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=i`. This is what
+    # gives per-GPU isolation AND the DRM device needed for the DFP/full-Steam
+    # path without --privileged. Idempotent; regenerate after driver changes.
+    mkdir -p /etc/cdi
+    if nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml >/tmp/cdi-gen.log 2>&1; then
+        log "CDI spec generated ($(nvidia-ctk cdi list 2>/dev/null | grep -c 'nvidia.com/gpu=') devices)"
+    else
+        err "CDI spec generation failed (see /tmp/cdi-gen.log) — CDI launch will not work"
+    fi
 }
 
 ensure_git() {
@@ -199,15 +212,21 @@ session_password() {
     echo "$pw"
 }
 
-# docker run arg group for GPU isolation
+# docker run arg group for GPU access/isolation
 isolation_args() {
     local idx="$1"
-    if [ "$ISOLATION" = "caps" ]; then
-        # tighter per-GPU isolation, no --privileged
-        printf '%s\n' --cap-add SYS_ADMIN --cap-add MKNOD --gpus "device=${idx}" --device /dev/uinput
-    else
-        # validated for the full-Steam DFP path; --gpus device=i pins the GPU
+    if [ "$ISOLATION" = "legacy" ]; then
+        # old path: --privileged --gpus device=i (NO per-GPU isolation; debug only)
         printf '%s\n' --privileged --gpus "device=${idx}"
+    else
+        # CDI: --runtime=nvidia + NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=i injects ONLY
+        # GPU i's full device set (/dev/nvidiaX + /dev/dri/cardX + renderDXXX) →
+        # per-GPU isolation AND the DRM device for DFP/DRM-master, with no
+        # --privileged. --cap-add SYS_ADMIN restores userns (unshare -U) + DRM
+        # master. --device /dev/uinput for Sunshine input. nofile bumped (the
+        # non-privileged hard cap is 1024, too low for Steam/Selkies).
+        printf '%s\n' --runtime=nvidia --cap-add SYS_ADMIN --device /dev/uinput \
+            -e "NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=${idx}"
     fi
 }
 
@@ -242,7 +261,7 @@ run_container_for() {
 
     log "launching $name : GPU $idx, coturn ${port} -> ext ${ext_port}, public ${pub_ip:-<?>}"
     docker run -d --name "$name" \
-        "${iso[@]}" --shm-size=2g \
+        "${iso[@]}" --shm-size=2g --ulimit nofile=1048576:1048576 \
         -p "${port}:${port}" \
         -e DPAD_PROVIDER=runpod -e DPAD_COTURN_PORT="$port" \
         -e "DPAD_TURN_PUBLIC_IP=${pub_ip}" -e "DPAD_TURN_EXTERNAL_PORT=${ext_port}" \
@@ -254,10 +273,17 @@ run_container_for() {
 }
 
 run_all_containers() {
-    local n started=0 i
+    local n started=0 i max
     n="$(count_gpus)"
-    log "GPUs detected: $n — launching up to $n container(s) (one user per GPU)"
-    for (( i=0; i<n; i++ )); do
+    # On consumer GPUs the nvidia-modeset path is effectively a singleton, so only
+    # ONE container reliably gets the DFP/full-Steam UI at a time; the rest fall
+    # back to NULL-mode (GPU rendering + stream, but no Steam UI). Cap sessions
+    # with DPAD_MAX_SESSIONS (default = GPU count) — set it to 1 for a clean
+    # single-user full-Steam VM even on multi-GPU hosts.
+    max="${DPAD_MAX_SESSIONS:-$n}"
+    [ "$max" -gt "$n" ] 2>/dev/null && max="$n"
+    log "GPUs detected: $n — launching up to ${max} container(s) (DPAD_MAX_SESSIONS=${DPAD_MAX_SESSIONS:-<gpu count>})"
+    for (( i=0; i<max; i++ )); do
         run_container_for "$i" && started=$((started+1))
     done
     if [ "$started" -eq 0 ]; then
