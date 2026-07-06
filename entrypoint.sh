@@ -856,10 +856,14 @@ SELKIES_TURN_PROTOCOL="${SELKIES_TURN_PROTOCOL:-tcp}"
 #   - Selkies (in-container)  -> turn:127.0.0.1:3478   (local, always works)
 #   - browser (on the internet) -> turn:<publicIp>:<externalPort> (RunPod TCP map)
 # We write an rtc_config.json with BOTH iceServers and pass it via --rtc_config_json
-# (which Selkies serves to the browser AND uses for its own peer). On Vast the
-# single --turn_host path still applies (hairpin works there).
+# (which Selkies serves to the browser AND uses for its own peer). Two entries:
+#   - in-container peer  -> turn:127.0.0.1:<listen>   (coturn is in this container; always works, no NAT hairpin needed)
+#   - browser (internet)  -> turn:<publicIp>:<ext>     (browser reaches coturn directly — NO SSH tunnel required)
+# This fires whenever we have a REAL public IP (auto-resolved via checkip on a
+# Vast KVM VM, or RUNPOD_PUBLIC_IP on RunPod). Setting DPAD_TURN_PUBLIC_IP=127.0.0.1
+# keeps the old single-entry tunnel-mode for local debugging.
 SELKIES_RTC_CONFIG=""
-if [ "$DPAD_PROVIDER" = "runpod" ] && [ -n "${PUBLIC_IP:-}" ] && [ "${TURN_PORT_EXT}" != "${TURN_PORT_LISTEN}" ]; then
+if [ "$DPAD_PROVIDER" = "runpod" ] && [ -n "${PUBLIC_IP:-}" ] && [ "${PUBLIC_IP:-}" != "127.0.0.1" ]; then
     SELKIES_RTC_CONFIG="/opt/dpadcloud/rtc_config.json"
     cat > "$SELKIES_RTC_CONFIG" <<EOF
 {"iceServers":[{"urls":["turn:127.0.0.1:${TURN_PORT_LISTEN}?transport=${SELKIES_TURN_PROTOCOL}"],"username":"${TURN_USER}","credential":"${TURN_PASS}"},{"urls":["turn:${PUBLIC_IP}:${TURN_PORT_EXT}?transport=${SELKIES_TURN_PROTOCOL}"],"username":"${TURN_USER}","credential":"${TURN_PASS}"}],"iceTransportPolicy":"all"}
@@ -909,7 +913,7 @@ if [ -x /opt/mws/web-server ]; then
         WEBRTC_ICE_SERVER_0_URL='turn:${PUBLIC_IP:-127.0.0.1}:${TURN_PORT_EXT}?transport=tcp' \
         WEBRTC_ICE_SERVER_0_USERNAME='${TURN_USER}' \
         WEBRTC_ICE_SERVER_0_CREDENTIAL='${TURN_PASS}' \
-        $(if [ "$DPAD_PROVIDER" = "runpod" ] && [ "${TURN_PORT_EXT}" != "${TURN_PORT_LISTEN}" ]; then echo "WEBRTC_ICE_SERVER_1_URL='turn:127.0.0.1:${TURN_PORT_LISTEN}?transport=tcp' WEBRTC_ICE_SERVER_1_USERNAME='${TURN_USER}' WEBRTC_ICE_SERVER_1_CREDENTIAL='${TURN_PASS}'"; fi) \
+        $(if [ "$DPAD_PROVIDER" = "runpod" ] && [ -n "${PUBLIC_IP:-}" ] && [ "${PUBLIC_IP:-}" != "127.0.0.1" ]; then echo "WEBRTC_ICE_SERVER_1_URL='turn:127.0.0.1:${TURN_PORT_LISTEN}?transport=tcp' WEBRTC_ICE_SERVER_1_USERNAME='${TURN_USER}' WEBRTC_ICE_SERVER_1_CREDENTIAL='${TURN_PASS}'"; fi) \
         ./web-server" >/tmp/mws.log 2>&1 &
     # mws (Rust + actix) takes ~5-10s to initialize; wait for port 8080 to
     # accept connections instead of a fixed sleep (a 4s pgrep was a false
