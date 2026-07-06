@@ -122,6 +122,16 @@ runpod_resolve_turn() {
     local rp_ext="${!rp_var:-}"
     if [ -n "$rp_ext" ]; then
       TURN_PORT_EXT="$rp_ext"
+    else
+      # Vast KVM VM: Vast maps the exposed coturn port to a random external
+      # port, injected as VAST_TCP_PORT_<internal> (see docs.vast.ai networking).
+      # PUBLIC_IPADDR (read into PUBLIC_IP at the top of the entrypoint) is the
+      # public IP. The launcher must pass these Vast envs into the container.
+      local vast_var="VAST_TCP_PORT_${RUNPOD_COTURN_PORT}"
+      local vast_ext="${!vast_var:-}"
+      if [ -n "$vast_ext" ]; then
+        TURN_PORT_EXT="$vast_ext"
+      fi
     fi
   fi
   # If the injected envs gave us both, done — no API needed.

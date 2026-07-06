@@ -42,6 +42,16 @@
 # =============================================================================
 set -uo pipefail
 
+# Load Vast-injected instance env (PUBLIC_IPADDR, VAST_TCP_PORT_<n>,
+# OPEN_BUTTON_TOKEN, ...) so the bootstrap has them even when run as a systemd
+# service. Vast writes these to /etc/environment on KVM VMs.
+if [ -f /etc/environment ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . /etc/environment 2>/dev/null || true
+    set +a
+fi
+
 REPO_URL="${DPAD_REPO_URL:-https://github.com/ForcesPT/container-gaming.git}"
 REPO_DIR="${DPAD_REPO_DIR:-/opt/dpadcloud/container-gaming}"
 SCRIPT_PATH="/opt/dpadcloud/vm-bootstrap.sh"
@@ -194,11 +204,27 @@ run_container() {
     fi
 
     log "launching container $CONTAINER_NAME (image $img_tag)"
+    # Vast maps the exposed coturn port (3478) to a random external port and
+    # injects VAST_TCP_PORT_3478; PUBLIC_IPADDR is the public IP. The browser's
+    # TURN entry must point at <public_ip>:<external_port> so it reaches coturn
+    # directly over the internet (no SSH tunnel). 3478/tcp MUST be exposed at VM
+    # creation or the browser stream will not connect.
+    local ext_port="${VAST_TCP_PORT_3478:-}"
+    local pub_ip="${PUBLIC_IPADDR:-}"
+    local -a turn_env=()
+    if [ -n "$pub_ip" ];   then turn_env+=( -e "DPAD_TURN_PUBLIC_IP=$pub_ip" ); fi
+    if [ -n "$ext_port" ]; then turn_env+=( -e "DPAD_TURN_EXTERNAL_PORT=$ext_port" ); fi
+    if [ -z "$ext_port" ]; then
+        err "VAST_TCP_PORT_3478 is empty — port 3478/tcp was NOT exposed when the VM was created."
+        err "Recreate the VM exposing 3478/tcp (Vast UI: add port 3478/tcp; or CLI -p 3478:3478)."
+        err "Continuing, but the browser stream will NOT connect from the internet."
+    fi
+    log "TURN: public_ip=${pub_ip:-<unknown>} external_port=${ext_port:-<unset-3478-not-exposed>}"
     docker run -d --name "$CONTAINER_NAME" \
         --privileged --gpus all --shm-size=2g \
         -p 3478:3478 \
         -e DPAD_PROVIDER=runpod -e DPAD_COTURN_PORT=3478 \
-        -e DPAD_TURN_PUBLIC_IP=127.0.0.1 -e DPAD_TURN_EXTERNAL_PORT=3478 \
+        "${turn_env[@]}" \
         -e "SUNSHINE_PASSWORD=${SUNSHINE_PASSWORD}" \
         -e "SELKIES_BASIC_AUTH_USER=${SELKIES_USER}" \
         -e "SELKIES_BASIC_AUTH_PASSWORD=${SELKIES_PASS}" \
