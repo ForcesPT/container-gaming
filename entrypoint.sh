@@ -177,6 +177,66 @@ wait_sock() {
 
 as_user() { su -s /bin/bash "${USER_NAME}" -c "$1"; }
 
+# --- Steam first-run bootstrap on Xvfb (software GL) ---
+# Steam's first-run "update status" UI (updateui_gl.cpp) creates an OpenGL font
+# texture. On gamescope's headless Xwayland that GL context can't create the
+# texture → "UpdateUI CreateGlFont regular failed" → Steam exits → gamescope
+# 'Primary child shut down' → segfault loop. On Xvfb + mesa/llvmpipe (software
+# GL) the GL font works fine, so we bootstrap Steam ONCE on Xvfb to download the
+# full client. Once the full client is installed, Steam uses the "console"
+# update UI (no GL font) and runs cleanly under gamescope headless Xwayland
+# (validated upstream — gamescope issue #1984). Idempotent: skips if the full
+# client is already present (so a build-time pre-bootstrap makes this a no-op).
+# Also fixes ~/.steam/root: the Dockerfile used to leave it as a real directory
+# (for Proton-GE) which makes steam.sh's `rm -f ~/.steam/root` fail.
+bootstrap_steam_on_xvfb() {
+    local steam_install="${USER_HOME}/.steam/debian-installation"
+    if [ -x "${steam_install}/ubuntu12_64/steam" ]; then
+        echo "[*] Steam client already bootstrapped — skipping Xvfb bootstrap"
+        return 0
+    fi
+
+    # Ensure ~/.steam/root is a symlink to the install (relocate Proton-GE if the
+    # Dockerfile left root as a real directory).
+    mkdir -p "${steam_install}/compatibilitytools.d" 2>/dev/null
+    if [ -e "${USER_HOME}/.steam/root" ] && [ ! -L "${USER_HOME}/.steam/root" ]; then
+        for d in "${USER_HOME}/.steam/root/compatibilitytools.d"/*; do
+            [ -d "$d" ] && mv "$d" "${steam_install}/compatibilitytools.d/" 2>/dev/null
+        done
+        rm -rf "${USER_HOME}/.steam/root"
+        ln -s "${steam_install}" "${USER_HOME}/.steam/root"
+    fi
+    chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}/.steam" 2>/dev/null || true
+
+    echo "[*] Bootstrapping Steam client on Xvfb (first-run GL updater needs software GL, not gamescope Xwayland) — downloads ~300MB once..."
+    as_user "Xvfb :8 -screen 0 1280x720x24 +extension GLX +extension RANDR >/tmp/xvfb-bootstrap.log 2>&1 &" 2>/dev/null
+    sleep 2
+    local tries=0 ok=0
+    while [ $tries -lt 3 ] && [ $ok -eq 0 ]; do
+        tries=$((tries+1))
+        rm -f "${USER_HOME}/.steam/steam.pid" "${steam_install}/steam.pid" "${USER_HOME}/.steam/steam.pipe" 2>/dev/null
+        as_user "cd ${USER_HOME}; export DISPLAY=:8 HOME=${USER_HOME} USER=${USER_NAME} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}'; exec ${steam_install}/steam.sh -gamepadui" >/tmp/steam-bootstrap.log 2>&1 &
+        local sp=$! waited=0
+        while [ $waited -lt 360 ]; do
+            [ -x "${steam_install}/ubuntu12_64/steam" ] && { ok=1; break; }
+            kill -0 "$sp" 2>/dev/null || break
+            sleep 3; waited=$((waited+3))
+        done
+        kill "$sp" 2>/dev/null
+        pkill -9 -u "${USER_NAME}" -x steam 2>/dev/null
+        pkill -9 -u "${USER_NAME}" -x steamwebhelper 2>/dev/null
+        rm -f "${USER_HOME}/.steam/steam.pid" "${steam_install}/steam.pid" "${USER_HOME}/.steam/steam.pipe" 2>/dev/null
+        [ $ok -eq 0 ] && { echo "    bootstrap attempt $tries incomplete; retrying..."; sleep 3; }
+    done
+    pkill -9 -u "${USER_NAME}" -x Xvfb 2>/dev/null
+    if [ $ok -eq 1 ]; then
+        echo "[*] Steam client bootstrapped OK"
+    else
+        echo "[*] WARNING: Steam bootstrap incomplete — gamescope may fail at the GL updater UI. See /tmp/steam-bootstrap.log"
+        tail -20 /tmp/steam-bootstrap.log 2>/dev/null | sed 's/^/    /'
+    fi
+}
+
 # --- DPAD_GAMESCOPE mode: gamescope --backend headless + Steam (multi-tenant) ---
 # Renders the Steam UI on the GPU via Vulkan/gamescope-WSI with NO DRM master, so
 # N sessions on N GPUs in one VM don't contend for the nvidia-modeset singleton.
@@ -192,6 +252,12 @@ start_gamescope_session() {
     [ -z "$GS_W" ] && GS_W=1920
     [ -z "$GS_H" ] && GS_H=1080
     STEAM_ARGS="${DPAD_STEAM_ARGS:--gamepadui}"
+
+    # Bootstrap the Steam full client on Xvfb BEFORE entering gamescope. Steam's
+    # first-run GL updater UI can't create its font texture on gamescope headless
+    # Xwayland; on Xvfb (software GL) it works. Once the full client is installed,
+    # Steam uses the console updater UI which runs fine under gamescope.
+    bootstrap_steam_on_xvfb
 
     # PipeWire + wireplumber (as dpad, with the session env) — gamescope's
     # capture node needs pipewire running before it starts.
