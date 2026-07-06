@@ -1,5 +1,109 @@
 # DpadCloud Container Gaming — Project State & Continuation Guide
 
+> **UPDATE 2026-07-06 (LATE) — SINGLE-USER FULL-STEAM = END-TO-END VALIDATED, no `--privileged`, no SSH tunnel.**
+> On a `vastai/kvm:ubuntu_cli_22.04` VM (1 GPU, `nvidia_drm.modeset=Y`, expose `-p 3478:3478`),
+> the container boots to a **live Steam login window in the browser via Selkies**, GPU-rendered,
+> NVENC hardware-encoded, WebRTC media over **coturn TURN reached directly at the Vast
+> external port** (no SSH tunnel). Steam + `steamwebhelper` (CEF) stable; `dpad` user can
+> `unshare -U`. Confirmed visually: Steam login window appears in the Selkies URL.
+>
+> **The validated launch recipe (CDI, NO `--privileged`):**
+> ```
+> # one-time on the VM host (the bootstrap does this automatically):
+> nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+> echo 'kernel.unprivileged_userns_clone=1'                > /etc/sysctl.d/99-dpad-userns.conf
+> echo 'kernel.apparmor_restrict_unprivileged_userns=0'   >> /etc/sysctl.d/99-dpad-userns.conf
+> sysctl --system
+>
+> docker run -d --name dpad-0 --runtime=nvidia --cap-add SYS_ADMIN \
+>   --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+>   -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=0 \
+>   --device /dev/uinput --shm-size=2g --ulimit nofile=1048576:1048576 \
+>   -p 3478:3478 \
+>   -e DPAD_PROVIDER=runpod -e DPAD_COTURN_PORT=3478 \
+>   -e DPAD_TURN_PUBLIC_IP=$PUBLIC_IPADDR -e DPAD_TURN_EXTERNAL_PORT=$VAST_TCP_PORT_3478 \
+>   -e SUNSHINE_PASSWORD=pass0 -e SELKIES_BASIC_AUTH_USER=dpad -e SELKIES_BASIC_AUTH_PASSWORD=pass0 \
+>   forcespt/dpadcloud-gaming:SteamUbuntu24.04VM
+> ```
+>
+> **Why each piece (each was a debugging finding this session):**
+> 1. **CDI, not `--privileged`** — `--privileged` mounts ALL GPUs (no isolation) and is
+>    overkill. `--gpus device=i` (no `--privileged`) isolates the GPU but does NOT inject
+>    `/dev/dri/cardX` → no DRM device → DFP Xorg fails → `llvmpipe` (software). **CDI**
+>    (`--runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=i`) injects the FULL
+>    per-GPU device set (`/dev/nvidiaX` + `/dev/dri/cardX` + `renderDXXX`) → per-GPU
+>    isolation AND the DRM device for DFP/DRM-master. Confirmed: `nvidia-smi -L` shows
+>    only one GPU; `/dev/dri/card1 + renderD129` present; `Xorg running (mode=dfp)`;
+>    `OpenGL renderer: NVIDIA GeForce RTX 3060/PCIE/SSE2` (not llvmpipe).
+> 2. **`--cap-add SYS_ADMIN`** — restores `CAP_SYS_ADMIN` so `unshare -U` works (userns)
+>    and Xorg can be DRM master. Without it (bare `--gpus`) userns=no → NULL-mode → no
+>    Steam UI. (`--privileged` also gave this but broke isolation — CDI+SYS_ADMIN is the
+>    clean combo.)
+> 3. **Unprivileged userns for Steam-as-`dpad`** — Steam runs as the non-root `dpad`
+>    user and needs UNPRIVILEGED userns (not just root's). Docker's default seccomp +
+>    AppArmor block `dpad` from `unshare -U` → Steam errors "Steam now requires user
+>    namespaces to be enabled." Fix: host sysctls (`unprivileged_userns_clone=1`,
+>    `apparmor_restrict_unprivileged_userns=0`) **+** `--security-opt seccomp=unconfined
+>    --security-opt apparmor=unconfined` on the container. After: `su - dpad -c 'unshare -U
+>    true'` → `USERNS_OK`, Steam launches. (These are host-level sysctls, not settable
+>    from inside a non-privileged container — the bootstrap sets them on the VM.)
+> 4. **No-tunnel TURN (dual-ICE on Vast)** — the browser's TURN ICE entry must point at
+>    `<PUBLIC_IPADDR>:<VAST_TCP_PORT_3478>` (Vast maps each exposed internal port to a
+>    RANDOM external port, injected as `VAST_TCP_PORT_<internal>`). The entrypoint's
+>    dual-ICE (`local 127.0.0.1:3478` for the in-container peer + `public <ip>:<ext>`
+>    for the browser) now fires whenever a real public IP is resolved; the bootstrap
+>    passes `DPAD_TURN_PUBLIC_IP=$PUBLIC_IPADDR DPAD_TURN_EXTERNAL_PORT=$VAST_TCP_PORT_3478`.
+>    Result: open the Selkies URL in a browser — **no SSH tunnel**, media relays through
+>    coturn at the Vast external port. (The old `DPAD_TURN_PUBLIC_IP=127.0.0.1` + SSH
+>    `-L 3478:localhost:3478` workaround is dead — do not use it.)
+> 5. **`--shm-size=2g` + `--ulimit nofile=1048576:1048576`** — CEF shared memory (without
+>    `--shm-size` steamwebhelper crash-loops); without `--privileged` the nofile hard cap
+>    is 1024 (too low for Steam/Selkies), so bump it explicitly.
+>
+> **`vm-bootstrap.sh` automates ALL of it** (commit `37c5cf0`): modeset=Y (one reboot) →
+> nvidia-container-toolkit → `nvidia-ctk cdi generate` → unprivileged-userns sysctls →
+> `docker pull` → launch one container per GPU (CDI + security-opts + dual-ICE TURN) →
+> print each Selkies URL + TURN address. Usage: create a VM exposing one TCP port per
+> GPU (`-p 3478:3478 [-p 3479:3479 ...]`), then `curl -fsSL .../vm-bootstrap.sh -o … &&
+> …/vm-bootstrap.sh install`. Env: `DPAD_MAX_SESSIONS` (cap containers),
+> `DPAD_SESSION_PASSWORDS` (per-session pw list), `DPAD_ISOLATION=cdi|legacy`.
+>
+> **MULTI-TENANT FINDING (consumer GPUs): nvidia-modeset is effectively a SINGLETON per
+> VM.** On a 2-GPU VM, launching 2 containers (CDI, GPU 0 + GPU 1) → the FIRST Xorg to
+> start wins DFP/full-Steam; the SECOND fails `DFP Xorg failed (DRM master unavailable)`
+> → falls back to NULL-mode (GPU rendering + stream still work via the nvidia DDX, but
+> **no Steam UI** — CEF needs a connected DFP-0). This is a kernel/driver-level
+> nvidia-modeset contention, NOT fixable by xorg.conf (`AutoAddGPU false` +
+> `--only-one-x-screen` are already baked in and don't help). So on consumer GPUs:
+> - **1 full-Steam (DFP) session per VM** is the reliable MVP. Other GPUs on the same
+>   VM can only do headless `dpad-launch` (GPU render + stream, no Steam UI).
+> - **N full-Steam users → N VMs** (each 1 GPU), or **bare-metal + QEMU/KVM/VFIO**
+>   (one VM per GPU = separate nvidia driver instances = no modeset contention = true
+>   multi-tenant full-Steam). QEMU/KVM/VFIO is the tech for the latter; Vast gives you
+>   one VM (not bare-metal-to-slice), so N-VMs-per-host needs a bare-metal provider.
+> - **gamescope-per-session** (each session its own DRM/Wayland compositor on its GPU)
+>   is a possible in-VM multi-tenant path to explore later — untested.
+> `DPAD_MAX_SESSIONS=1` makes the bootstrap run a single full-Steam session even on a
+> multi-GPU VM (clean single-user).
+>
+> **Known non-blocking bug:** the flexgrip `/proc` matcher in `nvenc_fix.c` mis-parses
+> the gpuId→PCI-bus map (both `gpuId 0x7` and `0x9` matched `0000:00:07.0` → "could not
+> determine correct GPU, not filtering"). NVENC still works because the
+> `NVENC_FIX_AVAILABLE` mask (from nvidia-smi) saves it (`Found H.264 encoder:
+> h264_nvenc`). Worth fixing the parser for correctness on other hosts.
+>
+> **Revised provider split (consumer GPUs):**
+> - **Vast KVM VM (`ubuntu_cli_22.04`, 1 GPU, expose 3478)** — FULL STEAM, single user,
+>   no tunnel, no `--privileged` (CDI). **VALIDATED 2026-07-06.** The product MVP.
+> - **Vast KVM VM (multi-GPU)** — only 1 full-Steam session (modeset singleton); other
+>   GPUs headless-only. Use `DPAD_MAX_SESSIONS=1`.
+> - **Bare-metal + QEMU/KVM/VFIO (one VM per GPU)** — N full-Steam sessions on one host.
+>   Phase-2 ops milestone.
+> - **Vast Docker / RunPod Community Cloud** — no userns → headless `steamcmd +
+>   dpad-launch` only (single-player, local saves). (unchanged)
+>
+> ---
+>
 > **UPDATE 2026-07-06 — Vast KVM VM = FULL-STEAM provider VALIDATED (cloud saves / online).**
 > Vast.ai now offers **KVM VMs** (`vastai/kvm:ubuntu_cli_22.04-2025-11-21` / `:ubuntu_desktop_24.04`,
 > SSH-only, full kernel → user namespaces + ptrace + Docker-in-Docker). Running our
