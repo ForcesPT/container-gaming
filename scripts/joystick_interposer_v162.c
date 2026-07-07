@@ -43,8 +43,12 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 #define LOG_FILE "/tmp/selkies_js.log"
 
-// Timeout to wait for unix domain socket to exist and connect.
-#define SOCKET_CONNECT_TIMEOUT_MS 250
+// Timeout (ms) to wait for the unix domain socket to exist and connect. On a
+// failed connect() we re-create the socket fd each attempt (a connect() that
+// returns -1 leaves the fd unusable, so reusing it never succeeds) — this is
+// what makes the interposer self-heal the SDL3-hotplug race instead of getting
+// stuck rejected when the first connect races the socket coming ready.
+#define SOCKET_CONNECT_TIMEOUT_MS 500
 
 #define JS0_DEVICE_PATH "/dev/input/js0"
 #define JS0_SOCKET_PATH "/tmp/selkies_js0.sock"
@@ -228,12 +232,21 @@ int open(const char *pathname, int flags, ...)
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, interposer->socket_path, sizeof(addr.sun_path) - 1);
 
-    // Wait for socket to connect.
+    // Wait for socket to connect. On Linux a connect() that fails (ECONNREFUSED /
+    // EAGAIN) leaves the socket fd in an error state — re-calling connect() on the
+    // same fd NEVER succeeds, so we must close() + socket() a fresh fd each retry.
+    // This self-heals the SDL3-hotplug race (SDL3 opens /dev/input/jsN the instant
+    // the watcher mknods it; if the Selkies gamepad socket isn't fully listening yet
+    // the first connect fails — without a real retry SDL3 rejects the device and
+    // never re-probes, leaving the gamepad dead for the whole session).
     int attempt = 0;
     while (attempt++ < SOCKET_CONNECT_TIMEOUT_MS)
     {
         if (connect(interposer->sockfd, (struct sockaddr *)&addr, sizeof(struct sockaddr_un)) == -1)
         {
+            close(interposer->sockfd);
+            interposer->sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+            if (interposer->sockfd == -1) { usleep(1000); continue; }
             // sleep for 1ms
             usleep(1000);
             continue;
