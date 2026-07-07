@@ -282,6 +282,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # instead of the capture display (:2). No-op when DPAD_INPUT_DISPLAY is unset.
 COPY scripts/dpad_input_patch.py scripts/dpad_input_patch.pth /usr/local/lib/python3.12/dist-packages/
 
+# Stage 2-zero-copy: patch Selkies' build_video_pipeline to capture gamescope's
+# PipeWire node directly (pipewiresrc -> cudaupload -> cudaconvert -> nvh264enc)
+# instead of ximagesrc on an Xvfb :2 bridge — removes the GPU->CPU->:2->ximagesrc
+# round-trip + the CPU videoconvert passes. Gated on DPAD_VIDEO_SRC=pipewiresrc at
+# runtime (the entrypoint default for gamescope mode); set DPAD_VIDEO_SRC=ximagesrc
+# to revert. Also guards set_pointer_visible (show-pointer is ximagesrc-only).
+# Idempotent; runs against the installed selkies_gstreamer wheel.
+COPY scripts/patch_selkies_pipewire.py /opt/dpadcloud/patch_selkies_pipewire.py
+RUN python3 /opt/dpadcloud/patch_selkies_pipewire.py /usr/local/lib/python3.12/dist-packages/selkies_gstreamer/gstwebrtc_app.py \
+    && rm -f /opt/dpadcloud/patch_selkies_pipewire.py
+
 # =============================================================================
 # 7b. Install moonlight-web-stream (PRIMARY browser path: Sunshine NVENC -> WebRTC)
 #     Prebuilt x86_64-unknown-linux-gnu release requires glibc 2.39 (= noble),

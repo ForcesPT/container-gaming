@@ -261,40 +261,48 @@ bootstrap_steam_on_xvfb() {
 # gamescope UI content onto :2 (1.1MB captured frame). Needs gstreamer1.0-tools
 # (gst-launch-1.0) in the image — added in the Dockerfile gamescope step.
 start_gamescope_stream() {
-    echo "[*] Stage 2: bridging gamescope PipeWire node -> Xvfb :2 -> Selkies"
-    # clear stale logs + the Xvfb :2 lock/socket files. The lock + the ABSTRACT
-    # socket (@/tmp/.X11-unix/X2) persist across restarts; a stale Xvfb :2 holding
-    # the abstract socket makes a new Xvfb :2 fail with 'Cannot establish any
-    # listening sockets - server already running' -> :2 never comes up -> the
-    # gst bridge paints into nothing -> Selkies ximagesrc-captures :2 black ->
-    # browser stuck on 'Waiting for stream'. Kill any stale Xvfb :2 first.
+    # Stage 2 video source. Default = pipewiresrc (zero-copy-ish: Selkies reads
+    # gamescope's PipeWire node directly -> cudaupload -> cudaconvert -> nvh264enc,
+    # no Xvfb :2 / ximagesrc bridge, no CPU videoconvert). Set DPAD_VIDEO_SRC=ximagesrc
+    # to revert to the :2 bridge path (Selkies 1.6.x's original ximagesrc capture).
+    local video_src="${DPAD_VIDEO_SRC:-pipewiresrc}"
+    # clear stale logs + the Xvfb :2 lock/socket files (the lock + the ABSTRACT
+    # socket @/tmp/.X11-unix/X2 persist across restarts; a stale Xvfb :2 holding it
+    # makes a new Xvfb :2 fail with 'Cannot establish any listening sockets' -> :2
+    # never comes up -> bridge paints into nothing -> ximagesrc-captures :2 black).
     rm -f /tmp/selkies.log /tmp/bridge.log /tmp/coturn.log /tmp/cloudflared-selkies.log /tmp/xvfb2.log /tmp/rtc_config.json /tmp/.X2-lock /tmp/.X11-unix/X2 2>/dev/null
     pkill -9 -f "Xvfb :2" 2>/dev/null || true
+    pkill -9 -f "pipewiresrc target-object=gamescope ! videoconvert" 2>/dev/null || true
     sleep 1
     local GS_W GS_H enc rtc url
     GS_W="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f1)"; [ -z "$GS_W" ] && GS_W=1920
     GS_H="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f2)"; [ -z "$GS_H" ] && GS_H=1080
 
-    # start Xvfb :2 and VERIFY the socket came up. Retry once if a stale holder
-    # raced us (kill everything on :2 and try again).
-    start_xvfb2() {
-        as_user "Xvfb :2 -ac -screen 0 ${GS_W}x${GS_H}x24 +extension GLX +extension RANDR >/tmp/xvfb2.log 2>&1 &" 2>/dev/null
-        sleep 2
-        [ -S /tmp/.X11-unix/X2 ]
-    }
-    if ! start_xvfb2; then
-        echo "    Xvfb :2 first try failed — killing stale holders and retrying"
-        pkill -9 -f "Xvfb :2" 2>/dev/null || true
-        rm -f /tmp/.X2-lock /tmp/.X11-unix/X2 2>/dev/null
-        sleep 1
-        start_xvfb2 || { echo "    WARNING: Xvfb :2 would not start — Selkies will stream black (see /tmp/xvfb2.log)"; tail -12 /tmp/xvfb2.log 2>/dev/null | sed 's/^/      /'; }
-    fi
-    [ -S /tmp/.X11-unix/X2 ] && echo "    Xvfb :2 up (socket /tmp/.X11-unix/X2)" || echo "    WARNING: Xvfb :2 socket missing"
+    if [ "$video_src" = "pipewiresrc" ]; then
+        echo "[*] Stage 2 (zero-copy): Selkies captures gamescope's PipeWire node directly (pipewiresrc -> cudaupload -> cudaconvert -> nvh264enc); no Xvfb :2 / ximagesrc bridge — saves the GPU->CPU->:2->ximagesrc round-trip + the CPU videoconvert passes. (Set DPAD_VIDEO_SRC=ximagesrc to revert to the :2 bridge path.)"
+    else
+        echo "[*] Stage 2: bridging gamescope PipeWire node -> Xvfb :2 -> Selkies (ximagesrc)"
+        # start Xvfb :2 and VERIFY the socket came up. Retry once if a stale holder
+        # raced us (kill everything on :2 and try again).
+        start_xvfb2() {
+            as_user "Xvfb :2 -ac -screen 0 ${GS_W}x${GS_H}x24 +extension GLX +extension RANDR >/tmp/xvfb2.log 2>&1 &" 2>/dev/null
+            sleep 2
+            [ -S /tmp/.X11-unix/X2 ]
+        }
+        if ! start_xvfb2; then
+            echo "    Xvfb :2 first try failed — killing stale holders and retrying"
+            pkill -9 -f "Xvfb :2" 2>/dev/null || true
+            rm -f /tmp/.X2-lock /tmp/.X11-unix/X2 2>/dev/null
+            sleep 1
+            start_xvfb2 || { echo "    WARNING: Xvfb :2 would not start — Selkies will stream black (see /tmp/xvfb2.log)"; tail -12 /tmp/xvfb2.log 2>/dev/null | sed 's/^/      /'; }
+        fi
+        [ -S /tmp/.X11-unix/X2 ] && echo "    Xvfb :2 up (socket /tmp/.X11-unix/X2)" || echo "    WARNING: Xvfb :2 socket missing"
 
-    # bridge: pipewiresrc(gamescope) -> videoconvert -> ximagesink on :2.
-    as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; gst-launch-1.0 pipewiresrc target-object=gamescope ! videoconvert ! ximagesink display=:2 sync=false force-aspect-ratio=false >/tmp/bridge.log 2>&1 &" 2>/dev/null
-    sleep 3
-    pgrep -f "pipewiresrc target-object=gamescope" >/dev/null && echo "    bridge gst running" || { echo "    WARNING: bridge gst failed"; tail -12 /tmp/bridge.log 2>/dev/null | sed 's/^/      /'; }
+        # bridge: pipewiresrc(gamescope) -> videoconvert -> ximagesink on :2.
+        as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; gst-launch-1.0 pipewiresrc target-object=gamescope ! videoconvert ! ximagesink display=:2 sync=false force-aspect-ratio=false >/tmp/bridge.log 2>&1 &" 2>/dev/null
+        sleep 3
+        pgrep -f "pipewiresrc target-object=gamescope" >/dev/null && echo "    bridge gst running" || { echo "    WARNING: bridge gst failed"; tail -12 /tmp/bridge.log 2>/dev/null | sed 's/^/      /'; }
+    fi
 
     if ! pgrep -x turnserver >/dev/null; then
         echo "[*] Starting coturn on ${TURN_PORT_EXT}..."
@@ -340,7 +348,15 @@ start_gamescope_stream() {
         in_dpy=""
     fi
 
-    as_user "export DISPLAY=:2 DPAD_INPUT_DISPLAY=${in_dpy} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=false --rtc_config_json='${rtc}' --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
+    # DISPLAY for Selkies itself: with pipewiresrc capture there is no Xvfb :2,
+    # so point any default X usage (e.g. a fallback display.Display()) at
+    # gamescope's Xwayland (:0) instead of a non-existent :2. With ximagesrc, :2
+    # is the capture display. (dpad_input_patch.py sets self.xdisplay to in_dpy
+    # regardless, so this only matters for any unpatched default-open path.)
+    local selkies_dpy=":2"
+    [ "$video_src" = "pipewiresrc" ] && selkies_dpy="${in_dpy:-:0}"
+
+    as_user "export DISPLAY=${selkies_dpy} DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=${in_dpy} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=false --rtc_config_json='${rtc}' --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
     sleep 6
     if pgrep -f selkies-gstreamer >/dev/null; then
         echo "    Selkies running on 127.0.0.1:16100 (gamescope bridge, encoder=${enc})"
@@ -467,10 +483,12 @@ start_gamescope_session() {
             as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
             gs_pid=$!
         fi
-        # Xvfb :2 + the PipeWire->:2 bridge are the Selkies capture path. If :2
+        # Xvfb :2 + the PipeWire->:2 bridge are the Selkies capture path (ximagesrc mode). If :2
         # dies (or the bridge gst dies) the browser goes black / loops on
         # 'Waiting for stream'. Recover both without touching gamescope.
-        if [ ! -S /tmp/.X11-unix/X2 ] || ! pgrep -f "pipewiresrc target-object=gamescope" >/dev/null; then
+        # NOT run in pipewiresrc mode (no :2/bridge there; selkies pipewiresrc
+        # captures gamescope's PipeWire node directly).
+        if [ "${DPAD_VIDEO_SRC:-pipewiresrc}" != "pipewiresrc" ] && { [ ! -S /tmp/.X11-unix/X2 ] || ! pgrep -f "pipewiresrc target-object=gamescope" >/dev/null; }; then
             echo "[*] WARNING: Xvfb :2 or bridge died — restarting capture path..."
             pkill -9 -f "Xvfb :2" 2>/dev/null || true
             pkill -9 -f "pipewiresrc target-object=gamescope" 2>/dev/null || true
