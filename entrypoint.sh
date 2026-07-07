@@ -486,11 +486,10 @@ start_gamescope_session() {
             as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
             gs_pid=$!
         fi
-        # Xvfb :2 + the PipeWire->:2 bridge are the Selkies capture path (ximagesrc mode). If :2
-        # dies (or the bridge gst dies) the browser goes black / loops on
-        # 'Waiting for stream'. Recover both without touching gamescope.
-        # NOT run in pipewiresrc mode (no :2/bridge there; selkies pipewiresrc
-        # captures gamescope's PipeWire node directly).
+        # Xvfb :2 + the PipeWire->:2 bridge / Xvfb `:2` are the Selkies capture path (ximagesrc mode). If :2 dies (or the bridge gst dies) the
+        # browser goes black / loops on 'Waiting for stream'. Recover both without touching gamescope.
+        # NOT run in pipewiresrc mode (no :2/bridge there; selkies pipewiresrc captures gamescope's
+        # PipeWire node directly).
         if [ "${DPAD_VIDEO_SRC:-pipewiresrc}" != "pipewiresrc" ] && { [ ! -S /tmp/.X11-unix/X2 ] || ! pgrep -f "pipewiresrc target-object=gamescope" >/dev/null; }; then
             echo "[*] WARNING: Xvfb :2 or bridge died — restarting capture path..."
             pkill -9 -f "Xvfb :2" 2>/dev/null || true

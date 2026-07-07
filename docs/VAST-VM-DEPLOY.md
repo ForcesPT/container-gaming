@@ -171,6 +171,7 @@ docker run -d --name dpad-0 --runtime=nvidia --cap-add SYS_ADMIN \
 | Variable | Default | Purpose |
 |---|---|---|
 | `DPAD_GAMESCOPE` | `0` | `1` = entrypoint **gamescope headless mode** (Steam via `gamescope --backend headless`, no DRM master → N-on-N-GPUs possible). `0` = the DFP Xorg / headless steamcmd path. **Set `1` for the validated interactive browser path.** |
+| `DPAD_VIDEO_SRC` | `pipewiresrc` | gamescope-mode video source. `pipewiresrc` = the **zero-copy-ish path** (Selkies captures gamescope's PipeWire node directly: `pipewiresrc → videorate → cudaupload → cudaconvert → nvh264enc`, no Xvfb `:2`/ximagesrc bridge). `ximagesrc` = the fallback `:2` bridge path (Selkies 1.6.x's original X11 capture). The patcher (`scripts/patch_selkies_pipewire.py`, baked in via the Dockerfile) gates on this. |
 | `NVIDIA_VISIBLE_DEVICES` | (unset) | CDI: `nvidia.com/gpu=i` for per-GPU isolation. Do NOT set `=all` on multi-GPU hosts (encoder grabs device 0 which may not be the assigned GPU). |
 | `DPAD_PROVIDER` | `vast` | `runpod` triggers the **dual-ICE TURN** config (matches RunPod/Vast's TCP-only one-port model). Set `runpod` on Vast VMs. |
 | `DPAD_COTURN_PORT` | `3478` | coturn listen port (internal). Expose it with `-p`. |
@@ -222,35 +223,46 @@ Browser ──HTTPS──▶ cloudflared tunnel ──▶ Selkies 127.0.0.1:1610
 
 ## 6. The gamescope headless pipeline (what actually runs)
 
+The **default video path** (`DPAD_VIDEO_SRC=pipewiresrc`, the validated zero-copy-ish path):
 ```
 gamescope --backend headless -e -W 1920 -H 1080 -- steam -gamepadui
    │  renders Steam on the GPU via Vulkan/gamescope-WSI, NO DRM master
-   │  → PipeWire video node (node.name=gamescope, media.class=Video/Source)
+   │  → PipeWire video node (node.name=gamescope, media.class=Video/Source, BGRx 1920x1080, modifier 0 = system memory)
    │  → Xwayland :0 (Steam's CEF/X11 UI runs here)
    ▼
-[Stage 2 — the :2 bridge]  (exists ONLY because Selkies 1.6.x is X11-only)
-   gst: pipewiresrc target-object=gamescope ! videoconvert ! ximagesink display=:2
-   │  GPU→CPU download + software colorspace, paints into Xvfb :2 CPU framebuffer
-   ▼
-Xvfb :2  (-ac -screen 0 1920x1080x24 +extension GLX +extension RANDR)
-   ▼
-[Selkies capture + encode]
-   ximagesrc :2 → videoconvert → nvh264enc (CPU→GPU upload + NVENC hardware)
+[Selkies capture + encode — pipewiresrc direct, NO Xvfb :2 / ximagesrc bridge]
+   pipewiresrc(target-object=gamescope, always-copy=True) → capsfilter(BGRx)
+   → videorate → capsfilter(BGRx, framerate=N/1)   ← FPS slider throttles here
+   → cudaupload → cudaconvert(GPU BGRx→NV12) → nvcudah264enc → rtph264pay → webrtcbin
    → WebRTC → coturn TURN (TCP) → cloudflared → browser
 [Audio]  pipewire-pulse null sink (dummy.monitor) → Selkies pulsesrc
 [Input — Stage 3a, DIRECT, no go-and-comeback]
    browser WebRTC datachannel → Selkies → xtest.fake_input on :0 → Xwayland → Steam
-   (dpad_input_patch.py, a site-packages .pth, routes self.xdisplay to :0 and
-    uses XTest instead of :2; auto-discovered at boot via DPAD_INPUT_DISPLAY)
+   (dpad_input_patch.py, a site-packages .pth, routes self.xdisplay to :0)
 ```
 
-**Latency reality:** input is direct (local XTest, sub-ms injection; latency ≈
-datachannel transport only). Video is **indirect** — the `:2` bridge adds two
-GPU↔CPU round-trips + two software `videoconvert` passes (~10–15 ms one-way)
-because Selkies 1.6.x can't read the PipeWire node directly. The **next
-optimization** is `pipewiresrc target-object=gamescope ! nvh264enc ! webrtcbin`
-(dmabuf straight into NVENC, zero-copy) — keeps the no-DRM-master advantage.
-See `PROJECT_STATE.md` "NEXT PRIORITY".
+**Latency reality:** input is direct (local XTest, sub-ms; latency ≈ datachannel
+transport only). Video is now **near-zero-copy-ish**: one GPU→CPU read (gamescope's
+PipeWire buffer, sysmem because gamescope advertises `modifier: 0`) + one CPU→GPU
+upload (`cudaupload`); the colorspace convert is on the GPU (`cudaconvert`). The
+old `:2` round-trip + both CPU `videoconvert` passes are gone. The FPS slider
+works via `videorate` (drops/duplicates to the requested rate; 15fps = lower
+bandwidth). `--enable_resize=false` fixes the stream at 1920×1080 (resize on a
+live PipeWire source would need a `videoscale` element — a known limitation).
+
+**Fallback:** `DPAD_VIDEO_SRC=ximagesrc` reverts to the validated `:2` bridge
+path (Selkies 1.6.x's original X11 capture) — useful if a gamescope/PipeWire
+change ever breaks the pipewiresrc path. The patcher
+(`scripts/patch_selkies_pipewire.py`, run from the Dockerfile) gates everything on
+`DPAD_VIDEO_SRC=pipewiresrc`; unset/`ximagesrc` = original Selkies behavior.
+
+**Architecture note:** the new `selkies-project/selkies` main is the Wayland-native
+pixelflux zero-copy stack — but it needs DRM master / a dummy plug on NVIDIA,
+which kills the no-DRM-master N-on-N-GPU multi-tenant model. Patching the old
+X11-only `selkies_gstreamer` v1.6.x to use `pipewiresrc` keeps the no-DRM-master
+advantage AND removes the `:2` detour. (gamescope's PipeWire node advertises
+`modifier: 0` = no dmabuf, so this is system-memory BGRx, not true dmabuf
+zero-copy — but the `:2` round-trip + CPU colorspace converts are gone.)
 
 ---
 
@@ -338,7 +350,10 @@ fresh boot skips the ~3–4 min Steam download.
 
 | Symptom | Cause / Fix |
 |---|---|
-| `502 Bad gateway` at the trycloudflare URL | Selkies crashed. `docker exec dpad-0 tail /tmp/selkies.log`. Most common: the python-xlib `add_extension_event` crash (`TypeError: 'type' object does not support item assignment` in xfixes.init) — fixed by `dpad_input_patch.py`'s monkey-patch (must be in site-packages + the `.pth`). |
+| `502 Bad gateway` at the trycloudflare URL | Selkies crashed. `docker exec dpad-0 tail /tmp/selkies.log`. Common: (a) python-xlib `add_extension_event` crash (`TypeError: 'type' object does not support item assignment` in xfixes.init) — fixed by `dpad_input_patch.py`'s monkey-patch; (b) pipewiresrc `target not found` + gamescope `Already had a buffer`/`stream state changed: error` — the gamescope PipeWire stream died. For (b): `always-copy=True` must be set on pipewiresrc (the patcher does this); if it still happens, set `DPAD_VIDEO_SRC=ximagesrc` to fall back to the `:2` bridge path. |
+| pipewiresrc `no more input formats` / `not-negotiated` + gamescope pipewire crash on browser connect | A 144Hz browser requested 144fps and `set_framerate` forced `framerate=144/1` on the live source (gamescope offers `0/1`). Fixed by the patcher: the pipewiresrc path keeps `format=BGRx` and uses `videorate` to throttle (never forces a framerate on the source). If it recurs, the patcher didn't run — check the Dockerfile step / `DPAD_VIDEO_SRC`. |
+| FPS slider doesn't change the framerate (stays ~60) | On the pipewiresrc path the `videorate` element must be present (the patcher adds it). Without it, the slider is cosmetic (gamescope is a live source). Verify `videorate` is in the pipeline (`GST_DEBUG=videorate:4`). |
+| pynput `ImportError: Can't connect to display ":0": Connection refused` at selkies start | `in_dpy` discovery picked a stale Xwayland display (gamescope restarted and picked a new number). Fixed: the discovery now takes the LAST `Starting Xwayland on :N` line. On a `docker restart` (vs a fresh `docker run`), stale `/tmp/.X11-unix/X*` sockets can also confuse gamescope — prefer a fresh `docker run`, or clean stale X sockets before restart. |
 | `mmap() failed: Cannot allocate memory` under gamescope | Host `vm.max_map_count` too low → set `1048576` (§2d). NOT a RAM issue. |
 | Steam "requires user namespaces to be enabled" / `unshare -U` EPERM as `dpad` | Host sysctls (§2c) unset OR container missing `--security-opt seccomp=unconfined apparmor=unconfined` + `--cap-add SYS_ADMIN`. Root `unshare -U` working is NOT enough — needs *unprivileged* userns. |
 | steamwebhelper crash-loop / "Failed creating offscreen shared JS context" | `--shm-size=2g` missing (CEF shared mem). |
