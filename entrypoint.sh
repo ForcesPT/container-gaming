@@ -319,7 +319,7 @@ start_gamescope_stream() {
     chmod 644 "$rtc"
 
     enc="${DPAD_GAMESCOPE_ENCODER:-nvh264enc}"
-    as_user "export DISPLAY=:2 XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --rtc_config_json='${rtc}' --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
+    as_user "export DISPLAY=:2 XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=false --rtc_config_json='${rtc}' --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
     sleep 6
     if pgrep -f selkies-gstreamer >/dev/null; then
         echo "    Selkies running on 127.0.0.1:16100 (gamescope bridge, encoder=${enc})"
