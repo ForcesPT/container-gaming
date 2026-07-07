@@ -283,6 +283,27 @@ start_gamescope_stream() {
         pgrep -x turnserver >/dev/null && echo "    coturn running" || echo "    WARNING: coturn failed (see /tmp/coturn.log)"
     fi
 
+    # PulseAudio (Selkies pulsesrc needs a source; gamescope mode skips the DFP
+    # pulseaudio start, so without this the audio pipeline fails with
+    # 'pulsesrc Connection refused' and the browser stays 'Waiting for stream').
+    if ! pgrep -x pulseaudio >/dev/null; then
+        echo "[*] Starting PulseAudio (headless null sink for Selkies audio)..."
+        mkdir -p "${XDG_RUNTIME_DIR}/pulse" 2>/dev/null
+        chmod 1777 "${XDG_RUNTIME_DIR}" "${XDG_RUNTIME_DIR}/pulse" 2>/dev/null
+        chown -R "${USER_NAME}:${USER_NAME}" "${XDG_RUNTIME_DIR}" 2>/dev/null
+        cat > /tmp/pulse-headless.pa <<EOF
+load-module module-native-protocol-unix socket=${XDG_RUNTIME_DIR}/pulse/native auth-anonymous=1
+load-module module-null-sink sink_name=dummy sink_properties=device.description="DummyOutput"
+load-module module-always-sink
+set-default-sink dummy
+set-default-source dummy.monitor
+EOF
+        chown "${USER_NAME}:${USER_NAME}" /tmp/pulse-headless.pa 2>/dev/null
+        as_user "unset PULSE_SERVER; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pulseaudio --start --log-target=stderr --disallow-exit --exit-idle-time=-1 -n -F /tmp/pulse-headless.pa" >/tmp/pulse.log 2>&1 || echo "    WARNING: pulseaudio start failed (see /tmp/pulse.log)"
+        sleep 2
+        pgrep -x pulseaudio >/dev/null && echo "    pulseaudio running" || echo "    WARNING: pulseaudio failed (see /tmp/pulse.log)"
+    fi
+
     rtc=/tmp/rtc_config.json
     printf '%s' "{\"iceServers\":[{\"urls\":[\"turn:127.0.0.1:${TURN_PORT_LISTEN:-${TURN_PORT_EXT}}?transport=tcp\"],\"username\":\"${TURN_USER}\",\"credential\":\"${TURN_PASS}\"},{\"urls\":[\"turn:${PUBLIC_IP}:${TURN_PORT_EXT}?transport=tcp\"],\"username\":\"${TURN_USER}\",\"credential\":\"${TURN_PASS}\"}],\"iceTransportPolicy\":\"all\"}" > "$rtc"
     chmod 644 "$rtc"
