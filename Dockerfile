@@ -414,6 +414,25 @@ RUN mkdir -p ${HOME}/.steam/debian-installation/compatibilitytools.d && \
     ln -s ${HOME}/.steam/debian-installation ${HOME}/.steam/root && \
     chown -R ${USERNAME}:${USERNAME} ${HOME}/.steam
 
+# -----------------------------------------------------------------------------
+# 9g. Pre-bootstrap the full Steam client at BUILD TIME (downloads ~300MB once,
+#     baked into the image) so a fresh-boot container's entrypoint
+#     bootstrap_steam_on_xvfb() is a no-op and gamescope+Steam come up in ~40s
+#     instead of a ~3-4min first-run download. Runs on Xvfb :8 + mesa/llvmpipe
+#     (software GL — NO GPU needed; works in a plain `docker build`). Does NOT
+#     log in (just downloads the client) -> no Steam Guard at build. The zenity
+#     wrapper (step 4c) auto-accepts the license prompt. Best-effort: always
+#     succeeds; if the download fails the entrypoint re-bootstraps at runtime.
+#     Placed BEFORE step 10's COPY so editing entrypoint/scripts does NOT
+#     invalidate this expensive layer. Idempotent (skips if steamwebhelper is
+#     already present), so it is also a no-op on layer-cache rebuilds.
+# -----------------------------------------------------------------------------
+COPY scripts/build-bootstrap-steam.sh /tmp/build-bootstrap-steam.sh
+RUN chmod +x /tmp/build-bootstrap-steam.sh \
+    && /tmp/build-bootstrap-steam.sh \
+    && rm -f /tmp/build-bootstrap-steam.sh \
+    && chown -R ${USERNAME}:${USERNAME} ${HOME}/.steam
+
 # =============================================================================
 # 10. Copy configs + entrypoint + launcher scripts + display-driver installer
 # =============================================================================
