@@ -311,6 +311,15 @@ COPY scripts/patch_selkies_pipewire.py /opt/dpadcloud/patch_selkies_pipewire.py
 RUN python3 /opt/dpadcloud/patch_selkies_pipewire.py /usr/local/lib/python3.12/dist-packages/selkies_gstreamer/gstwebrtc_app.py \
     && rm -f /opt/dpadcloud/patch_selkies_pipewire.py
 
+# gamescope headless does not composite the X cursor into its PipeWire output, so
+# the only visible cursor source is Selkies' XFIXES cursor overlay. This patcher
+# injects a gate into the web client's input.js that disables Selkies' auto
+# pointer-lock (which hides the CSS cursor) so the server cursor stays visible +
+# mouse stays absolute for UI nav. Idempotent; re-applied by the entrypoint too.
+COPY scripts/patch_gst_web_cursors.sh /opt/dpadcloud/patch_gst_web_cursors.sh
+RUN chmod +x /opt/dpadcloud/patch_gst_web_cursors.sh \
+    && /opt/dpadcloud/patch_gst_web_cursors.sh /opt/gst-web/input.js
+
 # =============================================================================
 # 7b. Install moonlight-web-stream (PRIMARY browser path: Sunshine NVENC -> WebRTC)
 #     Prebuilt x86_64-unknown-linux-gnu release requires glibc 2.39 (= noble),

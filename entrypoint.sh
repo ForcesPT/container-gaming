@@ -387,7 +387,7 @@ start_gamescope_stream() {
     local selkies_dpy=":2"
     [ "$video_src" = "pipewiresrc" ] && selkies_dpy="${in_dpy:-:0}"
 
-    as_user "export DISPLAY=${selkies_dpy} DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=${in_dpy} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=false --rtc_config_json='${rtc}' --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
+    as_user "export DISPLAY=${selkies_dpy} DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=${in_dpy} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
     sleep 6
     if pgrep -f selkies-gstreamer >/dev/null; then
         echo "    Selkies running on 127.0.0.1:16100 (gamescope bridge, encoder=${enc})"
@@ -414,6 +414,13 @@ start_gamescope_stream() {
 # this function currently gets the Steam UI rendering in headless gamescope.
 start_gamescope_session() {
     echo "[*] DPAD_GAMESCOPE mode: gamescope --backend headless + Steam (no DRM master)"
+    # gamescope headless does NOT composite the X cursor into its PipeWire output,
+    # so the only visible cursor source is Selkies' XFIXES cursor overlay. Enable it
+    # (cursors=true) AND gate the web client's auto pointer-lock so the CSS cursor
+    # stays visible (pointer lock hides the CSS cursor) + mouse stays absolute for
+    # UI navigation. (The dpad_input_patch.py .pth makes XFIXES safe; the old
+    # crash was when the :2 bridge was broken.)
+    bash /opt/dpadcloud/patch_gst_web_cursors.sh "${SELKIES_WEB_ROOT}/input.js" 2>/dev/null || true
     local GS_W GS_H STEAM_ARGS
     GS_W="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f1)"
     GS_H="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f2)"
