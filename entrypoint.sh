@@ -493,17 +493,37 @@ start_gamescope_session() {
     # re-enables the legacy /dev/input/js* backend — it uses JSIOCG* ioctls + reads
     # 8-byte js_event structs (exactly what the v1.6.2 interposer + Selkies' gamepad.py
     # serve; validated: JSIOCGVERSION/NAME/AXES/BUTTONS/AXMAP/BTNMAP all handled).
-    # SDL_JOYSTICK_DEVICE makes SDL3 call MaybeAddDevice("/dev/input/js0") directly
-    # (no udev enumeration; SDL3 also auto-disables udev in containers). Together
-    # the two hints route Steam's SDL3 to /dev/input/js0 -> interposer -> Selkies.
-    # No fake-libudev / evdev-interposer / dual-serve needed for this path.
+    # SDL3 auto-disables udev in containers (SDL_GetSandbox()) and uses the fallback
+    # path, which hotplugs via inotify on /dev/input (IN_CREATE -> MaybeAddDevice for
+    # js* nodes in classic mode) + a 3s scandir poll if /dev/input mtime changes.
+    #
+    # Timing race (the gotcha): SDL3 enumerates joysticks ONCE at SDL_Init (Steam
+    # startup), BEFORE the browser gamepad connects (the user presses a button only
+    # after the Steam UI is up). If /dev/input/jsN exists at boot but the Selkies
+    # socket /tmp/selkies_jsN.sock doesn't yet, the interposer's open() fails to
+    # connect and SDL3 sees no controller (and doesn't re-scan unless a NEW js node
+    # appears). Fix: do NOT pre-create /dev/input/js* at boot. Instead a root watcher
+    # daemon creates /dev/input/jsN (major 13) the instant Selkies' gamepad socket
+    # /tmp/selkies_jsN.sock appears (Selkies creates it when the browser connects a
+    # controller), and removes it when the socket goes. The node creation fires SDL3's
+    # inotify IN_CREATE -> MaybeAddDevice("/dev/input/jsN") -> open intercepted by the
+    # interposer -> the now-existing socket -> Steam hotplugs the controller. (mknod
+    # needs root; Selkies runs as dpad, so the watcher runs as root here.)
     export SELKIES_INTERPOSER='/usr/$LIB/selkies_joystick_interposer.so'
     mkdir -pm1777 /dev/input 2>/dev/null
-    # mknod real char-device nodes (major 13) so SDL3's stat()/access() probes
-    # succeed before it open()s; a touched regular file can fail the char-device
-    # probe in some SDL3 paths. Best-effort (mknod needs root; entrypoint is root).
-    for i in 0 1 2 3; do [ -e "/dev/input/js$i" ] || mknod "/dev/input/js$i" c 13 "$i" 2>/dev/null || touch "/dev/input/js$i"; done
-    chmod 666 /dev/input/js* 2>/dev/null || true
+    rm -f /dev/input/js0 /dev/input/js1 /dev/input/js2 /dev/input/js3 2>/dev/null || true
+    # Root gamepad-hotplug watcher: mknod /dev/input/jsN when Selkies' gamepad socket
+    # appears, rm it when the socket goes (so a reconnect re-triggers IN_CREATE).
+    ( while true; do
+          for n in 0 1 2 3; do
+            if [ -S "/tmp/selkies_js${n}.sock" ] && [ ! -e "/dev/input/js${n}" ]; then
+              mknod "/dev/input/js${n}" c 13 "${n}" 2>/dev/null && chmod 666 "/dev/input/js${n}" 2>/dev/null
+            elif [ ! -S "/tmp/selkies_js${n}.sock" ] && [ -e "/dev/input/js${n}" ]; then
+              rm -f "/dev/input/js${n}" 2>/dev/null
+            fi
+          done
+          sleep 0.3
+      done ) &
     # as_user (su) strips the parent env, so LD_PRELOAD/SDL_JOYSTICK_* must be
     # re-exported explicitly inside each gamescope+Steam launch below.
     export LD_PRELOAD="${SELKIES_INTERPOSER}${LD_PRELOAD:+:${LD_PRELOAD}}"
