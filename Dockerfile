@@ -260,8 +260,13 @@ RUN cd /tmp && wget -q --show-progress \
 # used to rebuild the .so after the deb install below.
 COPY scripts/joystick_interposer_v162.c /tmp/joystick_interposer_v162.c
 
+# gcc-multilib + libc6-dev-i386 are REQUIRED so `gcc -m32` can rebuild the i386
+# interposer below (Steam's main binary is 32-bit -> loads the i386 .so). Without
+# these, the i386 rebuild silently no-ops and the OLD unpatched deb .so (JSIOCGNAME
+# returns 0 -> SDL3 rejects the device) ships in the image -> no gamepad.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 python3-pip python3-dev build-essential libevdev-dev libudev-dev \
+      python3 python3-pip python3-dev build-essential gcc-multilib libc6-dev-i386 \
+      libevdev-dev libudev-dev \
       python3-gi python3-gi-cairo gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
       glib-networking libgudev-1.0-0 \
       libgcrypt20 libjack-jackd2-0 alsa-utils x264 x265 aom-tools libopenh264-dev \
@@ -285,7 +290,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # upstream v1.6.2 returns 0; rebuild the .so from the patched source (COPY'd
     # above) so SDL3 accepts the Selkies virtual gamepad.
     gcc -shared -fPIC -O2 -ldl -o /usr/lib/x86_64-linux-gnu/selkies_joystick_interposer.so /tmp/joystick_interposer_v162.c && \
-    gcc -shared -fPIC -O2 -m32 -ldl -o /usr/lib/i386-linux-gnu/selkies_joystick_interposer.so /tmp/joystick_interposer_v162.c 2>/dev/null || true && \
+    gcc -shared -fPIC -O2 -m32 -ldl -o /usr/lib/i386-linux-gnu/selkies_joystick_interposer.so /tmp/joystick_interposer_v162.c && \
     rm -f /tmp/joystick_interposer_v162.c && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/debconf/* /var/log/* /tmp/* /var/tmp/*
 
