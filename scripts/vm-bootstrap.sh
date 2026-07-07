@@ -269,8 +269,10 @@ run_container_for() {
     [ -z "$img_tag" ] && { err "no image tag ($TAG_FILE)"; return 1; }
 
     local port=$(( TURN_BASE_PORT + idx ))
-    local vast_var="VAST_TCP_PORT_${port}"
-    local ext_port="${!vast_var:-}"
+    local tcp_var="VAST_TCP_PORT_${port}"
+    local udp_var="VAST_UDP_PORT_${port}"
+    local tcp_ext="${!tcp_var:-}"
+    local udp_ext="${!udp_var:-}"
     local pub_ip="${PUBLIC_IPADDR:-}"
     local name="${CONTAINER_PREFIX}-${idx}"
     local sess_pass; sess_pass="$(session_password "$idx")"
@@ -283,40 +285,37 @@ run_container_for() {
         docker rm -f "$name" >/dev/null; log "removed stopped $name"
     fi
 
-    if [ -z "$ext_port" ]; then
-        err "VAST_TCP_PORT_${port} is empty — port ${port}/tcp was NOT exposed at VM creation."
-        err "Skipping $name (GPU $idx). Expose -p ${port}:${port} to serve this GPU."
+    # Vast forbids the same port as BOTH tcp and udp, so a session exposes EITHER
+    # -p port:port (tcp) OR -p port:port/udp (udp, lower latency). Require at least
+    # one; UDP is preferred when both are somehow set (other providers allow both).
+    if [ -z "$tcp_ext" ] && [ -z "$udp_ext" ]; then
+        err "VAST_TCP_PORT_${port} and VAST_UDP_PORT_${port} are both empty — port ${port} was NOT exposed at VM creation."
+        err "Skipping $name (GPU $idx). Expose -p ${port}:${port} (tcp) or -p ${port}:${port}/udp (lower latency) to serve this GPU."
         return 0   # not fatal — serve as many GPUs as we have exposed ports for
     fi
 
     local -a iso=()
     while IFS= read -r a; do iso+=( "$a" ); done < <(isolation_args "$idx")
 
-    log "launching $name : GPU $idx, coturn ${port} -> ext ${ext_port}, public ${pub_ip:-<?>}"
+    log "launching $name : GPU $idx, coturn ${port} -> tcp_ext ${tcp_ext:-<none>}, udp_ext ${udp_ext:-<none>}, public ${pub_ip:-<?>}"
     # DPAD_GAMESCOPE=1 switches the container to the gamescope headless + Steam
     # multi-tenant path (no DRM master). Pass-through DPAD_GAMESCOPE/DPAD_STEAM_ARGS
     # so the on-start can opt in without editing the bootstrap.
     local -a gs_env=()
     [ -n "${DPAD_GAMESCOPE:-}" ]  && gs_env+=( -e "DPAD_GAMESCOPE=${DPAD_GAMESCOPE}" )
     [ -n "${DPAD_STEAM_ARGS:-}" ] && gs_env+=( -e "DPAD_STEAM_ARGS=${DPAD_STEAM_ARGS}" )
-    # UDP TURN (lower latency than TCP): if the VM exposed -p ${port}:${port}/udp,
-    # Vast injects VAST_UDP_PORT_${port}. Forward the UDP port to the container and
-    # pass the external UDP port so the entrypoint adds a UDP ICE entry. coturn
-    # already listens UDP; both peers on the same coturn short-circuit the relay,
-    # so only the listen port needs mapping (no relay range to expose).
-    local udp_var="VAST_UDP_PORT_${port}"
-    local udp_ext="${!udp_var:-}"
-    local -a udp_args=()
-    if [ -n "$udp_ext" ]; then
-        udp_args+=( -p "${port}:${port}/udp" -e "DPAD_TURN_UDP_EXTERNAL_PORT=${udp_ext}" )
-        log "  UDP TURN enabled: ${port}/udp -> ext ${udp_ext} (lower latency than TCP)"
-    fi
+    # Map + pass whichever protocol(s) are exposed. coturn listens both tcp+udp
+    # internally; only the mapped protocol is reachable externally. With both
+    # WebRTC peers on the same coturn the relay short-circuits internally, so only
+    # the listen port needs mapping (no relay port range to expose).
+    local -a port_args=()
+    [ -n "$tcp_ext" ] && port_args+=( -p "${port}:${port}"       -e "DPAD_TURN_EXTERNAL_PORT=${tcp_ext}" )
+    [ -n "$udp_ext" ] && port_args+=( -p "${port}:${port}/udp" -e "DPAD_TURN_UDP_EXTERNAL_PORT=${udp_ext}" )
     docker run -d --name "$name" \
         "${iso[@]}" --shm-size=2g --ulimit nofile=1048576:1048576 \
-        -p "${port}:${port}" \
-        "${udp_args[@]}" \
+        "${port_args[@]}" \
         -e DPAD_PROVIDER=runpod -e DPAD_COTURN_PORT="$port" \
-        -e "DPAD_TURN_PUBLIC_IP=${pub_ip}" -e "DPAD_TURN_EXTERNAL_PORT=${ext_port}" \
+        -e "DPAD_TURN_PUBLIC_IP=${pub_ip}" \
         -e "SUNSHINE_PASSWORD=${sess_pass}" \
         -e "SELKIES_BASIC_AUTH_USER=${SELKIES_USER}" \
         -e "SELKIES_BASIC_AUTH_PASSWORD=${sess_pass}" \

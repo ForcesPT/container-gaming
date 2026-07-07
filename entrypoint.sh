@@ -323,30 +323,35 @@ start_gamescope_stream() {
     fi
 
     rtc=/tmp/rtc_config.json
-    # Resolve the external UDP port: DPAD_TURN_UDP_EXTERNAL_PORT (manual) or
-    # VAST_UDP_PORT_<listen> (Vast injects it when you expose -p <listen>:<listen>/udp).
-    # coturn already listens UDP (no --no-udp); with both WebRTC peers on the
-    # same coturn the relay short-circuits internally, so only the listen port
-    # needs a UDP map (no relay port range to expose).
     _listen="${TURN_PORT_LISTEN:-${TURN_PORT_EXT}}"
-    TURN_PORT_UDP_EXT="${DPAD_TURN_UDP_EXTERNAL_PORT:-$(printenv VAST_UDP_PORT_${_listen} 2>/dev/null || true)}"
-    # iceServers: UDP first (lower latency — no TCP head-of-line blocking) when a
-    # UDP external port is mapped, then TCP (always; fallback where UDP is blocked).
-    # Both the in-container (127.0.0.1) + browser (public) entries per protocol.
+    # Real external ports per protocol (empty if that protocol's port wasn't exposed
+    # at the VM). Vast forbids the same port as BOTH tcp and udp, so usually only
+    # ONE is set; emit ICE entries only for the exposed protocol(s) — UDP for low
+    # latency, TCP as a fallback on providers that allow both. coturn already
+    # listens both (no --no-udp); with both peers on the same coturn the relay
+    # short-circuits internally, so only the listen port needs mapping.
+    TCP_EXT="${DPAD_TURN_EXTERNAL_PORT:-$(printenv VAST_TCP_PORT_${_listen} 2>/dev/null || true)}"
+    UDP_EXT="${DPAD_TURN_UDP_EXTERNAL_PORT:-$(printenv VAST_UDP_PORT_${_listen} 2>/dev/null || true)}"
     _ices=""
     add_ice() { [ -n "$_ices" ] && _ices+=","; _ices+="{\"urls\":[\"$1\"],\"username\":\"${TURN_USER}\",\"credential\":\"${TURN_PASS}\"}"; }
-    if [ -n "$TURN_PORT_UDP_EXT" ]; then
+    if [ -n "$UDP_EXT" ]; then
         add_ice "turn:127.0.0.1:${_listen}?transport=udp"
-        add_ice "turn:${PUBLIC_IP}:${TURN_PORT_UDP_EXT}?transport=udp"
+        add_ice "turn:${PUBLIC_IP}:${UDP_EXT}?transport=udp"
     fi
-    add_ice "turn:127.0.0.1:${_listen}?transport=tcp"
-    add_ice "turn:${PUBLIC_IP}:${TURN_PORT_EXT}?transport=tcp"
+    if [ -n "$TCP_EXT" ]; then
+        add_ice "turn:127.0.0.1:${_listen}?transport=tcp"
+        add_ice "turn:${PUBLIC_IP}:${TCP_EXT}?transport=tcp"
+    fi
     printf '%s' "{\"iceServers\":[${_ices}],\"iceTransportPolicy\":\"all\"}" > "$rtc"
     chmod 644 "$rtc"
-    if [ -n "$TURN_PORT_UDP_EXT" ]; then
-        echo "    TURN: UDP turn:${PUBLIC_IP}:${TURN_PORT_UDP_EXT} (lower latency) + TCP turn:${PUBLIC_IP}:${TURN_PORT_EXT} (fallback)"
+    if [ -z "$_ices" ]; then
+        echo "    WARNING: no TURN port exposed (need -p ${_listen}:${_listen}/udp or /tcp) — WebRTC media will fail"
+    elif [ -n "$UDP_EXT" ] && [ -n "$TCP_EXT" ]; then
+        echo "    TURN: UDP turn:${PUBLIC_IP}:${UDP_EXT} (lower latency) + TCP turn:${PUBLIC_IP}:${TCP_EXT} (fallback)"
+    elif [ -n "$UDP_EXT" ]; then
+        echo "    TURN: UDP turn:${PUBLIC_IP}:${UDP_EXT} (lower latency; no TCP fallback — Vast forbids same-port tcp+udp)"
     else
-        echo "    TURN: TCP only turn:${PUBLIC_IP}:${TURN_PORT_EXT} (expose -p ${_listen}:${_listen}/udp for lower-latency UDP TURN)"
+        echo "    TURN: TCP turn:${PUBLIC_IP}:${TCP_EXT} (expose -p ${_listen}:${_listen}/udp for lower-latency UDP TURN)"
     fi
 
     enc="${DPAD_GAMESCOPE_ENCODER:-nvh264enc}"
