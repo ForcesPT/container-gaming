@@ -252,6 +252,55 @@ bootstrap_steam_on_xvfb() {
     fi
 }
 
+# --- Stage 2: bridge gamescope's PipeWire node to Xvfb :2 -> Selkies (ximagesrc) ---
+# Selkies v1.6.x only does ximagesrc (no pipewiresrc option), and gamescope's
+# headless Xwayland has no root pixmap (ximagesrc on gamescope's :0 is black).
+# So we bridge: Xvfb :2 + (pipewiresrc target-object=gamescope ! videoconvert !
+# ximagesink display=:2), then Selkies ximagesrc-captures :2 -> nvh264enc ->
+# WebRTC -> coturn -> cloudflared. Validated on-instance: the bridge paints real
+# gamescope UI content onto :2 (1.1MB captured frame). Needs gstreamer1.0-tools
+# (gst-launch-1.0) in the image — added in the Dockerfile gamescope step.
+start_gamescope_stream() {
+    echo "[*] Stage 2: bridging gamescope PipeWire node -> Xvfb :2 -> Selkies"
+    local GS_W GS_H enc rtc url
+    GS_W="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f1)"; [ -z "$GS_W" ] && GS_W=1920
+    GS_H="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f2)"; [ -z "$GS_H" ] && GS_H=1080
+
+    as_user "Xvfb :2 -screen 0 ${GS_W}x${GS_H}x24 +extension GLX +extension RANDR >/tmp/xvfb2.log 2>&1 &" 2>/dev/null
+    sleep 2
+    as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; gst-launch-1.0 pipewiresrc target-object=gamescope ! videoconvert ! ximagesink display=:2 sync=false force-aspect-ratio=false >/tmp/bridge.log 2>&1 &" 2>/dev/null
+    sleep 3
+
+    if ! pgrep -x turnserver >/dev/null; then
+        echo "[*] Starting coturn on ${TURN_PORT_EXT}..."
+        turnserver -n -a --lt-cred-mech --fingerprint --no-stun --no-multicast-peers --no-cli --listening-ip=0.0.0.0 --realm=dpadcloud --user="${TURN_USER}:${TURN_PASS}" -p "${TURN_PORT_LISTEN:-${TURN_PORT_EXT}}" -X "${PUBLIC_IP:-localhost}" >/tmp/coturn.log 2>&1 &
+        sleep 2
+        pgrep -x turnserver >/dev/null && echo "    coturn running" || echo "    WARNING: coturn failed (see /tmp/coturn.log)"
+    fi
+
+    rtc=/tmp/rtc_config.json
+    printf '%s' "{\"iceServers\":[{\"urls\":[\"turn:127.0.0.1:${TURN_PORT_LISTEN:-${TURN_PORT_EXT}}?transport=tcp\"],\"username\":\"${TURN_USER}\",\"credential\":\"${TURN_PASS}\"},{\"urls\":[\"turn:${PUBLIC_IP}:${TURN_PORT_EXT}?transport=tcp\"],\"username\":\"${TURN_USER}\",\"credential\":\"${TURN_PASS}\"}],\"iceTransportPolicy\":\"all\"}" > "$rtc"
+    chmod 644 "$rtc"
+
+    enc="${DPAD_GAMESCOPE_ENCODER:-nvh264enc}"
+    as_user "export DISPLAY=:2 XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --rtc_config_json='${rtc}' --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
+    sleep 6
+    if pgrep -f selkies-gstreamer >/dev/null; then
+        echo "    Selkies running on 127.0.0.1:16100 (gamescope bridge, encoder=${enc})"
+    else
+        echo "    WARNING: selkies failed (see /tmp/selkies.log)"; tail -20 /tmp/selkies.log 2>/dev/null | sed 's/^/      /'
+    fi
+
+    cloudflared tunnel --no-autoupdate --url http://localhost:16100 >/tmp/cloudflared-selkies.log 2>&1 &
+    sleep 10
+    url="$(grep -oE 'https://[a-z0-9.-]+trycloudflare.com' /tmp/cloudflared-selkies.log 2>/dev/null | head -1)"
+    if [ -n "$url" ]; then
+        echo "    ▶ gamescope browser stream: ${url}  (login ${SELKIES_USER} / ${SELKIES_PASS})"
+    else
+        echo "    Selkies tunnel URL not captured (see /tmp/cloudflared-selkies.log)"
+    fi
+}
+
 # --- DPAD_GAMESCOPE mode: gamescope --backend headless + Steam (multi-tenant) ---
 # Renders the Steam UI on the GPU via Vulkan/gamescope-WSI with NO DRM master, so
 # N sessions on N GPUs in one VM don't contend for the nvidia-modeset singleton.
@@ -318,7 +367,8 @@ start_gamescope_session() {
     fi
     echo "    gamescope+steam log: /tmp/gamescope-steam.log"
     echo "    GPU: $(nvidia-smi -L 2>/dev/null | head -1)"
-    echo "    NOTE: capture/stream (PipeWire -> NVENC -> WebRTC) not yet wired in this mode."
+    echo "    NOTE: capture via PipeWire->Xvfb:2 bridge -> Selkies (ximagesrc)."
+    start_gamescope_stream
 
     # health loop — restart the gamescope+steam session if gamescope dies.
     # `kill -0 $gs_pid` (not `pgrep -x gamescope` — see note above) checks the

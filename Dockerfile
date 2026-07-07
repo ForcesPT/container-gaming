@@ -370,7 +370,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     add-apt-repository -y ppa:3v1n0/gamescope && \
     apt-get update && apt-get install -y --no-install-recommends \
         gamescope pipewire wireplumber pipewire-audio-client-libraries \
-        libeis-dev gstreamer1.0-pipewire libpipewire-0.3-dev && \
+        libeis-dev gstreamer1.0-pipewire libpipewire-0.3-dev \
+        gstreamer1.0-tools gstreamer1.0-plugins-good gstreamer1.0-plugins-bad && \
     for b in gamescope gamescopereaper gamescopestream gamescopectl; do \
         [ -e /usr/games/$b ] && ln -sf /usr/games/$b /usr/bin/$b; \
     done && \
