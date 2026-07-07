@@ -23,6 +23,10 @@
 #   2 GPUs: -p 3478:3478 -p 3479:3479
 #   4 GPUs: -p 3478:3478 -p 3479:3479 -p 3480:3480 -p 3481:3481
 # (general: -p 3478..(3478+N-1)). Vast's 64-port limit → up to 64 users/VM.
+# Add the matching UDP ports (-p 3478:3478/udp ...) to enable lower-latency UDP
+# TURN (Vast injects VAST_UDP_PORT_<internal>). coturn already listens UDP; with
+# both WebRTC peers on the same coturn the relay short-circuits internally, so
+# only the listen port needs a UDP map (no relay port range to expose).
 # A GPU whose port wasn't exposed is skipped (with a warning); the rest still run.
 #
 # Reboot safety: phase 1 may `reboot` once. This script installs itself as a
@@ -295,9 +299,22 @@ run_container_for() {
     local -a gs_env=()
     [ -n "${DPAD_GAMESCOPE:-}" ]  && gs_env+=( -e "DPAD_GAMESCOPE=${DPAD_GAMESCOPE}" )
     [ -n "${DPAD_STEAM_ARGS:-}" ] && gs_env+=( -e "DPAD_STEAM_ARGS=${DPAD_STEAM_ARGS}" )
+    # UDP TURN (lower latency than TCP): if the VM exposed -p ${port}:${port}/udp,
+    # Vast injects VAST_UDP_PORT_${port}. Forward the UDP port to the container and
+    # pass the external UDP port so the entrypoint adds a UDP ICE entry. coturn
+    # already listens UDP; both peers on the same coturn short-circuit the relay,
+    # so only the listen port needs mapping (no relay range to expose).
+    local udp_var="VAST_UDP_PORT_${port}"
+    local udp_ext="${!udp_var:-}"
+    local -a udp_args=()
+    if [ -n "$udp_ext" ]; then
+        udp_args+=( -p "${port}:${port}/udp" -e "DPAD_TURN_UDP_EXTERNAL_PORT=${udp_ext}" )
+        log "  UDP TURN enabled: ${port}/udp -> ext ${udp_ext} (lower latency than TCP)"
+    fi
     docker run -d --name "$name" \
         "${iso[@]}" --shm-size=2g --ulimit nofile=1048576:1048576 \
         -p "${port}:${port}" \
+        "${udp_args[@]}" \
         -e DPAD_PROVIDER=runpod -e DPAD_COTURN_PORT="$port" \
         -e "DPAD_TURN_PUBLIC_IP=${pub_ip}" -e "DPAD_TURN_EXTERNAL_PORT=${ext_port}" \
         -e "SUNSHINE_PASSWORD=${sess_pass}" \
