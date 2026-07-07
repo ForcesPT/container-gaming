@@ -40,6 +40,7 @@ docker run -d --name dpad-0 --runtime=nvidia --cap-add SYS_ADMIN \
 # 3) Watch the boot log (~40-60s after the build-time Steam pre-bootstrap is baked):
 docker logs -f dpad-0
 # look for: GAMESCOPE SESSION READY → input -> gamescope Xwayland :0 → Selkies running → ▶ gamescope browser stream: https://…trycloudflare.com
+#   (gamepad: connect a controller in the browser + press a button; Steam Big Picture should detect "Selkies Controller". Check: docker exec dpad-0 tail /tmp/selkies_js.log)
 # then open that URL (login dpad / pass0) — video + audio + keyboard + mouse all work.
 ```
 
@@ -306,6 +307,7 @@ A healthy gamescope-mode boot prints, in order:
 [*] Stage 2: bridging gamescope PipeWire node -> Xvfb :2 -> Selkies
     Xvfb :2 up  /  bridge gst running  /  audio socket OK
     input -> gamescope Xwayland :0 (XTest, DPAD_INPUT_DISPLAY=:0)    # Stage 3a auto-discovery
+    gamepad: SDL_JOYSTICK_LINUX_CLASSIC=1 + SDL_JOYSTICK_DEVICE=/dev/input/js0 -> v1.6.2 interposer -> /tmp/selkies_js0.sock (Stage 3b)
     Selkies running on 127.0.0.1:16100 (gamescope bridge, encoder=nvh264enc)
     ▶ gamescope browser stream: https://<words>.trycloudflare.com  (login dpad / pass0)
 ```
@@ -392,6 +394,8 @@ fresh boot skips the ~3–4 min Steam download.
 | `gst ... no element "ximagesink"` (the bridge fails) | System gstreamer lacks ximagesink. Fix: `gstreamer1.0-x` (+ `gstreamer1.0-plugins-base`) in the image. A stale gst registry right after apt install can fail once → `rm -rf ~/.cache/gstreamer-1.0` + retry. |
 | Selkies XFIXES cursor monitor crashes (`Xlib.error.ConnectionClosedError`) → session loops | Fix: `--enable_cursors=false` on the Selkies launch (gamescope's cursor is already in the captured frame). |
 | `BadRRModeError` / `failed to send keypress` spam | pynput keyboard touches RANDR modes on gamescope's Xwayland. `dpad_input_patch.py` uses XTest only (no pynput fallback). |
+| Gamepad not detected by Steam / no controller in Big Picture | (a) The browser gamepad wasn't connected — in the Selkies web UI, press a button on your controller so the web client sends the gamepad-connect message (Selkies then creates `/tmp/selkies_js0.sock`; verify with `docker exec dpad-0 ls /tmp/selkies_js*.sock`). (b) Steam's SDL3 didn't take the classic path — confirm `docker exec dpad-0 tail /tmp/selkies_js.log` shows `Intercepted open call for /dev/input/js0`; if not, verify `SDL_JOYSTICK_LINUX_CLASSIC=1` + `SDL_JOYSTICK_DEVICE=/dev/input/js0` are in Steam's env (`docker exec dpad-0 bash -lc "P=\$(pgrep -x steam); tr '\0' '\n' < /proc/\$P/environ | grep SDL_JOYSTICK"`) and that `/dev/input/js0` is a char device (`ls -la /dev/input/js0`). If SDL3 ignores the hint, switch to the evdev fallback (`scripts/gamepad-evdev-fallback/README.md`). |
+| `/tmp/selkies_js.log` shows `Intercepted open call` but Steam still doesn't show the controller | The interposer + socket path works (the probe sequence is handled); the issue is Steam Input mapping / SDL3 not surfacing the joystick. Try `SDL_JOYSTICK_LINUX_CLASSIC=1` also on the game's launch options; verify with `jstest /dev/input/js0` under the interposer. |
 | `webrtcnice ... failed to resolve "<uuid>.local": Temporary failure in name resolution` | Harmless — Chrome's mDNS `.local` ICE candidates the container can't resolve; the connection succeeds via the TURN relay candidate. Don't chase. |
 | `remote resize is disabled, skipping resize to 2552x1308` | Harmless — hi-DPI browser asked for a bigger size; `--enable_resize=false` fixes the stream at 1920x1080. |
 | NVENC `element NOT FOUND` / `NV_ENC_ERR_UNSUPPORTED_DEVICE` on multi-GPU hosts | nvidia-container-toolkit #1249 (driver 570+). Fix: the flexgrip `libnvenc_fix.so` interposer (auto-enabled when host GPUs > mounted `/dev/nvidiaX` on driver 570..609). Single-GPU hosts (`gpu_frac=1`) are immune on any driver. |
