@@ -256,6 +256,10 @@ RUN cd /tmp && wget -q --show-progress \
 #    path above is the primary browser path on those drivers; Selkies is the
 #    fallback for driver <570 or as a second opinion.)
 # =============================================================================
+# Selkies v1.6.2 joystick interposer source (patched: JSIOCGNAME returns name length)
+# used to rebuild the .so after the deb install below.
+COPY scripts/joystick_interposer_v162.c /tmp/joystick_interposer_v162.c
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-dev build-essential libevdev-dev libudev-dev \
       python3-gi python3-gi-cairo gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
@@ -274,6 +278,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cd /tmp && curl -o selkies-js-interposer.deb -fsSL "https://github.com/selkies-project/selkies/releases/download/v${SELKIES_VERSION}/selkies-js-interposer_v${SELKIES_VERSION}_ubuntu${UBUNTU_VER}_${ARCH}.deb" && \
     apt-get update && apt-get install -y --no-install-recommends ./selkies-js-interposer.deb && \
     rm -f selkies-js-interposer.deb && \
+    # PATCH the v1.6.2 interposer: JSIOCGNAME must return the name LENGTH, not 0.
+    # SDL3's IsJoystick treats ioctl(JSIOCGNAME) <= 0 as failure and rejects the
+    # device (falls into GuessIsJoystick evdev probes, which the interposer doesn't
+    # hook -> goto error -> device not added -> Steam never sees a gamepad). The
+    # upstream v1.6.2 returns 0; rebuild the .so from the patched source (COPY'd
+    # above) so SDL3 accepts the Selkies virtual gamepad.
+    gcc -shared -fPIC -O2 -ldl -o /usr/lib/x86_64-linux-gnu/selkies_joystick_interposer.so /tmp/joystick_interposer_v162.c && \
+    gcc -shared -fPIC -O2 -m32 -ldl -o /usr/lib/i386-linux-gnu/selkies_joystick_interposer.so /tmp/joystick_interposer_v162.c 2>/dev/null || true && \
+    rm -f /tmp/joystick_interposer_v162.c && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/debconf/* /var/log/* /tmp/* /var/tmp/*
 
 # Stage 3a: Selkies input router for the gamescope path. Auto-loaded at Python
