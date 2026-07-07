@@ -380,7 +380,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
         gamescope pipewire pipewire-audio pipewire-pulse pipewire-audio-client-libraries \
         wireplumber libeis-dev gstreamer1.0-pipewire libpipewire-0.3-dev \
         gstreamer1.0-tools gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-        pulseaudio-utils && \
+        gstreamer1.0-x gstreamer1.0-plugins-base pulseaudio-utils && \
     for b in gamescope gamescopereaper gamescopestream gamescopectl; do \
         [ -e /usr/games/$b ] && ln -sf /usr/games/$b /usr/bin/$b; \
     done && \
