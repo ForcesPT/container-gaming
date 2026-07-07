@@ -1,0 +1,2 @@
+# dpad_gamepad_patch.pth auto-loader (mirrors dpad_input_patch.pth)
+import dpad_gamepad_patch
