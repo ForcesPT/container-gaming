@@ -493,9 +493,15 @@ start_gamescope_session() {
     # re-enables the legacy /dev/input/js* backend — it uses JSIOCG* ioctls + reads
     # 8-byte js_event structs (exactly what the v1.6.2 interposer + Selkies' gamepad.py
     # serve; validated: JSIOCGVERSION/NAME/AXES/BUTTONS/AXMAP/BTNMAP all handled).
-    # SDL3 auto-disables udev in containers (SDL_GetSandbox()) and uses the fallback
-    # path, which hotplugs via inotify on /dev/input (IN_CREATE -> MaybeAddDevice for
-    # js* nodes in classic mode) + a 3s scandir poll if /dev/input mtime changes.
+    # SDL3 auto-disables udev ONLY if SDL_GetSandbox() detects a container, but
+    # SDL_DetectSandbox only checks /.flatpak-info, SNAP* env, or /run/host/
+    # container-manager — NONE of which exist in a plain Vast Docker container —
+    # so SDL3 sees SDL_SANDBOX_NONE and uses the LIBUDEV path. With libudev loaded
+    # but no udev daemon, SDL3 enumerates zero devices AND the inotify/scandir
+    # hotplug (which only runs in ENUMERATION_FALLBACK) is NOT active, so mknodding
+    # /dev/input/jsN later is ignored. SDL_JOYSTICK_DISABLE_UDEV=1 forces
+    # ENUMERATION_FALLBACK, activating the inotify (IN_CREATE -> MaybeAddDevice
+    # for js* in classic mode) + 3s scandir-mtime hotplug the watcher relies on.
     #
     # Timing race (the gotcha): SDL3 enumerates joysticks ONCE at SDL_Init (Steam
     # startup), BEFORE the browser gamepad connects (the user presses a button only
@@ -528,7 +534,7 @@ start_gamescope_session() {
     # re-exported explicitly inside each gamescope+Steam launch below.
     export LD_PRELOAD="${SELKIES_INTERPOSER}${LD_PRELOAD:+:${LD_PRELOAD}}"
     echo "[*] Launching gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}"
-    as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SDL_JOYSTICK_LINUX_CLASSIC=1 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
+    as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SDL_JOYSTICK_LINUX_CLASSIC=1 SDL_JOYSTICK_DISABLE_UDEV=1 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
     local gs_pid=$!
 
     # Steam takes ~30-40s to launch through pressure-vessel + steamwebhelper
@@ -562,7 +568,7 @@ start_gamescope_session() {
             echo "[*] WARNING: gamescope died — restarting session..."
             kill $gs_pid 2>/dev/null; pkill -9 -x steam 2>/dev/null; pkill -9 -x steamwebhelper 2>/dev/null; sleep 2
             rm -f ${USER_HOME}/.steam/steam/steam.pid ${USER_HOME}/.steam/debian-installation/steam.pid 2>/dev/null
-            as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SDL_JOYSTICK_LINUX_CLASSIC=1 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
+            as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SDL_JOYSTICK_LINUX_CLASSIC=1 SDL_JOYSTICK_DISABLE_UDEV=1 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
             gs_pid=$!
         fi
         # Xvfb :2 + the PipeWire->:2 bridge / Xvfb `:2` are the Selkies capture path (ximagesrc mode). If :2 dies (or the bridge gst dies) the
