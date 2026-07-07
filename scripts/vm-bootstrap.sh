@@ -155,12 +155,18 @@ ensure_userns() {
     cat > "$f" <<'EOF'
 kernel.unprivileged_userns_clone=1
 kernel.apparmor_restrict_unprivileged_userns=0
+# Steam + CEF (steamwebhelper) under gamescope open far more than the default
+# 65536 memory mappings; without this Steam's GL composer thread dies with
+# 'mmap() failed: Cannot allocate memory' and gamescope crash-loops. Steam Deck
+# sets 1048576.
+vm.max_map_count=1048576
 EOF
     sysctl --system >/dev/null 2>&1 || true
-    local u a
+    local u a m
     u="$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || echo ?)"
     a="$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo ?)"
-    log "unprivileged userns: unprivileged_userns_clone=${u}  apparmor_restrict_unprivileged_userns=${a}"
+    m="$(sysctl -n vm.max_map_count 2>/dev/null || echo ?)"
+    log "unprivileged userns: unprivileged_userns_clone=${u}  apparmor_restrict_unprivileged_userns=${a}  vm.max_map_count=${m}"
 }
 
 ensure_git() {
