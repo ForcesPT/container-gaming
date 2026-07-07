@@ -339,7 +339,10 @@ start_gamescope_stream() {
     # If discovery fails, leave DPAD_INPUT_DISPLAY empty -> input stays on :2
     # (current behavior: video works, input doesn't) — a safe fallback.
     local in_dpy=""
-    in_dpy="$(grep -oE 'Starting Xwayland on :[0-9]+' /tmp/gamescope-steam.log 2>/dev/null | head -1 | grep -oE ':[0-9]+')"
+    # gamescope's Xwayland display number can vary per boot (and across health-loop
+    # restarts), so take the LAST 'Starting Xwayland on :N' line in the log (the
+    # current gamescope), not the first (which could be a stale earlier launch).
+    in_dpy="$(grep -oE 'Starting Xwayland on :[0-9]+' /tmp/gamescope-steam.log 2>/dev/null | tail -1 | grep -oE ':[0-9]+')"
     [ -z "$in_dpy" ] && in_dpy="$(pgrep -af Xwayland 2>/dev/null | grep -oE 'Xwayland :[0-9]+' | head -1 | grep -oE ':[0-9]+')"
     if [ -n "$in_dpy" ] && [ -S "/tmp/.X11-unix/X${in_dpy#:}" ]; then
         echo "    input -> gamescope Xwayland ${in_dpy} (XTest, DPAD_INPUT_DISPLAY=${in_dpy})"
