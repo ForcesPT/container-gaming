@@ -38,25 +38,37 @@ def _patch():
         return
 
     # --- python-xlib 0.33 bug fix -----------------------------------------
-    # Display.add_extension_event sets event_classes[code]=evt (a type) for a
-    # base event, then for a sub-event does event_classes[code][subcode]=evt on
-    # the TYPE -> 'type object does not support item assignment'. This crashes
-    # display.Display() during randr.init. Patch it to convert to a dict.
+    # python-xlib 0.33 bug: add_extension_event stores a base event as
+    # event_classes[code] = evt (a TYPE), then a sub-event for the SAME code
+    # does event_classes[code][subcode] = evt on the TYPE ->
+    # TypeError 'type object does not support item assignment'. This fires
+    # during xfixes.init inside display.Display() when two extensions collide
+    # on an event code. The dispatch (parse_event_response) already handles
+    # event_classes[code] being a dict {subcode: cls}, so we make add_extension_event
+    # robust: promote a TYPE to a dict (base under None, sub under subcode)
+    # instead of crashing. Must run BEFORE any display.Display() in the process.
     try:
         from Xlib.protocol import display as _xpd
         if not getattr(_xpd.Display, "_dpad_aee_patched", False):
             def add_extension_event(self, code, evt, subcode=None):
+                cur = self.event_classes.get(code)
                 if subcode is None:
-                    self.event_classes[code] = evt
-                else:
-                    cur = self.event_classes.get(code)
+                    # base event: keep under None if sub-events already exist
                     if isinstance(cur, dict):
+                        cur[None] = evt
+                    else:
+                        self.event_classes[code] = evt
+                else:
+                    if cur is None:
+                        self.event_classes[code] = {subcode: evt}
+                    elif isinstance(cur, dict):
                         cur[subcode] = evt
                     else:
-                        self.event_classes[code] = {subcode: evt}
+                        # base TYPE registered first -> promote to dict
+                        self.event_classes[code] = {None: cur, subcode: evt}
             _xpd.Display.add_extension_event = add_extension_event
             _xpd.Display._dpad_aee_patched = True
-            _log("patched Xlib add_extension_event (randr bug fix)")
+            _log("patched Xlib add_extension_event (randr/xfixes bug fix)")
     except Exception as e:
         _log("could not patch add_extension_event: %r" % e)
 
