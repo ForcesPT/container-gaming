@@ -37,6 +37,8 @@ def _patch():
         _log("disabled (%r)" % e)
         return
 
+    dbg = os.environ.get("DPAD_INPUT_DEBUG", "")
+
     # --- python-xlib 0.33 bug fix -----------------------------------------
     # python-xlib 0.33 bug: add_extension_event stores a base event as
     # event_classes[code] = evt (a TYPE), then a sub-event for the SAME code
@@ -110,19 +112,25 @@ def _patch():
 
     _orig_key = W.send_x11_keypress
     def send_x11_keypress(self, keysym, down=True):
+        # Inject via XTest on the gamescope Xwayland display. Do NOT fall back to
+        # the original pynput path: pynput's X keyboard backend touches RANDR modes
+        # (BadRRModeError) on gamescope's rootless Xwayland and fails noisily.
+        # keysym_to_keycode covers every standard key; if it returns 0 the key
+        # isn't in the keymap and pynput wouldn't help anyway.
         d = getattr(self, "xdisplay", None) or _gs_dpy
         try:
             kc = d.keysym_to_keycode(keysym)
             if kc:
                 xtest.fake_input(d, X.KeyPress if down else X.KeyRelease, detail=kc)
                 d.sync()
+                if dbg:
+                    _log("key keysym=%s kc=%s down=%s OK" % (keysym, kc, down))
                 return
-        except Exception:
-            pass
-        try:
-            _orig_key(self, keysym, down=down)
-        except Exception:
-            pass
+            if dbg:
+                _log("key keysym=%s -> no keycode (dropped)" % keysym)
+        except Exception as e:
+            if dbg:
+                _log("key XTest FAILED keysym=%s %r (dropped)" % (keysym, e))
 
     _orig_mouse = W.send_mouse
     def send_mouse(self, action, data):
