@@ -276,6 +276,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -f selkies-js-interposer.deb && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/debconf/* /var/log/* /tmp/* /var/tmp/*
 
+# Stage 3a: Selkies input router for the gamescope path. Auto-loaded at Python
+# startup via the .pth; monkey-patches WebRTCInput.send_x11_keypress/send_mouse
+# to inject XTest on DPAD_INPUT_DISPLAY (gamescope's headless Xwayland, e.g. :0)
+# instead of the capture display (:2). No-op when DPAD_INPUT_DISPLAY is unset.
+COPY scripts/dpad_input_patch.py scripts/dpad_input_patch.pth /usr/local/lib/python3.12/dist-packages/
+
 # =============================================================================
 # 7b. Install moonlight-web-stream (PRIMARY browser path: Sunshine NVENC -> WebRTC)
 #     Prebuilt x86_64-unknown-linux-gnu release requires glibc 2.39 (= noble),

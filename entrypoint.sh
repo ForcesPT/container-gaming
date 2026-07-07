@@ -319,7 +319,28 @@ start_gamescope_stream() {
     chmod 644 "$rtc"
 
     enc="${DPAD_GAMESCOPE_ENCODER:-nvh264enc}"
-    as_user "export DISPLAY=:2 XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=false --rtc_config_json='${rtc}' --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
+
+    # Stage 3a — input routing. Selkies' XTest input normally lands on the
+    # capture display (:2, the Xvfb bridge target), which only holds a painted
+    # copy of the gamescope frame — so clicks/keys never reach Steam. The real
+    # app runs inside gamescope's headless Xwayland, whose display we discover
+    # from the gamescope log (e.g. :0). DPAD_INPUT_DISPLAY tells the baked-in
+    # dpad_input_patch.py (a site-packages .pth) to override Selkies'
+    # send_x11_keypress/send_mouse and inject via XTest on THAT display instead
+    # of :2 — so keyboard/mouse reach gamescope -> Steam. Capture stays on :2.
+    # If discovery fails, leave DPAD_INPUT_DISPLAY empty -> input stays on :2
+    # (current behavior: video works, input doesn't) — a safe fallback.
+    local in_dpy=""
+    in_dpy="$(grep -oE 'Starting Xwayland on :[0-9]+' /tmp/gamescope-steam.log 2>/dev/null | head -1 | grep -oE ':[0-9]+')"
+    [ -z "$in_dpy" ] && in_dpy="$(pgrep -af Xwayland 2>/dev/null | grep -oE 'Xwayland :[0-9]+' | head -1 | grep -oE ':[0-9]+')"
+    if [ -n "$in_dpy" ] && [ -S "/tmp/.X11-unix/X${in_dpy#:}" ]; then
+        echo "    input -> gamescope Xwayland ${in_dpy} (XTest, DPAD_INPUT_DISPLAY=${in_dpy})"
+    else
+        echo "    WARNING: gamescope Xwayland display not found — input stays on :2 (no control); video still works"
+        in_dpy=""
+    fi
+
+    as_user "export DISPLAY=:2 DPAD_INPUT_DISPLAY=${in_dpy} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=false --rtc_config_json='${rtc}' --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
     sleep 6
     if pgrep -f selkies-gstreamer >/dev/null; then
         echo "    Selkies running on 127.0.0.1:16100 (gamescope bridge, encoder=${enc})"
