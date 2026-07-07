@@ -74,14 +74,21 @@ compute_cap>=750 cuda_max_good>=12.1 gpu_display_active=false rentable=true veri
   (the flexgrip interposer covers it).
 
 ### Expose ports
-- **One TCP port per GPU**: `-p 3478:3478` (GPU 0), `-p 3479:3479` (GPU 1), …
-  Each is the coturn TURN port for one session's container.
-- Vast maps each exposed **internal** port to a **random external** port,
-  injected into the VM env as `VAST_TCP_PORT_<internal>` (e.g.
-  `VAST_TCP_PORT_3478`). The browser's TURN ICE entry must use that external
-  port — see §4.
-- **TCP only.** Vast flags tcp+udp of the same port as a duplicate. Do NOT
-  request `-p 3478:3478/udp`.
+- **One port per GPU session**, exposed as **UDP** (recommended — lower latency under loss):
+  `-p 3478:3478/udp` (GPU 0), `-p 3479:3479/udp` (GPU 1), … each is coturn's UDP TURN port for one session.
+- **Vast forbids the same port as both tcp and udp** (UI: "Duplicate Port Detected"),
+  so pick ONE protocol per port. UDP is recommended (coturn relays SRTP over UDP;
+  no TCP head-of-line blocking/retransmit stalls under packet loss). There is no
+  TCP fallback on Vast — acceptable for a UDP-native cloud-gaming product.
+- Vast maps each exposed **internal** port to a **random external** port, injected
+  as `VAST_UDP_PORT_<internal>` (UDP) or `VAST_TCP_PORT_<internal>` (TCP). The
+  browser's TURN ICE entry uses that external port — see §5.
+- **SSH still works** — Vast always auto-maps port 22 (`VAST_TCP_PORT_22`) regardless
+  of your `-p` list. **Signaling rides cloudflared** (outbound HTTPS), so no inbound
+  HTTP/TCP port is needed for the stream.
+- **64-port limit** is no obstacle: coturn short-circuits the relay internally when
+  both peers are TURN clients of the same coturn, so only the **listen port** needs
+  mapping per session (no relay port range to expose).
 
 ---
 
@@ -189,35 +196,52 @@ docker run -d --name dpad-0 --runtime=nvidia --cap-add SYS_ADMIN \
 
 ---
 
-## 5. Networking — coturn TURN (no SSH tunnel)
+## 5. Networking — coturn TURN (UDP recommended; no SSH tunnel)
 
-The whole networking model is **one exposed TCP port per session**, no inbound
-HTTPS, no SSH tunnel:
+The whole networking model is **one exposed UDP port per session** (TCP also
+supported), no inbound HTTPS, no SSH tunnel:
 
 ```
 Browser ──HTTPS──▶ cloudflared tunnel ──▶ Selkies 127.0.0.1:16100  (signalling + WebRTC)
                                           │
-                  WebRTC media ──▶ coturn (0.0.0.0:3478, TCP, lt-cred-mech)
+                  WebRTC media ──▶ coturn (0.0.0.0:3478, UDP + TCP)
                                           │
-                  browser TURN ICE: turn:<publicIp>:<externalPort>?transport=tcp
-                  in-container TURN ICE: turn:127.0.0.1:3478?transport=tcp
+                  browser TURN ICE: turn:<publicIp>:<udpExtPort>?transport=udp
+                  in-container TURN ICE: turn:127.0.0.1:3478?transport=udp
 ```
 
-- **coturn binds `0.0.0.0:3478`** (`--listening-ip=0.0.0.0`). Without this,
-  coturn auto-binds only `127.0.0.1` + eth0 and Vast's TCP forward can't reach
-  it → zero TURN allocations → "Connection failed".
-- **Dual-ICE TURN config** (Selkies `--rtc_config_json`): two TURN entries —
-  `turn:127.0.0.1:3478` (the in-container Selkies peer reaches coturn locally,
-  no NAT hairpin — Vast has none) + `turn:<publicIp>:<externalPort>` (the
-  browser reaches coturn via Vast's TCP port map). Both peers are TURN
-  clients of the **same** coturn → it short-circuits media internally over the
-  two control connections → **only the listening port needs exposing**.
+- **coturn binds `0.0.0.0:3478`** and listens **both UDP and TCP** (no `--no-udp`).
+  The entrypoint emits ICE entries only for the protocol(s) actually exposed:
+  UDP if `VAST_UDP_PORT_3478`/`DPAD_TURN_UDP_EXTERNAL_PORT`, TCP if
+  `VAST_TCP_PORT_3478`/`DPAD_TURN_EXTERNAL_PORT`. On Vast (UDP-only per port) →
+  UDP only.
+- **Short-circuit relay:** both WebRTC peers (browser + in-container selkies) are
+  TURN clients of the **same** coturn, so it relays media internally over their
+  two control connections to the listen port — the per-allocation relay ports
+  are never contacted externally. **Only the listen port needs mapping** (no
+  relay port range to expose — Vast's 64-port limit is no obstacle).
 - **No SSH tunnel.** The old `DPAD_TURN_PUBLIC_IP=127.0.0.1` + `ssh -L
-  3478:localhost:3478` workaround is **dead** — do not use it. With the dual-ICE
-  config + a real public IP, open the Selkies URL in a browser and media relays
-  through coturn at the Vast external port directly.
-- `DPAD_PROVIDER=runpod` is what arms the dual-ICE config on Vast (Vast's
-  TCP-only one-port model matches RunPod's).
+  3478:localhost:3478` workaround is **dead**. With a real public IP + the mapped
+  UDP port, open the Selkies URL and media relays through coturn at the Vast
+  external port directly.
+- `DPAD_PROVIDER=runpod` arms the dual-ICE config (kept for the RunPod TCP path;
+  on Vast the UDP path auto-activates from `VAST_UDP_PORT_*`).
+
+### Latency reality (measured, RTX 3060 / 1 GPU)
+- **UDP TURN: video ~52 ms / audio ~96 ms** — ~= the TCP-TURN baseline (~50/100 ms).
+  UDP's win is **under packet loss** (no TCP head-of-line blocking / retransmit
+  stalls), NOT on a stable low-loss link. So UDP TURN is the **robust** choice for
+  real users (flaky Wi-Fi/mobile), but it does not shave latency on a clean
+  connection.
+- The ~50 ms video is the **floor** for the Vast-relay model: network RTT to Vast
+  + capture/encode/browser-decode. Capture is near-zero-copy-ish (the `:2` bridge
+  elimination was the real latency win); nvh264enc is ultra-low-latency tuned;
+  browser decode is hardware. **Remaining lever: a Vast region closer to the user
+  (lower RTT).** The transport is no longer the bottleneck on a stable link.
+- The Selkies stats-panel "Peer connection type" can show `host` (the browser's
+  local candidate type) even when the selected pair is `relay` — the actual path
+  is TURN (the container has no public IP; only the mapped port is reachable).
+  Verify with `chrome://webrtc-internals` if needed.
 
 ---
 
@@ -351,6 +375,9 @@ fresh boot skips the ~3–4 min Steam download.
 | Symptom | Cause / Fix |
 |---|---|
 | `502 Bad gateway` at the trycloudflare URL | Selkies crashed. `docker exec dpad-0 tail /tmp/selkies.log`. Common: (a) python-xlib `add_extension_event` crash (`TypeError: 'type' object does not support item assignment` in xfixes.init) — fixed by `dpad_input_patch.py`'s monkey-patch; (b) pipewiresrc `target not found` + gamescope `Already had a buffer`/`stream state changed: error` — the gamescope PipeWire stream died. For (b): `always-copy=True` must be set on pipewiresrc (the patcher does this); if it still happens, set `DPAD_VIDEO_SRC=ximagesrc` to fall back to the `:2` bridge path. |
+| gamescope `vulkan: vkCreateDevice failed (VkResult: -7)` / `Failed to create backend` | `nvidia_drm.modeset` is N. gamescope `--backend headless` on NVIDIA **needs modeset=Y**. Set it: `echo "options nvidia-drm modeset=1" > /etc/modprobe.d/nvidia-drm.conf && modprobe -r nvidia_drm && modprobe nvidia_drm modeset=1` (live; reboot persists). vm-bootstrap does this. |
+| WebRTC media fails / no video, signaling OK | No TURN port exposed (need `-p 3478:3478/udp` or `/tcp`), or `VAST_UDP_PORT_3478`/`VAST_TCP_PORT_3478` not passed to the container (`DPAD_TURN_UDP_EXTERNAL_PORT`/`DPAD_TURN_EXTERNAL_PORT`). The entrypoint logs `WARNING: no TURN port exposed`. |
+| Vast UI: "Duplicate Port Detected" | You tried `-p 3478:3478` + `-p 3478:3478/udp` (same port, both protocols). Vast forbids that. Pick ONE protocol per port — UDP (`-p 3478:3478/udp`) is recommended. |
 | pipewiresrc `no more input formats` / `not-negotiated` + gamescope pipewire crash on browser connect | A 144Hz browser requested 144fps and `set_framerate` forced `framerate=144/1` on the live source (gamescope offers `0/1`). Fixed by the patcher: the pipewiresrc path keeps `format=BGRx` and uses `videorate` to throttle (never forces a framerate on the source). If it recurs, the patcher didn't run — check the Dockerfile step / `DPAD_VIDEO_SRC`. |
 | FPS slider doesn't change the framerate (stays ~60) | On the pipewiresrc path the `videorate` element must be present (the patcher adds it). Without it, the slider is cosmetic (gamescope is a live source). Verify `videorate` is in the pipeline (`GST_DEBUG=videorate:4`). |
 | pynput `ImportError: Can't connect to display ":0": Connection refused` at selkies start | `in_dpy` discovery picked a stale Xwayland display (gamescope restarted and picked a new number). Fixed: the discovery now takes the LAST `Starting Xwayland on :N` line. On a `docker restart` (vs a fresh `docker run`), stale `/tmp/.X11-unix/X*` sockets can also confuse gamescope — prefer a fresh `docker run`, or clean stale X sockets before restart. |
