@@ -191,7 +191,7 @@ as_user() { su -s /bin/bash "${USER_NAME}" -c "$1"; }
 # (for Proton-GE) which makes steam.sh's `rm -f ~/.steam/root` fail.
 bootstrap_steam_on_xvfb() {
     local steam_install="${USER_HOME}/.steam/debian-installation"
-    if [ -x "${steam_install}/ubuntu12_64/steam" ]; then
+    if [ -x "${steam_install}/ubuntu12_64/steamwebhelper" ]; then
         echo "[*] Steam client already bootstrapped — skipping Xvfb bootstrap"
         return 0
     fi
@@ -233,7 +233,7 @@ bootstrap_steam_on_xvfb() {
         as_user "cd ${USER_HOME}; export DISPLAY=:8 HOME=${USER_HOME} USER=${USER_NAME} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}'; exec ${steam_cmd} -gamepadui" >/tmp/steam-bootstrap.log 2>&1 &
         local sp=$! waited=0
         while [ $waited -lt 360 ]; do
-            [ -x "${steam_install}/ubuntu12_64/steam" ] && { ok=1; break; }
+            [ -x "${steam_install}/ubuntu12_64/steamwebhelper" ] && { ok=1; break; }
             kill -0 "$sp" 2>/dev/null || break
             sleep 3; waited=$((waited+3))
         done
