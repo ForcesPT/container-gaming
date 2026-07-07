@@ -1,0 +1,379 @@
+# DpadCloud Container Gaming — Vast.ai VM Deployment Runbook
+
+> The complete operational recipe for running the DpadCloud gamescope cloud-gaming
+> container on a **Vast.ai KVM VM**, from provisioning to a live, interactive
+> browser stream. Every flag, env var, and gotcha below was validated on a Vast
+> RTX 3060 / driver 580, 1-GPU VM. This is the authoritative "Vast.ai → VM → Docker
+> → flags → everything" reference.
+>
+> Companion docs: `PROJECT_STATE.md` (project state/continuation), `README.md`
+> (deploy script env vars), `RUNPOD.md` (RunPod specifics).
+
+## TL;DR — the validated launch
+
+```bash
+# 1) One-time on the VM host (vm-bootstrap.sh does ALL of this automatically):
+nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+cat > /etc/sysctl.d/99-dpad-userns.conf <<'EOF'
+kernel.unprivileged_userns_clone=1
+kernel.apparmor_restrict_unprivileged_userns=0
+EOF
+sysctl --system
+# vm.max_map_count for Steam+CEF under gamescope (default 65530 OOMs it)
+echo 'vm.max_map_count=1048576' > /etc/sysctl.d/99-dpad-mmap.conf && sysctl -p /etc/sysctl.d/99-dpad-mmap.conf
+# nvidia_drm.modeset=Y (one reboot if not already set)
+grep -q Y /sys/module/nvidia_drm/parameters/modeset || { echo Y > /sys/module/nvidia_drm/parameters/modeset; reboot; }
+
+# 2) Pull + launch (CDI, NO --privileged):
+docker pull forcespt/dpadcloud-gaming:SteamUbuntu24.04VM
+docker run -d --name dpad-0 --runtime=nvidia --cap-add SYS_ADMIN \
+  --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+  -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=0 \
+  --device /dev/uinput --shm-size=2g --ulimit nofile=1048576:1048576 \
+  -p 3478:3478 \
+  -e DPAD_PROVIDER=runpod -e DPAD_COTURN_PORT=3478 \
+  -e DPAD_TURN_PUBLIC_IP=$PUBLIC_IPADDR -e DPAD_TURN_EXTERNAL_PORT=$VAST_TCP_PORT_3478 \
+  -e DPAD_GAMESCOPE=1 \
+  -e SUNSHINE_PASSWORD=pass0 -e SELKIES_BASIC_AUTH_USER=dpad -e SELKIES_BASIC_AUTH_PASSWORD=pass0 \
+  forcespt/dpadcloud-gaming:SteamUbuntu24.04VM
+
+# 3) Watch the boot log (~40-60s after the build-time Steam pre-bootstrap is baked):
+docker logs -f dpad-0
+# look for: GAMESCOPE SESSION READY → input -> gamescope Xwayland :0 → Selkies running → ▶ gamescope browser stream: https://…trycloudflare.com
+# then open that URL (login dpad / pass0) — video + audio + keyboard + mouse all work.
+```
+
+---
+
+## 1. Provisioning the Vast VM
+
+### VM image — use the CLI image, NOT the desktop image
+- **`vastai/kvm:ubuntu_cli_22.04-2025-11-21`** — the freshest no-desktop CLI VM tag
+  (built 2025-11-24). **This is the one to use.** SSH-only, full kernel →
+  user namespaces + ptrace + Docker-in-Docker.
+- ❌ Do **NOT** use `vastai/kvm:ubuntu_desktop_24.04` — its **SDDM X server holds
+  DRM master**, so `--privileged`/caps can't take it and the DFP Xorg path fails.
+  If you must use it, stop SDDM first: `sudo systemctl isolate multi-user.target`
+  (or `systemctl stop sddm`). The gamescope headless path doesn't need DRM
+  master, but SDDM still grabs resources; the CLI image avoids all of it.
+- ❌ Do **NOT** use the plain `vastai/kvm:ubuntu_terminal` tag — stale
+  (last updated 2024-11-11).
+
+### Vast offer filter (NVENC-safe)
+```
+compute_cap>=750 cuda_max_good>=12.1 gpu_display_active=false rentable=true verified=true
+```
+- `gpu_display_active=false` — headless host (no monitor attached); we render
+  on the GPU ourselves via gamescope headless.
+- `cuda_max_good>=12.1` — keeps the wide pool (driver 535/545/550/570/580/595);
+  CUDA 12.5.1 (our base) runs on any driver ≥525 via minor-version compat.
+- Cheapest NVENC: `gpu_frac=1 num_gpus=1` (single-GPU machines, immune to the
+  nvidia-container-toolkit #1249 multi-GPU NVENC issue on any driver).
+- RTX 50/Blackwell (sm_120) needs the **`-rtx50` image variant**
+  (`:SteamUbuntu24.04VM-rtx50`, CUDA 12.8.1) — driver ≥570, in the #1249 range
+  (the flexgrip interposer covers it).
+
+### Expose ports
+- **One TCP port per GPU**: `-p 3478:3478` (GPU 0), `-p 3479:3479` (GPU 1), …
+  Each is the coturn TURN port for one session's container.
+- Vast maps each exposed **internal** port to a **random external** port,
+  injected into the VM env as `VAST_TCP_PORT_<internal>` (e.g.
+  `VAST_TCP_PORT_3478`). The browser's TURN ICE entry must use that external
+  port — see §4.
+- **TCP only.** Vast flags tcp+udp of the same port as a duplicate. Do NOT
+  request `-p 3478:3478/udp`.
+
+---
+
+## 2. One-time host setup (`vm-bootstrap.sh` does all of this)
+
+`scripts/vm-bootstrap.sh install` automates everything below. Manual equivalent:
+
+### a) nvidia_drm.modeset=Y
+```bash
+cat /sys/module/nvidia_drm/parameters/modeset   # must be Y
+# if N: echo Y > /sys/module/nvidia_drm/parameters/modeset ; reboot
+```
+Needed for the DFP Xorg path (DRM master). The gamescope headless path
+doesn't strictly need it, but set it anyway (harmless, required for the
+full-Steam DFP fallback path).
+
+### b) nvidia-container-toolkit + CDI
+```bash
+# install nvidia-container-toolkit (distribution packages), then:
+nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+```
+CDI (`--runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=i`) is what
+gives per-GPU isolation **AND** injects the full device set
+(`/dev/nvidiaX` + `/dev/dri/cardX` + `renderDXXX`). See §3 why this matters.
+
+### c) Unprivileged-userns sysctls (REQUIRED for Steam)
+```bash
+cat > /etc/sysctl.d/99-dpad-userns.conf <<'EOF'
+kernel.unprivileged_userns_clone=1
+kernel.apparmor_restrict_unprivileged_userns=0
+EOF
+sysctl --system
+```
+Steam runs as the non-root `dpad` user and needs **unprivileged** user
+namespaces (pressure-vessel / CEF). Docker's default seccomp + AppArmor
+block `dpad` from `unshare -U` unless these host sysctls are permissive **AND**
+the container has `--security-opt seccomp=unconfined --security-opt
+apparmor=unconfined`. Without it → "Steam now requires user namespaces to be
+enabled." These are **host-level** sysctls — not settable from inside an
+unprivileged container.
+
+### d) vm.max_map_count=1048576 (REQUIRED for Steam+CEF under gamescope)
+```bash
+echo 'vm.max_map_count=1048576' > /etc/sysctl.d/99-dpad-mmap.conf
+sysctl -p /etc/sysctl.d/99-dpad-mmap.conf
+```
+Steam+CEF under gamescope open more than the default 65530 memory mappings →
+`mmap() failed: Cannot allocate memory` → GL composer thread dies → SIGKILL.
+Steam Deck sets 1048576. NOT a RAM issue (host can have 135 GB free).
+
+---
+
+## 3. The `docker run` command — every flag, and why
+
+```bash
+docker run -d --name dpad-0 --runtime=nvidia --cap-add SYS_ADMIN \
+  --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+  -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=0 \
+  --device /dev/uinput --shm-size=2g --ulimit nofile=1048576:1048576 \
+  -p 3478:3478 \
+  -e DPAD_PROVIDER=runpod -e DPAD_COTURN_PORT=3478 \
+  -e DPAD_TURN_PUBLIC_IP=$PUBLIC_IPADDR -e DPAD_TURN_EXTERNAL_PORT=$VAST_TCP_PORT_3478 \
+  -e DPAD_GAMESCOPE=1 \
+  -e SUNSHINE_PASSWORD=pass0 -e SELKIES_BASIC_AUTH_USER=dpad -e SELKIES_BASIC_AUTH_PASSWORD=pass0 \
+  forcespt/dpadcloud-gaming:SteamUbuntu24.04VM
+```
+
+| Flag | Why |
+|---|---|
+| `--runtime=nvidia` + `-e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=0` | **CDI**: per-GPU isolation AND injects the **full** per-GPU device set (`/dev/nvidiaX` + `/dev/dri/cardX` + `renderDXXX`). `--gpus device=i` (without `--privileged`) isolates the GPU but does **NOT** inject `/dev/dri/cardX` → no DRM device → DFP Xorg fails → `llvmpipe` software. `--privileged` mounts **all** GPUs (no isolation) and is overkill. **CDI is the clean combo** (validated: `nvidia-smi -L` shows one GPU, `/dev/dri/card1 + renderD129` present, `OpenGL renderer: NVIDIA GeForce RTX 3060`). |
+| `--cap-add SYS_ADMIN` | Restores `CAP_SYS_ADMIN` so `unshare -U` works (Steam userns/pressure-vessel) and Xorg can be DRM master (DFP path). Without it (bare `--gpus`) userns=no → gamescope Steam can't run. |
+| `--security-opt seccomp=unconfined --security-opt apparmor=unconfined` | Docker's default seccomp + AppArmor block the `dpad` user from `unshare -U`. Required together with the host sysctls in §2c. After: `su - dpad -c 'unshare -U true'` → `USERNS_OK`. |
+| `--device /dev/uinput` | Sunshine virtual input devices (DFP path). The gamescope path uses XTest on `:0` so doesn't strictly need uinput, but harmless and keeps the DFP path working. |
+| `--shm-size=2g` | **CEF/steamwebhelper shared memory.** Docker defaults `/dev/shm` to 64 MB; Chrome/CEF needs more → "Failed creating offscreen shared JS context" → steamwebhelper crash-loops. (The entrypoint also auto-remounts `/dev/shm` to 2G on the dfp path as a safety net.) Equivalent: `--ipc=host`. |
+| `--ulimit nofile=1048576:1048576` | Without `--privileged`, the nofile hard cap is **1024** (too low for Steam/Selkies). Bump it explicitly. Some hosts also need `--ulimit nproc=1048576:1048576` (hard `nproc=50` cap → whole stack hangs at PulseAudio EAGAIN; the in-image `ulimit -Hu` can't exceed a hard cap). |
+| `-p 3478:3478` | Expose the coturn TURN TCP port. Vast maps it to a random external port (`VAST_TCP_PORT_3478`). One port per session/container. |
+
+### ❌ Flags NOT to use on Vast
+- `--privileged` — mounts ALL GPUs (no isolation); CDI + `--cap-add SYS_ADMIN` is the clean equivalent. (Was needed only on the old `ubuntu_desktop` SDDM workaround.)
+- `--jupyter`, `--ssh`, `--onstart-cmd` — override the entrypoint and kill our services.
+- `-p 3478:3478/udp` — Vast flags tcp+udp of the same port as a duplicate. TCP only.
+
+---
+
+## 4. Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DPAD_GAMESCOPE` | `0` | `1` = entrypoint **gamescope headless mode** (Steam via `gamescope --backend headless`, no DRM master → N-on-N-GPUs possible). `0` = the DFP Xorg / headless steamcmd path. **Set `1` for the validated interactive browser path.** |
+| `NVIDIA_VISIBLE_DEVICES` | (unset) | CDI: `nvidia.com/gpu=i` for per-GPU isolation. Do NOT set `=all` on multi-GPU hosts (encoder grabs device 0 which may not be the assigned GPU). |
+| `DPAD_PROVIDER` | `vast` | `runpod` triggers the **dual-ICE TURN** config (matches RunPod/Vast's TCP-only one-port model). Set `runpod` on Vast VMs. |
+| `DPAD_COTURN_PORT` | `3478` | coturn listen port (internal). Expose it with `-p`. |
+| `DPAD_TURN_PUBLIC_IP` | (auto) | The VM's public IP (`$PUBLIC_IPADDR` on Vast). Used for the browser-side TURN ICE entry. |
+| `DPAD_TURN_EXTERNAL_PORT` | `=DPAD_COTURN_PORT` | The **external** port Vast mapped (`$VAST_TCP_PORT_3478`). The browser reaches coturn at `publicIp:externalPort`. |
+| `SUNSHINE_PASSWORD` | `dpadcloud` | Sunshine/Moonlight creds (DFP path). |
+| `SELKIES_BASIC_AUTH_USER` | `dpad` | Browser login username. |
+| `SELKIES_BASIC_AUTH_PASSWORD` | `OPEN_TOKEN` | Browser login password — **set to a per-session token in production**. |
+| `DPAD_MAX_SESSIONS` | (all GPUs) | Cap the number of containers vm-bootstrap launches (e.g. `1` for a clean single-user session even on a multi-GPU VM). |
+| `DPAD_SESSION_PASSWORDS` | (unset) | Per-session password list (vm-bootstrap assigns one per container). |
+| `DPAD_ISOLATION` | `cdi` | `cdi` (per-GPU, recommended) or `legacy` (`--gpus`). |
+| `STEAM_USER` | (unset) | Headless `steamcmd`/`dpad-launch` path (not the gamescope path). |
+| `CLOUDFLARED_TUNNEL_TOKEN` | (unset → quick tunnel) | Named Cloudflare tunnel token (production domain). |
+| `CLOUDFLARED_HOSTNAME` | (unset) | Your domain for the named tunnel (e.g. `https://play-<id>.dpadcloud.com`). |
+
+---
+
+## 5. Networking — coturn TURN (no SSH tunnel)
+
+The whole networking model is **one exposed TCP port per session**, no inbound
+HTTPS, no SSH tunnel:
+
+```
+Browser ──HTTPS──▶ cloudflared tunnel ──▶ Selkies 127.0.0.1:16100  (signalling + WebRTC)
+                                          │
+                  WebRTC media ──▶ coturn (0.0.0.0:3478, TCP, lt-cred-mech)
+                                          │
+                  browser TURN ICE: turn:<publicIp>:<externalPort>?transport=tcp
+                  in-container TURN ICE: turn:127.0.0.1:3478?transport=tcp
+```
+
+- **coturn binds `0.0.0.0:3478`** (`--listening-ip=0.0.0.0`). Without this,
+  coturn auto-binds only `127.0.0.1` + eth0 and Vast's TCP forward can't reach
+  it → zero TURN allocations → "Connection failed".
+- **Dual-ICE TURN config** (Selkies `--rtc_config_json`): two TURN entries —
+  `turn:127.0.0.1:3478` (the in-container Selkies peer reaches coturn locally,
+  no NAT hairpin — Vast has none) + `turn:<publicIp>:<externalPort>` (the
+  browser reaches coturn via Vast's TCP port map). Both peers are TURN
+  clients of the **same** coturn → it short-circuits media internally over the
+  two control connections → **only the listening port needs exposing**.
+- **No SSH tunnel.** The old `DPAD_TURN_PUBLIC_IP=127.0.0.1` + `ssh -L
+  3478:localhost:3478` workaround is **dead** — do not use it. With the dual-ICE
+  config + a real public IP, open the Selkies URL in a browser and media relays
+  through coturn at the Vast external port directly.
+- `DPAD_PROVIDER=runpod` is what arms the dual-ICE config on Vast (Vast's
+  TCP-only one-port model matches RunPod's).
+
+---
+
+## 6. The gamescope headless pipeline (what actually runs)
+
+```
+gamescope --backend headless -e -W 1920 -H 1080 -- steam -gamepadui
+   │  renders Steam on the GPU via Vulkan/gamescope-WSI, NO DRM master
+   │  → PipeWire video node (node.name=gamescope, media.class=Video/Source)
+   │  → Xwayland :0 (Steam's CEF/X11 UI runs here)
+   ▼
+[Stage 2 — the :2 bridge]  (exists ONLY because Selkies 1.6.x is X11-only)
+   gst: pipewiresrc target-object=gamescope ! videoconvert ! ximagesink display=:2
+   │  GPU→CPU download + software colorspace, paints into Xvfb :2 CPU framebuffer
+   ▼
+Xvfb :2  (-ac -screen 0 1920x1080x24 +extension GLX +extension RANDR)
+   ▼
+[Selkies capture + encode]
+   ximagesrc :2 → videoconvert → nvh264enc (CPU→GPU upload + NVENC hardware)
+   → WebRTC → coturn TURN (TCP) → cloudflared → browser
+[Audio]  pipewire-pulse null sink (dummy.monitor) → Selkies pulsesrc
+[Input — Stage 3a, DIRECT, no go-and-comeback]
+   browser WebRTC datachannel → Selkies → xtest.fake_input on :0 → Xwayland → Steam
+   (dpad_input_patch.py, a site-packages .pth, routes self.xdisplay to :0 and
+    uses XTest instead of :2; auto-discovered at boot via DPAD_INPUT_DISPLAY)
+```
+
+**Latency reality:** input is direct (local XTest, sub-ms injection; latency ≈
+datachannel transport only). Video is **indirect** — the `:2` bridge adds two
+GPU↔CPU round-trips + two software `videoconvert` passes (~10–15 ms one-way)
+because Selkies 1.6.x can't read the PipeWire node directly. The **next
+optimization** is `pipewiresrc target-object=gamescope ! nvh264enc ! webrtcbin`
+(dmabuf straight into NVENC, zero-copy) — keeps the no-DRM-master advantage.
+See `PROJECT_STATE.md` "NEXT PRIORITY".
+
+---
+
+## 7. Boot milestones — what to check in `docker logs`
+
+A healthy gamescope-mode boot prints, in order:
+```
+[*] NVIDIA ... NVIDIA GeForce RTX 3060, 580.95.05, ... MiB
+[*] Configuring CUDA...  CUDA 12.5 selected
+[*] Starting D-Bus...
+[*] DPAD_GAMESCOPE mode: gamescope --backend headless + Steam (no DRM master)
+[*] Steam client already bootstrapped — skipping Xvfb bootstrap      # if build-time pre-bootstrap baked in
+   (or: [*] Bootstrapping Steam client on Xvfb ... — ~3-4min on an image without it)
+[*] Starting PipeWire + wireplumber...  PipeWire ready
+[*] Launching gamescope --backend headless -e -W 1920 -H 1080 -- steam -gamepadui
+[*] GAMESCOPE SESSION READY — Steam UI rendering in headless gamescope (no DRM master).
+[*] Stage 2: bridging gamescope PipeWire node -> Xvfb :2 -> Selkies
+    Xvfb :2 up  /  bridge gst running  /  audio socket OK
+    input -> gamescope Xwayland :0 (XTest, DPAD_INPUT_DISPLAY=:0)    # Stage 3a auto-discovery
+    Selkies running on 127.0.0.1:16100 (gamescope bridge, encoder=nvh264enc)
+    ▶ gamescope browser stream: https://<words>.trycloudflare.com  (login dpad / pass0)
+```
+
+Confirm the patch loaded (inside the container):
+```bash
+docker exec dpad-0 grep -E "patched Xlib|opened :0|Selkies input ->" /tmp/selkies.log
+# dpad_input: patched Xlib add_extension_event (randr/xfixes bug fix)
+# dpad_input: opened :0 OK
+# dpad_input: Selkies input -> X display :0 (XTest, patched 2 class(es))
+```
+
+Confirm input is flowing once you move/type in the browser:
+```bash
+docker exec dpad-0 grep -c "on_message head=" /tmp/selkies.log   # climbs as you move/click/type
+```
+
+---
+
+## 8. Multi-tenant — N full-Steam sessions on N GPUs in ONE VM
+
+This is the **whole reason gamescope headless exists.** The DFP Xorg path can
+only do **1 full-Steam session per VM** on consumer GPUs (nvidia-modeset is a
+DRM-master singleton). `gamescope --backend headless` renders via
+Vulkan/gamescope-WSI with **no DRM master** → no modesetting contention →
+**N sessions on N GPUs in one VM**.
+
+`vm-bootstrap.sh` launches one CDI container per GPU:
+- per-container GPU: `-e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=i`
+- per-container port: `-p 3478:3478` (i=0), `-p 3479:3479` (i=1), …
+- per-container cloudflared tunnel + Steam session + `SELKIES_BASIC_AUTH_PASSWORD`
+
+Constraints:
+- **NVENC session cap ~5** on consumer GPUs (driver ≥470); unlimited on
+  datacenter. `keylase/nvidia-patch` removes the consumer cap. Enterprise
+  multi-tenant: **MIG** (A100/H100 isolated slices) or MPS + the patch.
+- VRAM per session, GPU compute sharing (MPS/time-slicing).
+- `DPAD_MAX_SESSIONS=1` forces a single session even on a multi-GPU VM.
+
+**Validation pending: the 2-GPU VM test** — 2 CDI containers in
+`DPAD_GAMESCOPE` mode → 2 independent streamed+interactive Steam UIs, zero
+modesetting contention. (gamescope's EIS socket
+`/run/user/<uid>/gamescope-0-ei` + `Successfully initialized libei for input
+emulation!` remain available as a future input path, but XTest on `:0` is
+validated and sufficient.)
+
+---
+
+## 9. Rebuild + push
+
+```bash
+cd dpadcloud/container-gaming
+docker build -t forcespt/dpadcloud-gaming:SteamUbuntu24.04VM .
+# RTX 50/Blackwell:
+# docker build --build-arg CUDA_VERSION=12.8.1 --build-arg CUDA_PKG=12-8 \
+#   -t forcespt/dpadcloud-gaming:SteamUbuntu24.04VM-rtx50 .
+docker push forcespt/dpadcloud-gaming:SteamUbuntu24.04VM
+```
+The build-time Steam pre-bootstrap (`scripts/build-bootstrap-steam.sh`, Dockerfile
+9g) adds ~3–5 min once (cached); it bakes `ubuntu12_64/steamwebhelper` in so a
+fresh boot skips the ~3–4 min Steam download.
+
+---
+
+## 10. Troubleshooting — the full fix-chain knowledge (each a real on-instance bug)
+
+| Symptom | Cause / Fix |
+|---|---|
+| `502 Bad gateway` at the trycloudflare URL | Selkies crashed. `docker exec dpad-0 tail /tmp/selkies.log`. Most common: the python-xlib `add_extension_event` crash (`TypeError: 'type' object does not support item assignment` in xfixes.init) — fixed by `dpad_input_patch.py`'s monkey-patch (must be in site-packages + the `.pth`). |
+| `mmap() failed: Cannot allocate memory` under gamescope | Host `vm.max_map_count` too low → set `1048576` (§2d). NOT a RAM issue. |
+| Steam "requires user namespaces to be enabled" / `unshare -U` EPERM as `dpad` | Host sysctls (§2c) unset OR container missing `--security-opt seccomp=unconfined apparmor=unconfined` + `--cap-add SYS_ADMIN`. Root `unshare -U` working is NOT enough — needs *unprivileged* userns. |
+| steamwebhelper crash-loop / "Failed creating offscreen shared JS context" | `--shm-size=2g` missing (CEF shared mem). |
+| `~/.local` EPERM aborts Steam bootstrap | A root boot process creates `~/.local` root-owned → Steam's `mkdir ~/.local/share/icons` EPERM. Fix: `chown -R dpad:dpad /home/dpad` before Steam (entrypoint does this). |
+| Steam first-run "UpdateUI CreateGlFont regular failed" → gamescope segfault loop | Steam's GL updater UI can't create its OpenGL font texture on gamescope headless Xwayland. Fix: `bootstrap_steam_on_xvfb()` pre-bootstraps on Xvfb (mesa/llvmpipe software GL) first; gamescope then runs the already-bootstrapped client. (Build-time `build-bootstrap-steam.sh` front-loads this.) |
+| Health loop SIGKILLs a HEALTHY Steam every 30s / "Illegal termination of worker thread 'GL Composer Thread'" | Health check used `pgrep -x gamescope` (the comm isn't exactly "gamescope" → always false → murders Steam). Fix: `kill -0 $gs_pid`. |
+| Bootstrap wait-loop never terminates | Completion check was `ubuntu12_64/steam` (32-bit, never exists) instead of `ubuntu12_64/steamwebhelper`. |
+| Xvfb `:2` "Cannot establish any listening sockets - server already running" | Stale Xvfb `:2` holds the abstract socket. Fix: `pkill -9 -f "Xvfb :2"` + `rm -f /tmp/.X2-lock /tmp/.X11-unix/X2` before start; verify `[ -S /tmp/.X11-unix/X2 ]`. |
+| `gst ... no element "ximagesink"` (the bridge fails) | System gstreamer lacks ximagesink. Fix: `gstreamer1.0-x` (+ `gstreamer1.0-plugins-base`) in the image. A stale gst registry right after apt install can fail once → `rm -rf ~/.cache/gstreamer-1.0` + retry. |
+| Selkies XFIXES cursor monitor crashes (`Xlib.error.ConnectionClosedError`) → session loops | Fix: `--enable_cursors=false` on the Selkies launch (gamescope's cursor is already in the captured frame). |
+| `BadRRModeError` / `failed to send keypress` spam | pynput keyboard touches RANDR modes on gamescope's Xwayland. `dpad_input_patch.py` uses XTest only (no pynput fallback). |
+| `webrtcnice ... failed to resolve "<uuid>.local": Temporary failure in name resolution` | Harmless — Chrome's mDNS `.local` ICE candidates the container can't resolve; the connection succeeds via the TURN relay candidate. Don't chase. |
+| `remote resize is disabled, skipping resize to 2552x1308` | Harmless — hi-DPI browser asked for a bigger size; `--enable_resize=false` fixes the stream at 1920x1080. |
+| NVENC `element NOT FOUND` / `NV_ENC_ERR_UNSUPPORTED_DEVICE` on multi-GPU hosts | nvidia-container-toolkit #1249 (driver 570+). Fix: the flexgrip `libnvenc_fix.so` interposer (auto-enabled when host GPUs > mounted `/dev/nvidiaX` on driver 570..609). Single-GPU hosts (`gpu_frac=1`) are immune on any driver. |
+| `~/.steam/root` a real dir → steam.sh `rm -f ~/.steam/root` fails | Dockerfile step 9f relocates Proton-GE to `~/.steam/debian-installation/compatibilitytools.d` and makes `~/.steam/root` a symlink. |
+| `pulseaudio: command not found` (gamescope audio path) | No PulseAudio daemon in the image (only `pulseaudio-utils`/`pactl`). Fix: audio uses **`pipewire-pulse`** (the running PipeWire serves a Pulse-compatible socket) + `pactl load-module module-null-sink` for `dummy.monitor`. |
+
+### Proven (don't re-test)
+- userns→pressure-vessel→CEF stable with `--shm-size=2g` + the host sysctls.
+- CDI gives per-GPU isolation + `/dev/dri/cardX`; `OpenGL renderer: NVIDIA …` (not llvmpipe).
+- gamescope headless renders real Steam UI content on the PipeWire node (non-black 1080p frame).
+- XTest on `:0` reaches Steam's X11 windows (keyboard + mouse + buttons + scroll) — Stage 3a validated.
+- No-tunnel dual-ICE TURN works at the Vast external port; browser connects without SSH.
+
+---
+
+## 11. The two product paths (provider split)
+
+| Provider | Mode | Steam UI | Multi-tenant |
+|---|---|---|---|
+| **Vast KVM VM (ubuntu_cli_22.04-2025-11-21)** + nested Docker | `DPAD_GAMESCOPE=1` (gamescope headless) | ✅ full interactive (video+audio+kbd+mouse in browser), cloud/online | ✅ N-on-N-GPUs (no DRM master) — pending 2-GPU test |
+| Vast KVM VM, DFP path (`DPAD_GAMESCOPE=0`) | Xorg + nvidia DDX, DRM master | ✅ full Steam | ❌ 1 full-Steam per VM (modeset singleton) |
+| Vast Docker / RunPod Community Cloud | headless `steamcmd + dpad-launch` | ❌ (no userns → CEF crashes under bubbleroot/proot) | single-player, local saves |
+| Bare-metal + QEMU/KVM/VFIO (one VM/GPU) | DFP | ✅ full Steam | ✅ N full-Steam on one host (separate driver instances) |
+| RunPod Secure Cloud | (untested) DFP | likely ✅ (userns) | TBD |
+
+The **gamescope headless path on the Vast KVM VM is the validated MVP** and the
+path to N-on-N-GPUs multi-tenant full-Steam on one VM.
