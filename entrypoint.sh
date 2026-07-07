@@ -299,11 +299,19 @@ start_gamescope_session() {
     as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
     local gs_pid=$!
 
-    sleep 20
-    if pgrep -x gamescope >/dev/null && pgrep -x steam >/dev/null; then
+    # Steam takes ~30-40s to launch through pressure-vessel + steamwebhelper
+    # under gamescope; a fixed 20s check fires too early and the health loop
+    # restarts before Steam stabilises. Poll up to 90s for both processes.
+    local ready=0
+    local rw=0
+    while [ $rw -lt 90 ]; do
+        if pgrep -x gamescope >/dev/null && pgrep -x steam >/dev/null; then ready=1; break; fi
+        sleep 3; rw=$((rw+3))
+    done
+    if [ $ready -eq 1 ]; then
         echo "[*] GAMESCOPE SESSION READY — Steam UI rendering in headless gamescope (no DRM master)."
     else
-        echo "[*] WARNING: gamescope/steam not both up after 20s — check /tmp/gamescope-steam.log"
+        echo "[*] WARNING: gamescope/steam not both up after 90s — check /tmp/gamescope-steam.log"
     fi
     echo "    gamescope+steam log: /tmp/gamescope-steam.log"
     echo "    GPU: $(nvidia-smi -L 2>/dev/null | head -1)"
