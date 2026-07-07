@@ -262,19 +262,39 @@ bootstrap_steam_on_xvfb() {
 # (gst-launch-1.0) in the image — added in the Dockerfile gamescope step.
 start_gamescope_stream() {
     echo "[*] Stage 2: bridging gamescope PipeWire node -> Xvfb :2 -> Selkies"
-    # clear stale logs + the Xvfb :2 lock files. The lock persists across docker
-    # restart and blocks the new Xvfb :2 with "Server is already active for
-    # display 2" -> no :2 display -> Selkies ximagesrc streams black.
+    # clear stale logs + the Xvfb :2 lock/socket files. The lock + the ABSTRACT
+    # socket (@/tmp/.X11-unix/X2) persist across restarts; a stale Xvfb :2 holding
+    # the abstract socket makes a new Xvfb :2 fail with 'Cannot establish any
+    # listening sockets - server already running' -> :2 never comes up -> the
+    # gst bridge paints into nothing -> Selkies ximagesrc-captures :2 black ->
+    # browser stuck on 'Waiting for stream'. Kill any stale Xvfb :2 first.
     rm -f /tmp/selkies.log /tmp/bridge.log /tmp/coturn.log /tmp/cloudflared-selkies.log /tmp/xvfb2.log /tmp/rtc_config.json /tmp/.X2-lock /tmp/.X11-unix/X2 2>/dev/null
-    pkill -f "Xvfb :2" 2>/dev/null || true
+    pkill -9 -f "Xvfb :2" 2>/dev/null || true
+    sleep 1
     local GS_W GS_H enc rtc url
     GS_W="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f1)"; [ -z "$GS_W" ] && GS_W=1920
     GS_H="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f2)"; [ -z "$GS_H" ] && GS_H=1080
 
-    as_user "Xvfb :2 -ac -screen 0 ${GS_W}x${GS_H}x24 +extension GLX +extension RANDR >/tmp/xvfb2.log 2>&1 &" 2>/dev/null
-    sleep 2
+    # start Xvfb :2 and VERIFY the socket came up. Retry once if a stale holder
+    # raced us (kill everything on :2 and try again).
+    start_xvfb2() {
+        as_user "Xvfb :2 -ac -screen 0 ${GS_W}x${GS_H}x24 +extension GLX +extension RANDR >/tmp/xvfb2.log 2>&1 &" 2>/dev/null
+        sleep 2
+        [ -S /tmp/.X11-unix/X2 ]
+    }
+    if ! start_xvfb2; then
+        echo "    Xvfb :2 first try failed — killing stale holders and retrying"
+        pkill -9 -f "Xvfb :2" 2>/dev/null || true
+        rm -f /tmp/.X2-lock /tmp/.X11-unix/X2 2>/dev/null
+        sleep 1
+        start_xvfb2 || { echo "    WARNING: Xvfb :2 would not start — Selkies will stream black (see /tmp/xvfb2.log)"; tail -12 /tmp/xvfb2.log 2>/dev/null | sed 's/^/      /'; }
+    fi
+    [ -S /tmp/.X11-unix/X2 ] && echo "    Xvfb :2 up (socket /tmp/.X11-unix/X2)" || echo "    WARNING: Xvfb :2 socket missing"
+
+    # bridge: pipewiresrc(gamescope) -> videoconvert -> ximagesink on :2.
     as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; gst-launch-1.0 pipewiresrc target-object=gamescope ! videoconvert ! ximagesink display=:2 sync=false force-aspect-ratio=false >/tmp/bridge.log 2>&1 &" 2>/dev/null
     sleep 3
+    pgrep -f "pipewiresrc target-object=gamescope" >/dev/null && echo "    bridge gst running" || { echo "    WARNING: bridge gst failed"; tail -12 /tmp/bridge.log 2>/dev/null | sed 's/^/      /'; }
 
     if ! pgrep -x turnserver >/dev/null; then
         echo "[*] Starting coturn on ${TURN_PORT_EXT}..."
@@ -283,25 +303,15 @@ start_gamescope_stream() {
         pgrep -x turnserver >/dev/null && echo "    coturn running" || echo "    WARNING: coturn failed (see /tmp/coturn.log)"
     fi
 
-    # PulseAudio (Selkies pulsesrc needs a source; gamescope mode skips the DFP
-    # pulseaudio start, so without this the audio pipeline fails with
-    # 'pulsesrc Connection refused' and the browser stays 'Waiting for stream').
-    if ! pgrep -x pulseaudio >/dev/null; then
-        echo "[*] Starting PulseAudio (headless null sink for Selkies audio)..."
-        mkdir -p "${XDG_RUNTIME_DIR}/pulse" 2>/dev/null
-        chmod 1777 "${XDG_RUNTIME_DIR}" "${XDG_RUNTIME_DIR}/pulse" 2>/dev/null
-        chown -R "${USER_NAME}:${USER_NAME}" "${XDG_RUNTIME_DIR}" 2>/dev/null
-        cat > /tmp/pulse-headless.pa <<EOF
-load-module module-native-protocol-unix socket=${XDG_RUNTIME_DIR}/pulse/native auth-anonymous=1
-load-module module-null-sink sink_name=dummy sink_properties=device.description="DummyOutput"
-load-module module-always-sink
-set-default-sink dummy
-set-default-source dummy.monitor
-EOF
-        chown "${USER_NAME}:${USER_NAME}" /tmp/pulse-headless.pa 2>/dev/null
-        as_user "unset PULSE_SERVER; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pulseaudio --start --log-target=stderr --disallow-exit --exit-idle-time=-1 -n -F /tmp/pulse-headless.pa" >/tmp/pulse.log 2>&1 || echo "    WARNING: pulseaudio start failed (see /tmp/pulse.log)"
-        sleep 2
-        pgrep -x pulseaudio >/dev/null && echo "    pulseaudio running" || echo "    WARNING: pulseaudio failed (see /tmp/pulse.log)"
+    # Audio for Selkies pulsesrc is served by pipewire-pulse (started in
+    # start_gamescope_session): a null sink + dummy.monitor source on the
+    # ${PULSE_SERVER} socket. Just verify the socket is up so the boot log is
+    # explicit about whether Selkies audio will negotiate.
+    if [ -S "${XDG_RUNTIME_DIR}/pulse/native" ]; then
+        echo "    audio socket OK (${XDG_RUNTIME_DIR}/pulse/native)"
+        echo "    --- sinks ---"; as_user "export PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pactl list short sinks 2>/dev/null" | sed 's/^/      /'
+    else
+        echo "    WARNING: pipewire-pulse socket missing — Selkies audio will fail (pulsesrc Connection refused)"
     fi
 
     rtc=/tmp/rtc_config.json
@@ -364,6 +374,34 @@ start_gamescope_session() {
         echo "    WARNING: PipeWire not ready after 15s — see /tmp/pipewire.log (gamescope capture node may be unavailable)"
     fi
 
+    # pipewire-pulse: PulseAudio-compatible server so Selkies' pulsesrc can
+    # capture audio. It creates the ${PULSE_SERVER} socket (unix:/run/user/<uid>
+    # /pulse/native). gamescope mode has no hardware audio, so create a null
+    # sink — its .monitor source is what Selkies' pulsesrc captures (silence
+    # is fine; the point is a CAPTURABLE source so the audio pipeline negotiates
+    # instead of failing with 'pulsesrc Connection refused' -> browser stuck
+    # on 'Waiting for stream'). Replaces the separate PulseAudio daemon (which
+    # also isn't installed in this image — only pulseaudio-utils/pactl is).
+    echo "[*] Starting pipewire-pulse (PulseAudio compat) + null audio sink..."
+    mkdir -p "${XDG_RUNTIME_DIR}/pulse" 2>/dev/null
+    chmod 1777 "${XDG_RUNTIME_DIR}/pulse" 2>/dev/null
+    as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME}; pipewire-pulse >/tmp/pipewire-pulse.log 2>&1 &"
+    local pp_wait=0
+    while [ $pp_wait -lt 15 ]; do
+        [ -S "${XDG_RUNTIME_DIR}/pulse/native" ] && break
+        sleep 1; pp_wait=$((pp_wait+1))
+    done
+    if [ -S "${XDG_RUNTIME_DIR}/pulse/native" ]; then
+        echo "    pipewire-pulse ready (socket ${XDG_RUNTIME_DIR}/pulse/native)"
+        # module-null-sink is supported by pipewire-pulse; gives a default sink
+        # + a dummy.monitor source for pulsesrc to capture.
+        as_user "export PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pactl load-module module-null-sink sink_name=dummy sink_properties=device.description=DummyOutput 2>/dev/null; pactl set-default-sink dummy 2>/dev/null; pactl set-default-source dummy.monitor 2>/dev/null" >/dev/null 2>&1 || true
+        echo "    --- audio sinks ---"; as_user "export PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pactl list short sinks 2>/dev/null" | sed 's/^/      /'
+    else
+        echo "    WARNING: pipewire-pulse socket not up after 15s — Selkies audio will fail (see /tmp/pipewire-pulse.log)"
+        tail -8 /tmp/pipewire-pulse.log 2>/dev/null | sed 's/^/      /'
+    fi
+
     # gamescope headless + Steam (as dpad, with the session env). Unset DISPLAY/
     # WAYLAND_DISPLAY so gamescope doesn't try to nest; VK_ICD pins the NVIDIA ICD.
     # chown ~dpad first — a root boot process (D-Bus/install-display-drivers) can
@@ -407,6 +445,18 @@ start_gamescope_session() {
             rm -f ${USER_HOME}/.steam/steam/steam.pid ${USER_HOME}/.steam/debian-installation/steam.pid 2>/dev/null
             as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
             gs_pid=$!
+        fi
+        # Xvfb :2 + the PipeWire->:2 bridge are the Selkies capture path. If :2
+        # dies (or the bridge gst dies) the browser goes black / loops on
+        # 'Waiting for stream'. Recover both without touching gamescope.
+        if [ ! -S /tmp/.X11-unix/X2 ] || ! pgrep -f "pipewiresrc target-object=gamescope" >/dev/null; then
+            echo "[*] WARNING: Xvfb :2 or bridge died — restarting capture path..."
+            pkill -9 -f "Xvfb :2" 2>/dev/null || true
+            pkill -9 -f "pipewiresrc target-object=gamescope" 2>/dev/null || true
+            rm -f /tmp/.X2-lock /tmp/.X11-unix/X2 2>/dev/null; sleep 1
+            as_user "Xvfb :2 -ac -screen 0 ${GS_W}x${GS_H}x24 +extension GLX +extension RANDR >/tmp/xvfb2.log 2>&1 &" 2>/dev/null
+            sleep 2
+            as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; gst-launch-1.0 pipewiresrc target-object=gamescope ! videoconvert ! ximagesink display=:2 sync=false force-aspect-ratio=false >/tmp/bridge.log 2>&1 &" 2>/dev/null
         fi
     done
 }

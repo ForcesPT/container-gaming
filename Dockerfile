@@ -309,7 +309,15 @@ RUN cd /tmp && curl -fsSL -o cloudflared \
 # =============================================================================
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 
-RUN apt-get update && apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils xsel && rm -rf /var/lib/apt/lists/*
+# pulseaudio-utils (pactl) is REQUIRED by both the DFP PulseAudio path and the
+# gamescope pipewire-pulse path (pactl talks to whichever server is up). The
+# pulseaudio DAEMON is only needed by the DFP path; it can coexist with
+# pipewire-pulse but on some noble setups apt may want to remove one — so install
+# it best-effort (|| true) so a conflict never breaks the build or drops
+# pipewire-pulse from the gamescope path.
+RUN apt-get update && apt-get install -y --no-install-recommends pulseaudio-utils xsel \
+    && (apt-get install -y --no-install-recommends pulseaudio || echo "pulseaudio daemon install skipped (pipewire-pulse is the gamescope audio server)") \
+    && rm -rf /var/lib/apt/lists/*
 
 # =============================================================================
 # 9b. Vulkan loader + tools (diag only). gamescope/DXVK present path is deferred;
@@ -369,9 +377,10 @@ RUN gcc -shared -fPIC -O2 -o /opt/dpadcloud/libnvenc_fix.so /opt/dpadcloud/src/n
 RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common && \
     add-apt-repository -y ppa:3v1n0/gamescope && \
     apt-get update && apt-get install -y --no-install-recommends \
-        gamescope pipewire wireplumber pipewire-audio-client-libraries \
-        libeis-dev gstreamer1.0-pipewire libpipewire-0.3-dev \
-        gstreamer1.0-tools gstreamer1.0-plugins-good gstreamer1.0-plugins-bad && \
+        gamescope pipewire pipewire-audio pipewire-pulse pipewire-audio-client-libraries \
+        wireplumber libeis-dev gstreamer1.0-pipewire libpipewire-0.3-dev \
+        gstreamer1.0-tools gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+        pulseaudio-utils && \
     for b in gamescope gamescopereaper gamescopestream gamescopectl; do \
         [ -e /usr/games/$b ] && ln -sf /usr/games/$b /usr/bin/$b; \
     done && \
