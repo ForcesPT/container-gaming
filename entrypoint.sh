@@ -302,10 +302,13 @@ start_gamescope_session() {
     # Steam takes ~30-40s to launch through pressure-vessel + steamwebhelper
     # under gamescope; a fixed 20s check fires too early and the health loop
     # restarts before Steam stabilises. Poll up to 90s for both processes.
+    # NOTE: use `kill -0 $gs_pid` for gamescope liveness, NOT `pgrep -x gamescope` —
+    # the gamescope process's comm is not exactly "gamescope" (pgrep -x is a false
+    # negative), which made the health loop SIGKILL a healthy Steam every 30s.
     local ready=0
     local rw=0
     while [ $rw -lt 90 ]; do
-        if pgrep -x gamescope >/dev/null && pgrep -x steam >/dev/null; then ready=1; break; fi
+        if kill -0 "$gs_pid" 2>/dev/null && pgrep -x steam >/dev/null; then ready=1; break; fi
         sleep 3; rw=$((rw+3))
     done
     if [ $ready -eq 1 ]; then
@@ -317,10 +320,12 @@ start_gamescope_session() {
     echo "    GPU: $(nvidia-smi -L 2>/dev/null | head -1)"
     echo "    NOTE: capture/stream (PipeWire -> NVENC -> WebRTC) not yet wired in this mode."
 
-    # health loop — restart the gamescope+steam session if gamescope dies
+    # health loop — restart the gamescope+steam session if gamescope dies.
+    # `kill -0 $gs_pid` (not `pgrep -x gamescope` — see note above) checks the
+    # exact PID we launched (the su→gamescope process).
     while true; do
         sleep 30
-        if ! pgrep -x gamescope >/dev/null; then
+        if ! kill -0 "$gs_pid" 2>/dev/null; then
             echo "[*] WARNING: gamescope died — restarting session..."
             kill $gs_pid 2>/dev/null; pkill -9 -x steam 2>/dev/null; pkill -9 -x steamwebhelper 2>/dev/null; sleep 2
             rm -f ${USER_HOME}/.steam/steam/steam.pid ${USER_HOME}/.steam/debian-installation/steam.pid 2>/dev/null
