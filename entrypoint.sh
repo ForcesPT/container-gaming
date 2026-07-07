@@ -262,6 +262,9 @@ bootstrap_steam_on_xvfb() {
 # (gst-launch-1.0) in the image — added in the Dockerfile gamescope step.
 start_gamescope_stream() {
     echo "[*] Stage 2: bridging gamescope PipeWire node -> Xvfb :2 -> Selkies"
+    # clear stale logs from prior runs / manual tests (ownership mismatches can
+    # make the entrypoint (root) fail to overwrite a dpad-owned /tmp/selkies.log).
+    rm -f /tmp/selkies.log /tmp/bridge.log /tmp/coturn.log /tmp/cloudflared-selkies.log /tmp/xvfb2.log /tmp/rtc_config.json 2>/dev/null
     local GS_W GS_H enc rtc url
     GS_W="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f1)"; [ -z "$GS_W" ] && GS_W=1920
     GS_H="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f2)"; [ -z "$GS_H" ] && GS_H=1080
