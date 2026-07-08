@@ -392,7 +392,7 @@ compute_session_resources() {
     local n="$1"
     local total_cpus total_mem_mb reserve_cpus reserve_mem
     total_cpus="$(nproc 2>/dev/null || echo 0)"
-    total_mem_mb="$(awk '/MemTotal/{print int(\$2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
+    total_mem_mb="$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
     reserve_cpus="${DPAD_RESERVE_CPUS:-2}"
     reserve_mem="${DPAD_RESERVE_MEM_MB:-4096}"
     local per_cpus per_mem
