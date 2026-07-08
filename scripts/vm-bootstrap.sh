@@ -79,7 +79,9 @@ DPAD_GAMESCOPE="${DPAD_GAMESCOPE:-1}"
 REPO_URL="${DPAD_REPO_URL:-https://github.com/ForcesPT/container-gaming.git}"
 REPO_DIR="${DPAD_REPO_DIR:-/opt/dpadcloud/container-gaming}"
 SCRIPT_PATH="/opt/dpadcloud/vm-bootstrap.sh"
-IMAGE_TAG="forcespt/dpadcloud-gaming:SteamUbuntu24.04VM"
+# Image tag is selected dynamically by image_tag_for_gpu() in Phase 3:
+# Blackwell (compute_cap >= 12 / sm_120+) -> :SteamUbuntu24.04VM-rtx50 (CUDA 12.8.1);
+# else -> :SteamUbuntu24.04VM (CUDA 12.5.1). DPAD_IMAGE_TAG overrides both.
 CONTAINER_PREFIX="dpad"
 URL_FILE="/opt/dpadcloud/selkies-urls.txt"
 TAG_FILE="/opt/dpadcloud/.image-tag"
@@ -203,6 +205,22 @@ ensure_repo() {
     fi
 }
 
+# Pick the image tag: DPAD_IMAGE_TAG override wins; else Blackwell
+# (compute_cap major >= 12, sm_120+) -> :SteamUbuntu24.04VM-rtx50 (CUDA 12.8.1);
+# else the regular :SteamUbuntu24.04VM (CUDA 12.5.1). Mirrors detect_build_args'
+# CUDA-version pick so the pulled tag always matches the GPU arch.
+image_tag_for_gpu() {
+    [ -n "${DPAD_IMAGE_TAG:-}" ] && { echo "${DPAD_IMAGE_TAG}"; return; }
+    local cc major
+    cc="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')"
+    major="${cc%%.*}"
+    if [ -n "$major" ] && [ "$major" -ge 12 ] 2>/dev/null; then
+        echo "forcespt/dpadcloud-gaming:SteamUbuntu24.04VM-rtx50"
+    else
+        echo "forcespt/dpadcloud-gaming:SteamUbuntu24.04VM"
+    fi
+}
+
 detect_build_args() {
     local cc major
     cc="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')"
@@ -219,19 +237,21 @@ detect_build_args() {
 # Phase 3: image — pull (default) or build (DPAD_BUILD=1)
 # -----------------------------------------------------------------------------
 ensure_image() {
+    local img_tag; img_tag="$(image_tag_for_gpu)"
+    log "selected image: ${img_tag}"
     if [ "${DPAD_BUILD:-0}" = "1" ]; then
         ensure_repo || return 1
         local cuda_ver cuda_pkg
         read -r cuda_ver cuda_pkg <<< "$(detect_build_args)"
-        log "building image ${IMAGE_TAG} (CUDA $cuda_ver / $cuda_pkg)"
+        log "building image ${img_tag} (CUDA $cuda_ver / $cuda_pkg)"
         docker build --build-arg "CUDA_VERSION=${cuda_ver}" --build-arg "CUDA_PKG=${cuda_pkg}" \
-            -t "${IMAGE_TAG}" "$REPO_DIR" || { err "docker build failed"; return 1; }
+            -t "${img_tag}" "$REPO_DIR" || { err "docker build failed"; return 1; }
     else
-        log "pulling image ${IMAGE_TAG} from Docker Hub"
-        docker pull "${IMAGE_TAG}" || { err "docker pull failed"; return 1; }
+        log "pulling image ${img_tag} from Docker Hub"
+        docker pull "${img_tag}" || { err "docker pull failed"; return 1; }
     fi
-    echo "${IMAGE_TAG}" > "$TAG_FILE"
-    log "image ready: ${IMAGE_TAG}"
+    echo "${img_tag}" > "$TAG_FILE"
+    log "image ready: ${img_tag}"
 }
 
 # -----------------------------------------------------------------------------
