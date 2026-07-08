@@ -70,7 +70,7 @@ docker run -d --name dpad-0 --runtime=nvidia --cap-add SYS_ADMIN \
   -e SUNSHINE_PASSWORD=pass0 -e SELKIES_BASIC_AUTH_USER=dpad -e SELKIES_BASIC_AUTH_PASSWORD=pass0 \
   forcespt/dpadcloud-gaming:SteamUbuntu24.04VM
 
-# 3) Watch the boot log (~40-60s after the build-time Steam pre-bootstrap is baked):
+# 3) Watch the boot log (~50s cold boot — see §7 for the per-phase budget):
 docker logs -f dpad-0
 # look for: GAMESCOPE SESSION READY -> input -> gamescope Xwayland :0 -> Selkies running ->
 #          ▶ gamescope browser stream: https://…trycloudflare.com  (login dpad / pass0)
@@ -341,13 +341,29 @@ A healthy gamescope-mode boot prints, in order:
 [*] Starting PipeWire + wireplumber...  PipeWire ready
 [*] Launching gamescope --backend headless -e -W 1920 -H 1080 -- steam -gamepadui
 [*] GAMESCOPE SESSION READY — Steam UI rendering in headless gamescope (no DRM master).
-[*] Stage 2: bridging gamescope PipeWire node -> Xvfb :2 -> Selkies
-    Xvfb :2 up  /  bridge gst running  /  audio socket OK
+[*] Stage 2 (zero-copy): Selkies captures gamescope's PipeWire node directly (pipewiresrc -> cudaupload -> cudaconvert -> nvh264enc); no Xvfb :2 / ximagesrc bridge   # DPAD_VIDEO_SRC=ximagesrc reverts to the :2 bridge
+    audio socket OK (/run/user/1001/pulse/native)
     input -> gamescope Xwayland :0 (XTest, DPAD_INPUT_DISPLAY=:0)    # Stage 3a auto-discovery
     gamepad: SDL_JOYSTICK_LINUX_CLASSIC=1 + SDL_JOYSTICK_DISABLE_UDEV=1 + SDL_JOYSTICK_DEVICE=/dev/input/js0 + SDL_GAMECONTROLLERCONFIG (Selkies GUID) -> v1.6.2 interposer (patched: JSIOCGNAME returns name length) -> /tmp/selkies_jsN.sock (Stage 3b)
     Selkies running on 127.0.0.1:16100 (gamescope bridge, encoder=nvh264enc)
     ▶ gamescope browser stream: https://<words>.trycloudflare.com  (login dpad / pass0)
 ```
+
+**Cold-boot budget (fresh `docker run`, RTX 3060, measured 2026-07-08):**
+
+| Phase | Time | Note |
+|---|---|---|
+| NVIDIA driver `.run` download + install (64+32-bit) | ~14s | re-downloads ~80 MB every boot (host driver version unknown at build time) |
+| CUDA + D-Bus | ~2s | |
+| gamescope mode + Steam pre-bootstrap skip + PipeWire + pipewire-pulse + null sink | ~3s | Steam client baked in at build → no runtime download |
+| Targeted chown + gamepad interposer setup | ~1s | was **119s** with a blanket `chown -R` (overlayfs copy-up of ~33k files / 4 GB) — fixed 2026-07-08 (see §10 "Slow cold boot") |
+| gamescope + Steam → `GAMESCOPE SESSION READY` | ~12s | inherent Steam/pressure-vessel startup |
+| Stage 2 + coturn | ~4s | |
+| Selkies start (WebRTC + GStreamer pipeline) | ~6s | |
+| cloudflared quick tunnel URL | ~10s | DNS + tunnel registration |
+| **Total to stream URL** | **~50s** | was ~172s before the targeted-chown fix |
+
+Next boot-time levers (deferred): cache the NVIDIA `.run` per driver-version (−14s on re-boots of the same VM); parallelize cloudflared/Selkies with Steam startup; the ~12s Steam startup is largely inherent.
 
 Confirm the patch loaded (inside the container):
 ```bash
@@ -405,7 +421,8 @@ docker push forcespt/dpadcloud-gaming:SteamUbuntu24.04VM
 ```
 The build-time Steam pre-bootstrap (`scripts/build-bootstrap-steam.sh`, Dockerfile
 9g) adds ~3–5 min once (cached); it bakes `ubuntu12_64/steamwebhelper` in so a
-fresh boot skips the ~3–4 min Steam download.
+fresh boot skips the ~3–4 min Steam download. A fresh `docker run` now reaches
+the stream URL in **~50s** (was ~172s before the targeted-chown fix — see §7).
 
 ---
 
@@ -423,7 +440,8 @@ fresh boot skips the ~3–4 min Steam download.
 | `mmap() failed: Cannot allocate memory` under gamescope | Host `vm.max_map_count` too low → set `1048576` (§2d). NOT a RAM issue. |
 | Steam "requires user namespaces to be enabled" / `unshare -U` EPERM as `dpad` | Host sysctls (§2c) unset OR container missing `--security-opt seccomp=unconfined apparmor=unconfined` + `--cap-add SYS_ADMIN`. Root `unshare -U` working is NOT enough — needs *unprivileged* userns. |
 | steamwebhelper crash-loop / "Failed creating offscreen shared JS context" | `--shm-size=2g` missing (CEF shared mem). |
-| `~/.local` EPERM aborts Steam bootstrap | A root boot process creates `~/.local` root-owned → Steam's `mkdir ~/.local/share/icons` EPERM. Fix: `chown -R dpad:dpad /home/dpad` before Steam (entrypoint does this). |
+| `~/.local` EPERM aborts Steam bootstrap | A root boot process creates `~/.local` root-owned → Steam's `mkdir ~/.local/share/icons` EPERM. Fix: the entrypoint chowns ONLY non-dpad-owned files: `find /home/dpad ! \( -user dpad -group dpad \) -exec chown dpad:dpad {} +` before Steam. **Do NOT use a blanket `chown -R /home/dpad`** — on overlayfs without `metacopy` it copy-up's all ~33k files (~4 GB, ~120s) even when already dpad-owned (see the "Slow cold boot" row below). |
+| Slow cold boot (~170s, with a ~120s gap between `audio sinks` and `Launching gamescope`) | A blanket `chown -R dpad:dpad /home/dpad` in the entrypoint copy-up's ALL ~33k files / ~4 GB into the overlay upper layer on a fresh container (containerd overlayfs has no `metacopy=on`, so every `chown()` copies the full file data up — EVEN when the owner is already correct). The build-time Steam pre-bootstrap already owns everything as `dpad:dpad`, so 0 files actually need chown — the 119s was pure waste. Fix (commit 2026-07-08): the targeted `find ... ! \( -user dpad -group dpad \)` form skips the 33k already-dpad-owned files → ~0.4s. Cold boot drops 172s → ~50s. Verify on a fresh container: `UP=$(grep -oE 'upperdir=[^,]+' /proc/$(docker inspect -f '{{.State.Pid}}' dpad-0)/mountinfo|cut -d= -f2); find $UP/home/dpad -type f | wc -l` should be ~0 immediately after boot (only Steam's own runtime writes appear later). |
 | Steam first-run "UpdateUI CreateGlFont regular failed" → gamescope segfault loop | Steam's GL updater UI can't create its OpenGL font texture on gamescope headless Xwayland. Fix: `bootstrap_steam_on_xvfb()` pre-bootstraps on Xvfb (mesa/llvmpipe software GL) first; gamescope then runs the already-bootstrapped client. (Build-time `build-bootstrap-steam.sh` front-loads this.) |
 | Health loop SIGKILLs a HEALTHY Steam every 30s / "Illegal termination of worker thread 'GL Composer Thread'" | Health check used `pgrep -x gamescope` (the comm isn't exactly "gamescope" → always false → murders Steam). Fix: `kill -0 $gs_pid`. |
 | Bootstrap wait-loop never terminates | Completion check was `ubuntu12_64/steam` (32-bit, never exists) instead of `ubuntu12_64/steamwebhelper`. |

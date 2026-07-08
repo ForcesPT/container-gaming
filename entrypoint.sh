@@ -209,8 +209,12 @@ bootstrap_steam_on_xvfb() {
     # chown ALL of ~dpad (not just .steam) — a root boot process (D-Bus /
     # install-display-drivers) can create ~/.local root-owned, which makes
     # Steam's `mkdir ~/.local/share/icons` EPERM and abort the bootstrap.
-    # Mirrors the DFP path's chown.
-    chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}" 2>/dev/null || true
+    # Mirrors the DFP path's chown. Targeted: only chown files NOT already owned
+    # by dpad:dpad. A blanket `chown -R` walks all ~33k files in ~dpad (the
+    # pre-baked Steam client) and, on overlayfs without metacopy, copy-up's every
+    # file (~4GB, ~120s) even when the owner is already correct. Only a handful of
+    # root-owned files (from D-Bus / install-display-drivers) actually need fixing.
+    find "${USER_HOME}" ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
 
     echo "[*] Bootstrapping Steam client on Xvfb (first-run GL updater needs software GL, not gamescope Xwayland) — downloads ~300MB once..."
     as_user "Xvfb :8 -screen 0 1280x720x24 +extension GLX +extension RANDR >/tmp/xvfb-bootstrap.log 2>&1 &" 2>/dev/null
@@ -482,7 +486,11 @@ start_gamescope_session() {
     # chown ~dpad first — a root boot process (D-Bus/install-display-drivers) can
     # create ~/.local root-owned, which makes Steam's `mkdir ~/.local/share/icons`
     # EPERM and abort the launch (gamescope then 'Primary child shut down').
-    chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}" 2>/dev/null || true
+    # Targeted chown: only fix files NOT already dpad:dpad (see bootstrap_steam_on_xvfb
+    # note — a blanket `chown -R` copy-up's ~4GB/33k files on overlayfs, ~120s, for
+    # zero benefit since the image already owns everything as dpad). This is the
+    # gamescope-mode cold-boot critical path (was 69% of boot time).
+    find "${USER_HOME}" ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
 
     # Gamepad (Selkies joystick interposer, the v1.6.2 LD_PRELOAD shim). The
     # gamescope path `exit 0`s before the global interposer setup further down, so
@@ -700,7 +708,7 @@ configure_cuda
 # --- Runtime dirs ---
 mkdir -p "${XDG_RUNTIME_DIR}" /tmp/.X11-unix /tmp/.ICE-unix
 chmod 1777 "${XDG_RUNTIME_DIR}" /tmp/.X11-unix /tmp/.ICE-unix
-chown -R "${USER_NAME}:${USER_NAME}" "${XDG_RUNTIME_DIR}"
+find "${XDG_RUNTIME_DIR}" ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
 
 # --- D-Bus (system + session) ---
 echo "[*] Starting D-Bus..."
@@ -944,7 +952,9 @@ fi
 # A root boot process (Xorg/D-Bus helpers) can create ~/.local (or other XDG
 # dirs) root-owned, which makes Steam's `mkdir ~/.local/share/icons` EPERM and
 # aborts the install. Re-claim the home dir right before Steam launches.
-chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}" 2>/dev/null || true
+# Targeted: only chown files NOT already dpad:dpad (avoids the ~4GB/33k overlay
+# copy-up of a blanket `chown -R`).
+find "${USER_HOME}" ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
 mkdir -p "${USER_HOME}/.config/autostart"
 if [ "${DPAD_AUTOSTART_STEAM:-1}" = "1" ]; then
     if [ "${X_SERVER}" = "Xorg" ]; then
@@ -970,7 +980,7 @@ Icon=steam
 Terminal=false
 X-GNOME-Autostart-enabled=true
 EOF
-    chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}/.config/autostart"
+    find "${USER_HOME}/.config/autostart" ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
     echo "[*] Steam autostart configured: ${STEAM_EXEC} ${STEAM_ARGS} (direct launch after desktop -> /tmp/steam.log)"
 else
     rm -f "${USER_HOME}/.config/autostart/Steam.desktop"
@@ -1014,7 +1024,7 @@ fi
 echo "[*] Starting PulseAudio (headless null sink)..."
 mkdir -p "${XDG_RUNTIME_DIR}/pulse"
 chmod 1777 "${XDG_RUNTIME_DIR}" "${XDG_RUNTIME_DIR}/pulse"
-chown -R "${USER_NAME}:${USER_NAME}" "${XDG_RUNTIME_DIR}"
+find "${XDG_RUNTIME_DIR}" ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
 cat > /tmp/pulse-headless.pa <<EOF
 load-module module-native-protocol-unix socket=${XDG_RUNTIME_DIR}/pulse/native auth-anonymous=1
 load-module module-null-sink sink_name=dummy sink_properties=device.description="DummyOutput"
@@ -1150,7 +1160,7 @@ if [ -x "$SUNSHINE_BIN" ]; then
     echo "[*] Configuring Sunshine..."
     as_user "mkdir -p ~/.config/sunshine"
     cp -f /home/dpad/.config/sunshine/sunshine.conf "${USER_HOME}/.config/sunshine/sunshine.conf" 2>/dev/null || true
-    chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}/.config/sunshine"
+    find "${USER_HOME}/.config/sunshine" ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
     as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER}; ${SUNSHINE_BIN} --creds admin '${SUNSHINE_PASS}'" 2>/dev/null || true
     echo "[*] Starting Sunshine..."
     as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} LD_PRELOAD='${LD_PRELOAD}'; ${SUNSHINE_BIN} >/tmp/sunshine.log 2>&1" &
@@ -1283,7 +1293,7 @@ echo "    $(python3 /tmp/cudactx.py 2>&1 | tail -1)"
 # Ensure the GStreamer registry cache dir is user-writable (else Selkies logs
 # 'registry update failed: Permission denied' on /home/dpad/.cache/gstreamer-1.0).
 mkdir -p "${USER_HOME}/.cache/gstreamer-1.0"
-chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}/.cache"
+find "${USER_HOME}/.cache" ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
 rm -rf "${USER_HOME}/.cache/gstreamer-1.0"/* 2>/dev/null || true
 
 # (Joystick interposer + flexgrip LD_PRELOAD were assembled earlier, before
@@ -1350,7 +1360,7 @@ MWS_URL=""
 if [ -x /opt/mws/web-server ]; then
     echo "[*] Configuring moonlight-web-stream (env -> coturn TURN)..."
     mkdir -p /opt/mws/server
-    chown -R "${USER_NAME}:${USER_NAME}" /opt/mws
+    find /opt/mws ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
     # Force fresh config generation each boot (avoids a stale/partial config
     # panicking; data.json — users/hosts — is separate and persists if the
     # /opt/mws/server volume is mounted).
