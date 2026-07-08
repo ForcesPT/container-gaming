@@ -391,13 +391,39 @@ start_gamescope_stream() {
     local selkies_dpy=":2"
     [ "$video_src" = "pipewiresrc" ] && selkies_dpy="${in_dpy:-:0}"
 
-    as_user "export DISPLAY=${selkies_dpy} DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=${in_dpy} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
-    sleep 6
-    if pgrep -f selkies-gstreamer >/dev/null; then
-        echo "    Selkies running on 127.0.0.1:16100 (gamescope bridge, encoder=${enc})"
-    else
-        echo "    WARNING: selkies failed (see /tmp/selkies.log)"; tail -20 /tmp/selkies.log 2>/dev/null | sed 's/^/      /'
-    fi
+    # Selkies launch command (reused by the NVENC-register retry below).
+    local selkies_cmd="export DISPLAY=${selkies_dpy} DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=${in_dpy} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
+    # Launch Selkies, then verify the encoder registered. On multi-GPU hosts
+    # (NVIDIA driver 570+) the FIRST nvh264enc open on a non-zero GPU minor can
+    # fail at plugin-register time (gstnvenc.c NvEncOpenEncodeSessionEx 'error
+    # code 2' — an intermittent NVENC peer-init with the unmounted host GPU 0;
+    # the flexgrip interposer's gpuId->minor matching is unreliable here). The
+    # SECOND open always succeeds (the driver is then 'warm'), so retry the
+    # launch when the encoder fails to register. Tunable via
+    # DPAD_SELKIES_RETRIES (default 3); each attempt sleeps ~6s for register.
+    local attempt=0 max_attempts="${DPAD_SELKIES_RETRIES:-3}" err_before err_after
+    while :; do
+        attempt=$((attempt+1))
+        err_before="$(grep -ac 'NvEncOpenEncodeSessionEx failed' /tmp/selkies.log 2>/dev/null || echo 0)"
+        as_user "${selkies_cmd}" >>/tmp/selkies.log 2>&1 &
+        sleep 6
+        if ! pgrep -f selkies-gstreamer >/dev/null; then
+            echo "    WARNING: selkies failed to start (attempt ${attempt}; see /tmp/selkies.log)"; tail -20 /tmp/selkies.log 2>/dev/null | sed 's/^/      /'
+            break
+        fi
+        err_after="$(grep -ac 'NvEncOpenEncodeSessionEx failed' /tmp/selkies.log 2>/dev/null || echo 0)"
+        if [ "${enc}" = "nvh264enc" ] && [ "${err_after}" -gt "${err_before}" ]; then
+            if [ "${attempt}" -lt "${max_attempts}" ]; then
+                echo "    NVENC encoder failed to register (driver 570+ peer-init race, attempt ${attempt}/${max_attempts}) — restarting Selkies"
+                pkill -f selkies-gstreamer 2>/dev/null; sleep 2
+                continue
+            fi
+            echo "    WARNING: nvh264enc failed to register after ${max_attempts} attempts (see /tmp/selkies.log) — video may be broken; set DPAD_GAMESCOPE_ENCODER=x264enc for software fallback"
+            tail -8 /tmp/selkies.log 2>/dev/null | sed 's/^/      /'
+        fi
+        echo "    Selkies running on 127.0.0.1:16100 (gamescope bridge, encoder=${enc})$([ "${attempt}" -gt 1 ] && echo " — encoder registered on attempt ${attempt}/${max_attempts}")"
+        break
+    done
 
     cloudflared tunnel --no-autoupdate --url http://localhost:16100 >/tmp/cloudflared-selkies.log 2>&1 &
     sleep 10

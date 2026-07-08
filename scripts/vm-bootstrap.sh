@@ -366,15 +366,16 @@ run_all_containers() {
     max="${DPAD_MAX_SESSIONS:-$n}"
     [ "$max" -gt "$n" ] 2>/dev/null && max="$n"
     log "GPUs detected: $n — launching up to ${max} container(s) (DPAD_MAX_SESSIONS=${DPAD_MAX_SESSIONS:-<gpu count>})"
-    # Stagger container launches: on NVIDIA driver 580 (and 570+) two gamescope
-    # containers whose Selkies nvh264enc encoders initialize within ~1s of each
-    # other can race at NVENC register time — the loser's nvh264enc plugin fails
-    # to register (gstnvenc.c NvEncOpenEncodeSessionEx 'error code 2') and that
-    # session has NO video for the whole boot (no retry). A ~12s gap lets the
-    # previous container's encoder register (~20s into its boot) before the next
-    # container's NVENC init starts, clearing the race. Tunable; 0 = no stagger
-    # (the original back-to-back behaviour). Only between launches, not after.
-    local stagger="${DPAD_LAUNCH_STAGGER:-12}"
+    # Stagger container launches (opt-in, DPAD_LAUNCH_STAGGER seconds, default 0).
+    # NOTE: the real fix for the NVENC first-open failure on non-zero GPU minors is
+    # the Selkies encoder-register retry in start_gamescope_stream (entrypoint),
+    # NOT a launch stagger — a 13s gap did NOT prevent the failure (it's not an
+    # encoder-vs-encoder race). Keep this only as an opt-in lever. On driver 570+
+    # a container whose nvh264enc fails to register (NvEncOpenEncodeSessionEx
+    # 'error code 2') would have NO video for the whole boot; the entrypoint retry
+    # restarts Selkies once and the second open succeeds. A non-zero stagger here
+    # just serializes boot, so the default is 0 (back-to-back launches).
+    local stagger="${DPAD_LAUNCH_STAGGER:-0}"
     for (( i=0; i<max; i++ )); do
         if [ "$i" -gt 0 ] && [ "${stagger:-0}" -gt 0 ]; then
             log "staggering ${stagger}s before dpad-${i} (NVENC init race on driver 580)"
