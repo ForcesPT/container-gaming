@@ -412,12 +412,14 @@ Constraints:
 - VRAM per session, GPU compute sharing (MPS/time-slicing).
 - `DPAD_MAX_SESSIONS=1` forces a single session even on a multi-GPU VM.
 
-**✅ VALIDATED: the 2-GPU VM test PASSED** (2026-07-08, 2× RTX 5060 Ti,
-compute_cap 12.0, driver 580.95.05). 2 CDI containers in `DPAD_GAMESCOPE` mode
-→ 2 independent streamed+interactive Steam UIs (video+audio+keyboard+mouse+
-gamepad), zero modesetting contention, each container's `nvidia-smi -L` shows
-exactly 1 GPU (different UUIDs). Two prerequisites were found + fixed for this
-to work (both below):
+**✅ VALIDATED: the 2-GPU AND 4-GPU VM tests PASSED** (2026-07-08; 2× and 4×
+RTX 5060 Ti, compute_cap 12.0, driver 580.95.05). N CDI containers in
+`DPAD_GAMESCOPE` mode → N independent streamed+interactive Steam UIs
+(video+audio+keyboard+mouse+gamepad), zero modesetting contention, each
+container's `nvidia-smi -L` shows exactly 1 GPU (distinct UUIDs). The 4-GPU
+test surfaced a `setup_nvenc_fix` hex-letter-slot bug (fixed, see §10) — it
+now works for any N. Two prerequisites were found + fixed for this to work
+(both below):
 
 1. **NVENC #1249 (the blocker).** On driver 570+ a gamescope container pinned
    to a non-zero GPU minor (dpad-1 → `/dev/nvidia1`) can't open NVENC
@@ -493,6 +495,7 @@ the stream URL in **~50s** (was ~172s before the targeted-chown fix — see §7)
 | Steam shows "no internet" / "can't reach Steam servers" icon but login+install+play work | NOT a NAT timeout and NOT a dual-login (confirmed: user not logged in elsewhere; conntrack established timeout is 432000s). The Steam connection_log shows `ConnectionDisconnected('Disconnected By Remote Host') : 'Failure'` + `RecvMsgClientLogOnResponse: 'Try another CM'` every ~70s — Steam's CM servers bounce the WebSocket session, likely the Vast datacenter IP being bounced by CM load-balancing. Steam recovers + login/install/play work; the icon + ~70s bounce persist. Steam-side, not fixable from the image. A separate cosmetic Steam-UI error `TypeError: SteamClient.System.Network?.StartScanningForNetworks is not a function` (library.js) is a Steam client/JS-API version mismatch (Steam's own code), pre-existing. |
 | `webrtcnice ... failed to resolve "<uuid>.local": Temporary failure in name resolution` | Harmless — Chrome's mDNS `.local` ICE candidates the container can't resolve; the connection succeeds via the TURN relay candidate. Don't chase. |
 | `remote resize is disabled, skipping resize to 2552x1308` | Harmless — hi-DPI browser asked for a bigger size; `--enable_resize=false` fixes the stream at 1920x1080. |
+| On a 4+ GPU VM, dpad-2/dpad-3 (GPU slots with hex letters: `0B`, `0D`) get `NVENC_FIX: mask 0x1` (wrong) → encoder fails → Selkies DOWN; dpad-0/dpad-1 (slots `07`/`09`, no letters) are fine | `setup_nvenc_fix` compared the PCI bus string case-sensitively, but nvidia-smi `pci.bus_id` emits UPPERCASE hex (`00:0B.0`) while `/proc/driver/nvidia/gpus` is lowercase (`0000:00:0b.0`) — slots with hex letters (B,D,F…) never matched → `VISIBLE_BITMASK` fell back to index→minor (always 0) → wrong `NVENC_FIX_AVAILABLE` → interposer kept the wrong GPU. Fix (commit ee46fe4, `entrypoint.sh`): lowercase both keys with `${var,,}` before comparing. Verify: every container logs the correct `DPAD_NVENC_FIX: ... mask 0x1/0x2/0x4/0x8/...` matching its GPU index. (The 2-GPU test missed this because slots 07/09 have no letters.) |
 | NVENC `element NOT FOUND` / `NvEncOpenEncodeSessionEx ... error code 2` / `NV_ENC_ERR_UNSUPPORTED_DEVICE` on a multi-GPU VM (dpad-1 on `/dev/nvidia1` has no video; encoder fails at register AND at peer-connect → 502) | nvidia-container-toolkit **#1249 / #1209** + k8s-device-plugin **#1282** (driver 570-580; only fixed in 610.x): NVENC's `GET_ATTACHED_IDS` returns ALL host GPUs, peer-inits with the unmounted `/dev/nvidia0`, bails. Fix: the flexgrip `libnvenc_fix.so` LD_PRELOAD interposer (scripts/nvenc_fix.c) filters the list to only mounted GPUs. Two fixes shipped 2026-07-08: (a) the interposer's `/proc` gpuId→minor matching now uses the FULL PCI address (`slot=gpuId&0xFF, bus=gpuId>>8, domain=gpuId>>16`) — the old bus-only match failed on single-bus multi-GPU hosts; (b) the interposer is now wired into the GAMESCOPE path (`setup_nvenc_fix()` in the entrypoint, called before the LD_PRELOAD assembly) — it was only in the DFP path (after the gamescope `exit 0`). Auto-enabled on driver 570..609 when host GPU count > mounted; `DPAD_NVENC_FIX=1\|0\|auto`. Verify: selkies.log shows `KEEPING gpuId 0x.. (minor N)`, `filtered: 2 -> 1 GPUs`, and 0 `NvEncOpenEncodeSessionEx failed`. Single-GPU hosts (`gpu_frac=1`) are immune on any driver. |
 | Browser **refresh** sometimes shows "Waiting for stream" (audio-only SDP; `attempt to send data channel message before channel was open` in the browser console) | A Selkies 1.6.2 WebRTC reconnect race (each peer DOES get a fresh webrtcbin via `start_pipeline`, so it's not stale state; the new peer's ICE/data-channel occasionally doesn't re-establish). **Self-heals on a 2nd refresh; a fresh incognito tab always works.** NOT the NVENC fix (the interposer doesn't touch networking). A restart-on-disconnect supervisor would make it 100% consistent (deferred — adds a 5-8s reconnect flash). Acceptable workaround: refresh once more, or open a fresh tab. |
 | selkies.log `cudanvrtc ... couldn't compile nvrtc program ... invalid value for --gpu-architecture (-arch)` on Blackwell | Non-fatal/cosmetic: the bundled GStreamer ships a CUDA **11.4** `libnvrtc` (`/opt/gstreamer/.../libnvrtc.so.11.4.152`) that can't JIT-compile for sm_120; the plugin falls back to a pre-compiled cubin so video works. (A real fix would make the CUDA 12.8 libnvrtc win, but the plugin links soname 11 — deferred.) Ignore. |
