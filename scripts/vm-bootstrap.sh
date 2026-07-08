@@ -7,8 +7,9 @@
 # own Selkies tunnel URL printed to the console.
 #
 # Phases (each idempotent — safe to re-run, safe across the one reboot below):
-#   1. ensure  nvidia_drm.modeset = Y   (REQUIRED for the DFP / full-Steam path;
-#          if the VM boots with N, set it persistently + reload, or reboot once)
+#   1. ensure  nvidia_drm.modeset = Y   (REQUIRED for BOTH the gamescope
+#          --backend headless path AND the DFP Xorg path; if the VM boots with
+#          N, set it persistently + reload, or reboot once)
 #   2. install nvidia-container-toolkit (needed for `docker run --gpus ...`)
 #   3. pull  forcespt/dpadcloud-gaming:SteamUbuntu24.04VM  (or build; DPAD_BUILD=1)
 #   4. detect GPU count N, launch N containers (one per GPU):
@@ -48,9 +49,11 @@
 # Env overrides (optional):
 #   DPAD_SESSION_PASSWORDS  comma-separated per-session browser passwords
 #                           (one per GPU; default: pass0,pass1,...)
-#   DPAD_ISOLATION          privileged (default) | caps  (caps drops --privileged
-#                           for tighter per-GPU isolation: --cap-add SYS_ADMIN
-#                           --device /dev/uinput + --gpus device=i)
+#   DPAD_ISOLATION          cdi (default) | legacy  (cdi = per-GPU isolation
+#                           via --runtime=nvidia + NVIDIA_VISIBLE_DEVICES=
+#                           nvidia.com/gpu=i + --cap-add SYS_ADMIN, no
+#                           --privileged; legacy = old --privileged --gpus
+#                           device=i, no isolation, debug only)
 #   DPAD_TURN_BASE_PORT     default 3478
 #   DPAD_BUILD=1            clone+build instead of pull (dev path)
 #   DPAD_REPO_URL, DPAD_REPO_DIR, SELKIES_BASIC_AUTH_USER
@@ -66,6 +69,12 @@ if [ -f /etc/environment ]; then
     . /etc/environment 2>/dev/null || true
     set +a
 fi
+
+# Default to the gamescope headless MVP (the validated path: full interactive
+# Steam in the browser with video+audio+keyboard+mouse+gamepad, no DRM master ->
+# N-on-N-GPUs multi-tenant). Set DPAD_GAMESCOPE=0 in /etc/environment to opt out
+# to the DFP Xorg path (1 full-Steam session per VM, DRM master).
+DPAD_GAMESCOPE="${DPAD_GAMESCOPE:-1}"
 
 REPO_URL="${DPAD_REPO_URL:-https://github.com/ForcesPT/container-gaming.git}"
 REPO_DIR="${DPAD_REPO_DIR:-/opt/dpadcloud/container-gaming}"
@@ -86,7 +95,9 @@ err()  { echo "[dpadcloud-bootstrap][ERROR] $*" >&2; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # -----------------------------------------------------------------------------
-# Phase 1: nvidia_drm.modeset = Y  (DFP Xorg / DRM master / Steam UI need KMS)
+# Phase 1: nvidia_drm.modeset = Y  (REQUIRED for gamescope --backend headless
+# on NVIDIA — without it vkCreateDevice fails (-7) / 'Failed to create backend' —
+# AND for the DFP Xorg / DRM-master path. Steam UI needs KMS either way.)
 # -----------------------------------------------------------------------------
 ensure_modeset() {
     local cur
