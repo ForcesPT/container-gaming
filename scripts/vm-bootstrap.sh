@@ -328,7 +328,29 @@ run_container_for() {
     local -a iso=()
     while IFS= read -r a; do iso+=( "$a" ); done < <(isolation_args "$idx")
 
-    log "launching $name : GPU $idx, coturn ${port} -> tcp_ext ${tcp_ext:-<none>}, udp_ext ${udp_ext:-<none>}, public ${pub_ip:-<?>}"
+    # Resource partitioning (CPU + RAM) — host divided evenly across the launched
+    # containers minus a reserve; computed by compute_session_resources(). The
+    # GPU is already 1:1 per container via CDI. Mode = DPAD_CPU_MODE (quota
+    # default). per-session overrides: DPAD_CPUS_PER_SESSION / DPAD_MEM_PER_SESSION.
+    local -a res=()
+    if [ "${SESSION_CPUS:-0}" -gt 0 ] 2>/dev/null; then
+        case "${SESSION_CPU_MODE:-quota}" in
+            pinned)
+                local cs=$(( ${SESSION_RESERVE_CPUS:-0} + idx * SESSION_CPUS ))
+                res+=( --cpuset-cpus="${cs}-$(( cs + SESSION_CPUS - 1 ))" ) ;;
+            shares)
+                res+=( --cpu-shares=$(( SESSION_CPUS * 1024 )) ) ;;
+            quota|*)
+                res+=( --cpus="${SESSION_CPUS}" ) ;;
+        esac
+    fi
+    if [ "${SESSION_MEM_MB:-0}" -gt 0 ] 2>/dev/null; then
+        res+=( --memory="${SESSION_MEM_MB}m" --memory-swap="${SESSION_MEM_MB}m" )
+        # soft floor: the kernel reclaims elsewhere before OOM-killing this cgroup
+        res+=( --memory-reservation="$(( SESSION_MEM_MB * 90 / 100 ))m" )
+    fi
+    res+=( --pids-limit="${DPAD_PIDS_LIMIT:-4096}" )
+    log "launching $name : GPU $idx, coturn ${port} -> tcp_ext ${tcp_ext:-<none>}, udp_ext ${udp_ext:-<none>}, public ${pub_ip:-<?>}, resources: ${SESSION_CPUS:-0} cpu (${SESSION_CPU_MODE:-quota}) / ${SESSION_MEM_MB:-0}MB"
     # DPAD_GAMESCOPE=1 switches the container to the gamescope headless + Steam
     # multi-tenant path (no DRM master). Pass-through DPAD_GAMESCOPE/DPAD_STEAM_ARGS
     # so the on-start can opt in without editing the bootstrap.
@@ -344,6 +366,7 @@ run_container_for() {
     [ -n "$udp_ext" ] && port_args+=( -p "${port}:${port}/udp" -e "DPAD_TURN_UDP_EXTERNAL_PORT=${udp_ext}" )
     docker run -d --name "$name" \
         "${iso[@]}" --shm-size=2g --ulimit nofile=1048576:1048576 \
+        "${res[@]}" \
         "${port_args[@]}" \
         -e DPAD_PROVIDER=runpod -e DPAD_COTURN_PORT="$port" \
         -e "DPAD_TURN_PUBLIC_IP=${pub_ip}" \
@@ -353,6 +376,54 @@ run_container_for() {
         "${gs_env[@]}" \
         "$img_tag" || { err "docker run $name failed"; return 1; }
     log "$name launched (login ${SELKIES_USER}/${sess_pass})"
+}
+
+# Compute the per-container CPU + RAM slice for multi-tenant partitioning.
+# The host's CPU + RAM are divided evenly across the N launched containers (1
+# per GPU), minus a host reserve (docker/sshd/kernel). GPU itself is already
+# 1:1 isolated per container via CDI, so only CPU + RAM are partitioned here.
+#   per_cpus = (nproc - DPAD_RESERVE_CPUS)   / N
+#   per_mem  = (MemTotal - DPAD_RESERVE_MEM_MB) / N
+# Overrides: DPAD_CPUS_PER_SESSION / DPAD_MEM_PER_SESSION force a fixed slice.
+# CPU mode: DPAD_CPU_MODE=quota (default, --cpus hard cap) | pinned (--cpuset-cpus)
+# | shares (--cpu-shares, soft, borrows idle cores). Sets SESSION_CPUS,
+# SESSION_MEM_MB, SESSION_CPU_MODE, SESSION_RESERVE_CPUS for run_container_for.
+compute_session_resources() {
+    local n="$1"
+    local total_cpus total_mem_mb reserve_cpus reserve_mem
+    total_cpus="$(nproc 2>/dev/null || echo 0)"
+    total_mem_mb="$(awk '/MemTotal/{print int(\$2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
+    reserve_cpus="${DPAD_RESERVE_CPUS:-2}"
+    reserve_mem="${DPAD_RESERVE_MEM_MB:-4096}"
+    local per_cpus per_mem
+    if [ -n "${DPAD_CPUS_PER_SESSION:-}" ]; then
+        per_cpus="${DPAD_CPUS_PER_SESSION}"
+    elif [ "${n:-0}" -gt 0 ] 2>/dev/null; then
+        per_cpus=$(( (total_cpus - reserve_cpus) / n ));
+        [ "${per_cpus}" -lt 1 ] && per_cpus=1
+    else
+        per_cpus=0
+    fi
+    if [ -n "${DPAD_MEM_PER_SESSION:-}" ]; then
+        per_mem="${DPAD_MEM_PER_SESSION}"
+    elif [ "${n:-0}" -gt 0 ] 2>/dev/null; then
+        per_mem=$(( (total_mem_mb - reserve_mem) / n ));
+        [ "${per_mem}" -lt 1024 ] && per_mem=1024
+    else
+        per_mem=0
+    fi
+    SESSION_CPUS="${per_cpus}"
+    SESSION_MEM_MB="${per_mem}"
+    SESSION_CPU_MODE="${DPAD_CPU_MODE:-quota}"
+    SESSION_RESERVE_CPUS="${reserve_cpus}"
+    # Floor warnings: Steam + CEF + nvh264enc want ~3 cpu / ~6G to be comfortable.
+    if [ "${per_cpus:-0}" -gt 0 ] && [ "${per_cpus:-0}" -lt 3 ] 2>/dev/null; then
+        log "WARNING: per-session CPU quota is ${per_cpus} (< 3) — Steam/CEF/encoder may be CPU-starved; lower DPAD_RESERVE_CPUS or reduce DPAD_MAX_SESSIONS"
+    fi
+    if [ "${per_mem:-0}" -gt 0 ] && [ "${per_mem:-0}" -lt 6144 ] 2>/dev/null; then
+        log "WARNING: per-session memory is ${per_mem}MB (< 6GB) — Steam/CEF need more; lower DPAD_RESERVE_MEM_MB or reduce DPAD_MAX_SESSIONS"
+    fi
+    log "resource partitioning: host ${total_cpus} cpu / ${total_mem_mb}MB ram; reserve ${reserve_cpus} cpu / ${reserve_mem}MB; per session (N=${n}): ${per_cpus} cpu (${SESSION_CPU_MODE}) / ${per_mem}MB"
 }
 
 run_all_containers() {
@@ -366,6 +437,7 @@ run_all_containers() {
     max="${DPAD_MAX_SESSIONS:-$n}"
     [ "$max" -gt "$n" ] 2>/dev/null && max="$n"
     log "GPUs detected: $n — launching up to ${max} container(s) (DPAD_MAX_SESSIONS=${DPAD_MAX_SESSIONS:-<gpu count>})"
+    compute_session_resources "$max"
     # Stagger container launches (opt-in, DPAD_LAUNCH_STAGGER seconds, default 0).
     # NOTE: the real fix for the NVENC first-open failure on non-zero GPU minors is
     # the Selkies encoder-register retry in start_gamescope_stream (entrypoint),
