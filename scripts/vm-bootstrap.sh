@@ -366,7 +366,20 @@ run_all_containers() {
     max="${DPAD_MAX_SESSIONS:-$n}"
     [ "$max" -gt "$n" ] 2>/dev/null && max="$n"
     log "GPUs detected: $n — launching up to ${max} container(s) (DPAD_MAX_SESSIONS=${DPAD_MAX_SESSIONS:-<gpu count>})"
+    # Stagger container launches: on NVIDIA driver 580 (and 570+) two gamescope
+    # containers whose Selkies nvh264enc encoders initialize within ~1s of each
+    # other can race at NVENC register time — the loser's nvh264enc plugin fails
+    # to register (gstnvenc.c NvEncOpenEncodeSessionEx 'error code 2') and that
+    # session has NO video for the whole boot (no retry). A ~12s gap lets the
+    # previous container's encoder register (~20s into its boot) before the next
+    # container's NVENC init starts, clearing the race. Tunable; 0 = no stagger
+    # (the original back-to-back behaviour). Only between launches, not after.
+    local stagger="${DPAD_LAUNCH_STAGGER:-12}"
     for (( i=0; i<max; i++ )); do
+        if [ "$i" -gt 0 ] && [ "${stagger:-0}" -gt 0 ]; then
+            log "staggering ${stagger}s before dpad-${i} (NVENC init race on driver 580)"
+            sleep "$stagger"
+        fi
         run_container_for "$i" && started=$((started+1))
     done
     if [ "$started" -eq 0 ]; then
