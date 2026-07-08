@@ -102,9 +102,12 @@ compute_cap>=750 cuda_max_good>=12.1 gpu_display_active=false rentable=true veri
   CUDA 12.5.1 (our base) runs on any driver ≥525 via minor-version compat.
 - Cheapest NVENC: `gpu_frac=1 num_gpus=1` (single-GPU machines, immune to the
   nvidia-container-toolkit #1249 multi-GPU NVENC issue on any driver).
-- RTX 50/Blackwell (sm_120) needs the **`-rtx50` image variant**
+- RTX 50/Blackwell (sm_120/sm_121) needs the **`-rtx50` image variant**
   (`:SteamUbuntu24.04VM-rtx50`, CUDA 12.8.1) — driver ≥570, in the #1249 range
-  (the flexgrip interposer covers it).
+  (the flexgrip interposer covers it). **`vm-bootstrap.sh` now auto-selects it**
+  via `image_tag_for_gpu()` when `compute_cap ≥ 12` (no manual tag); override
+  with `DPAD_IMAGE_TAG`. Build it with
+  `docker build --build-arg CUDA_VERSION=12.8.1 --build-arg CUDA_PKG=12-8 -t forcespt/dpadcloud-gaming:SteamUbuntu24.04VM-rtx50 .`
 
 ### Expose ports
 - **One port per GPU session**, exposed as **UDP** (recommended — lower latency under loss):
@@ -223,6 +226,15 @@ docker run -d --name dpad-0 --runtime=nvidia --cap-add SYS_ADMIN \
 | `DPAD_MAX_SESSIONS` | (all GPUs) | Cap the number of containers vm-bootstrap launches (e.g. `1` for a clean single-user session even on a multi-GPU VM). |
 | `DPAD_SESSION_PASSWORDS` | (unset) | Per-session password list (vm-bootstrap assigns one per container). |
 | `DPAD_ISOLATION` | `cdi` | `cdi` (per-GPU, recommended) or `legacy` (`--gpus`). |
+| `DPAD_IMAGE_TAG` | (auto) | Force a specific image tag (e.g. `:SteamUbuntu24.04VM-rtx50`), bypassing the `compute_cap ≥ 12 → -rtx50` auto-select. |
+| `DPAD_NVENC_FIX` | `auto` | `1\|0\|auto` — enable the flexgrip `libnvenc_fix.so` NVENC #1249 interposer. `auto` = on for driver 570..609 when host GPU count > mounted `/dev/nvidiaX`. Required for N-on-N on driver 570+. |
+| `DPAD_RESERVE_CPUS` | `2` | CPUs kept for the host (docker/sshd/kernel) before dividing the rest across N containers. |
+| `DPAD_RESERVE_MEM_MB` | `4096` | RAM (MB) kept for the host before dividing the rest across N containers. |
+| `DPAD_CPUS_PER_SESSION` | (auto) | Override the auto CPU quota with a fixed `--cpus` per container. |
+| `DPAD_MEM_PER_SESSION` | (auto) | Override the auto RAM cap with a fixed `--memory` (MB) per container. |
+| `DPAD_CPU_MODE` | `quota` | `quota` (`--cpus`, hard cap) \| `pinned` (`--cpuset-cpus`, core block per container) \| `shares` (`--cpu-shares`, soft, borrows idle cores). |
+| `DPAD_PIDS_LIMIT` | `4096` | Per-container `--pids-limit` (caps runaway fork/threads). |
+| `DPAD_LAUNCH_STAGGER` | `0` | Seconds to wait between container launches (opt-in; did NOT prevent the NVENC race — kept as a lever). |
 | `STEAM_USER` | (unset) | Headless `steamcmd`/`dpad-launch` path (not the gamescope path). |
 | `SDL_JOYSTICK_LINUX_CLASSIC` | `1` (gamescope) | Forces SDL3 to the classic `/dev/input/js*` joystick backend (`JSIOCG*` + 8-byte `js_event`) that the v1.6.2 interposer hooks, instead of the default evdev/libudev backend. Set by the entrypoint on the gamescope+Steam launch. |
 | `SDL_JOYSTICK_DISABLE_UDEV` | `1` (gamescope) | Forces SDL3 `ENUMERATION_FALLBACK` (inotify + 3s scandir hotplug) instead of libudev — needed because `SDL_GetSandbox()` doesn't detect a plain Vast Docker container, so SDL3 would otherwise use libudev (no daemon → no devices + no hotplug). |
@@ -400,12 +412,37 @@ Constraints:
 - VRAM per session, GPU compute sharing (MPS/time-slicing).
 - `DPAD_MAX_SESSIONS=1` forces a single session even on a multi-GPU VM.
 
-**Validation pending: the 2-GPU VM test** — 2 CDI containers in
-`DPAD_GAMESCOPE` mode → 2 independent streamed+interactive Steam UIs, zero
-modesetting contention. (gamescope's EIS socket
-`/run/user/<uid>/gamescope-0-ei` + `Successfully initialized libei for input
-emulation!` remain available as a future input path, but XTest on `:0` is
-validated and sufficient.)
+**✅ VALIDATED: the 2-GPU VM test PASSED** (2026-07-08, 2× RTX 5060 Ti,
+compute_cap 12.0, driver 580.95.05). 2 CDI containers in `DPAD_GAMESCOPE` mode
+→ 2 independent streamed+interactive Steam UIs (video+audio+keyboard+mouse+
+gamepad), zero modesetting contention, each container's `nvidia-smi -L` shows
+exactly 1 GPU (different UUIDs). Two prerequisites were found + fixed for this
+to work (both below):
+
+1. **NVENC #1249 (the blocker).** On driver 570+ a gamescope container pinned
+   to a non-zero GPU minor (dpad-1 → `/dev/nvidia1`) can't open NVENC
+   (`NvEncOpenEncodeSessionEx ... error code 2`); the regular CUDA-12.5.1 image
+   also can't drive Blackwell. Fixes: the flexgrip `libnvenc_fix.so` interposer
+   is now wired into the gamescope path (`setup_nvenc_fix()` in the entrypoint,
+   auto-enabled on driver 570..609 when host GPU count > mounted) AND its
+   `/proc` gpuId→minor matching was fixed to use the full PCI address (single-bus
+   multi-GPU hosts share bus 0, differ by slot). Plus `vm-bootstrap.sh` auto-
+   selects `:SteamUbuntu24.04VM-rtx50` on `compute_cap ≥ 12`. See §10.
+2. **CPU + RAM resource partitioning.** `vm-bootstrap.sh` divides the host's
+   CPU + RAM evenly across the N containers (1/GPU), minus a host reserve:
+   `per_cpus = (nproc - DPAD_RESERVE_CPUS)/N`, `per_mem = (MemTotal -
+   DPAD_RESERVE_MEM_MB)/N`, applied as `--cpus` (hard quota; `DPAD_CPU_MODE`),
+   `--memory`+`--memory-swap` (hard RAM cap) + `--memory-reservation` (soft
+   floor) + `--pids-limit`. The GPU is already 1:1 per container via CDI. For a
+   23-cpu/101GB/2-GPU VM → each tenant gets 10 cpu + ~47.5 GB + 1 GPU.
+   Defaults: reserve 2 CPU + 4 GB. See the env-var table below.
+
+Known minor quirk: browser **refresh occasionally shows "Waiting for stream"**
+(a Selkies 1.6.2 WebRTC reconnect race; self-heals on a 2nd refresh; a fresh
+incognito tab always works) — not the NVENC fix, see §10. (gamescope's EIS
+socket `/run/user/<uid>/gamescope-0-ei` + `Successfully initialized libei for
+input emulation!` remain available as a future input path, but XTest on `:0`
+is validated and sufficient.)
 
 ---
 
@@ -456,7 +493,10 @@ the stream URL in **~50s** (was ~172s before the targeted-chown fix — see §7)
 | Steam shows "no internet" / "can't reach Steam servers" icon but login+install+play work | NOT a NAT timeout and NOT a dual-login (confirmed: user not logged in elsewhere; conntrack established timeout is 432000s). The Steam connection_log shows `ConnectionDisconnected('Disconnected By Remote Host') : 'Failure'` + `RecvMsgClientLogOnResponse: 'Try another CM'` every ~70s — Steam's CM servers bounce the WebSocket session, likely the Vast datacenter IP being bounced by CM load-balancing. Steam recovers + login/install/play work; the icon + ~70s bounce persist. Steam-side, not fixable from the image. A separate cosmetic Steam-UI error `TypeError: SteamClient.System.Network?.StartScanningForNetworks is not a function` (library.js) is a Steam client/JS-API version mismatch (Steam's own code), pre-existing. |
 | `webrtcnice ... failed to resolve "<uuid>.local": Temporary failure in name resolution` | Harmless — Chrome's mDNS `.local` ICE candidates the container can't resolve; the connection succeeds via the TURN relay candidate. Don't chase. |
 | `remote resize is disabled, skipping resize to 2552x1308` | Harmless — hi-DPI browser asked for a bigger size; `--enable_resize=false` fixes the stream at 1920x1080. |
-| NVENC `element NOT FOUND` / `NV_ENC_ERR_UNSUPPORTED_DEVICE` on multi-GPU hosts | nvidia-container-toolkit #1249 (driver 570+). Fix: the flexgrip `libnvenc_fix.so` interposer (auto-enabled when host GPUs > mounted `/dev/nvidiaX` on driver 570..609). Single-GPU hosts (`gpu_frac=1`) are immune on any driver. |
+| NVENC `element NOT FOUND` / `NvEncOpenEncodeSessionEx ... error code 2` / `NV_ENC_ERR_UNSUPPORTED_DEVICE` on a multi-GPU VM (dpad-1 on `/dev/nvidia1` has no video; encoder fails at register AND at peer-connect → 502) | nvidia-container-toolkit **#1249 / #1209** + k8s-device-plugin **#1282** (driver 570-580; only fixed in 610.x): NVENC's `GET_ATTACHED_IDS` returns ALL host GPUs, peer-inits with the unmounted `/dev/nvidia0`, bails. Fix: the flexgrip `libnvenc_fix.so` LD_PRELOAD interposer (scripts/nvenc_fix.c) filters the list to only mounted GPUs. Two fixes shipped 2026-07-08: (a) the interposer's `/proc` gpuId→minor matching now uses the FULL PCI address (`slot=gpuId&0xFF, bus=gpuId>>8, domain=gpuId>>16`) — the old bus-only match failed on single-bus multi-GPU hosts; (b) the interposer is now wired into the GAMESCOPE path (`setup_nvenc_fix()` in the entrypoint, called before the LD_PRELOAD assembly) — it was only in the DFP path (after the gamescope `exit 0`). Auto-enabled on driver 570..609 when host GPU count > mounted; `DPAD_NVENC_FIX=1\|0\|auto`. Verify: selkies.log shows `KEEPING gpuId 0x.. (minor N)`, `filtered: 2 -> 1 GPUs`, and 0 `NvEncOpenEncodeSessionEx failed`. Single-GPU hosts (`gpu_frac=1`) are immune on any driver. |
+| Browser **refresh** sometimes shows "Waiting for stream" (audio-only SDP; `attempt to send data channel message before channel was open` in the browser console) | A Selkies 1.6.2 WebRTC reconnect race (each peer DOES get a fresh webrtcbin via `start_pipeline`, so it's not stale state; the new peer's ICE/data-channel occasionally doesn't re-establish). **Self-heals on a 2nd refresh; a fresh incognito tab always works.** NOT the NVENC fix (the interposer doesn't touch networking). A restart-on-disconnect supervisor would make it 100% consistent (deferred — adds a 5-8s reconnect flash). Acceptable workaround: refresh once more, or open a fresh tab. |
+| selkies.log `cudanvrtc ... couldn't compile nvrtc program ... invalid value for --gpu-architecture (-arch)` on Blackwell | Non-fatal/cosmetic: the bundled GStreamer ships a CUDA **11.4** `libnvrtc` (`/opt/gstreamer/.../libnvrtc.so.11.4.152`) that can't JIT-compile for sm_120; the plugin falls back to a pre-compiled cubin so video works. (A real fix would make the CUDA 12.8 libnvrtc win, but the plugin links soname 11 — deferred.) Ignore. |
+| nvenc_fix logs a ~3/sec `GET_ATTACHED_IDS ... filtered: 2 -> 1 GPUs` stream in selkies.log | Benign NVENC monitoring-thread poll, logged because `NVENC_FIX_DEBUG=1` (the entrypoint sets it when the fix is enabled). Not a loop bug; set `DPAD_NVENC_FIX=0` to disable the fix+logging if you want silence (but you lose the #1249 fix). |
 | `~/.steam/root` a real dir → steam.sh `rm -f ~/.steam/root` fails | Dockerfile step 9f relocates Proton-GE to `~/.steam/debian-installation/compatibilitytools.d` and makes `~/.steam/root` a symlink. |
 | `pulseaudio: command not found` (gamescope audio path) | No PulseAudio daemon in the image (only `pulseaudio-utils`/`pactl`). Fix: audio uses **`pipewire-pulse`** (the running PipeWire serves a Pulse-compatible socket) + `pactl load-module module-null-sink` for `dummy.monitor`. |
 
@@ -473,7 +513,7 @@ the stream URL in **~50s** (was ~172s before the targeted-chown fix — see §7)
 
 | Provider | Mode | Steam UI | Multi-tenant |
 |---|---|---|---|
-| **Vast KVM VM (ubuntu_cli_22.04-2025-11-21)** + nested Docker | `DPAD_GAMESCOPE=1` (gamescope headless) | ✅ full interactive (video+audio+kbd+mouse in browser), cloud/online | ✅ N-on-N-GPUs (no DRM master) — pending 2-GPU test |
+| **Vast KVM VM (ubuntu_cli_22.04-2025-11-21)** + nested Docker | `DPAD_GAMESCOPE=1` (gamescope headless) | ✅ full interactive (video+audio+kbd+mouse in browser), cloud/online | ✅ N-on-N-GPUs (no DRM master) — **validated 2-GPU (2× RTX 5060 Ti)** + CPU/RAM partitioning |
 | Vast KVM VM, DFP path (`DPAD_GAMESCOPE=0`) | Xorg + nvidia DDX, DRM master | ✅ full Steam | ❌ 1 full-Steam per VM (modeset singleton) |
 | Vast Docker / RunPod Community Cloud | headless `steamcmd + dpad-launch` | ❌ (no userns → CEF crashes under bubbleroot/proot) | single-player, local saves |
 | Bare-metal + QEMU/KVM/VFIO (one VM/GPU) | DFP | ✅ full Steam | ✅ N full-Steam on one host (separate driver instances) |
