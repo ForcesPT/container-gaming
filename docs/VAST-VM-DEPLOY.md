@@ -11,37 +11,69 @@
 
 ## TL;DR — the validated launch
 
+**Primary method: the one-command `vm-bootstrap.sh`** (automates host setup +
+pulls the image + launches one CDI container per GPU + waits for each Selkies
+URL + prints them). This is what's validated end-to-end (gamepad + cursor +
+video + audio). On a freshly-provisioned `vastai/kvm:ubuntu_cli_22.04-2025-11-21`
+VM (expose **one UDP port per GPU**: `-p 3478:3478/udp` for 1 GPU), as root:
+
 ```bash
-# 1) One-time on the VM host (vm-bootstrap.sh does ALL of this automatically):
+# Opt into gamescope headless mode (the validated MVP). vm-bootstrap sources
+# /etc/environment so the systemd service it installs sees this too.
+grep -q DPAD_GAMESCOPE /etc/environment 2>/dev/null || echo "DPAD_GAMESCOPE=1" >> /etc/environment
+
+# Fetch + install the bootstrap (it installs itself as a systemd oneshot so it
+# survives the one-time modeset=Y reboot and re-runs at every boot).
+mkdir -p /opt/dpadcloud && \
+  curl -fsSL https://raw.githubusercontent.com/ForcesPT/container-gaming/main/scripts/vm-bootstrap.sh \
+    -o /opt/dpadcloud/vm-bootstrap.sh && \
+  chmod +x /opt/dpadcloud/vm-bootstrap.sh && \
+  /opt/dpadcloud/vm-bootstrap.sh install
+
+# Watch it go (modeset=Y -> nvidia-container-toolkit + CDI -> pull -> N containers -> URLs):
+journalctl -u dpadcloud-bootstrap -f
+# ...ends with: "DpadCloud READY" + each session's Selkies tunnel URL + login.
+# URLs are also written to /opt/dpadcloud/selkies-urls.txt.
+# Then open a URL (login dpad / pass0) — video + audio + keyboard + mouse + gamepad all work.
+#   gamepad: connect a controller in the browser + press a button; Steam Big Picture detects
+#   "Selkies Controller". Check: docker exec dpad-0 tail /tmp/selkies_js.log
+#   (must show the full probe: JSIOCGNAME -> JSIOCGBUTTONS -> JSIOCGAXES -> JSIOCGBTNMAP -> JSIOCGAXMAP).
+```
+
+**Manual equivalent** (what `vm-bootstrap.sh` automates — for understanding/debugging):
+
+```bash
+# 1) One-time host setup:
+nvidia-ctk runtime configure --runtime=docker && systemctl restart docker
 nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
 cat > /etc/sysctl.d/99-dpad-userns.conf <<'EOF'
 kernel.unprivileged_userns_clone=1
 kernel.apparmor_restrict_unprivileged_userns=0
+vm.max_map_count=1048576          # Steam+CEF under gamescope (default 65530 OOMs it)
 EOF
 sysctl --system
-# vm.max_map_count for Steam+CEF under gamescope (default 65530 OOMs it)
-echo 'vm.max_map_count=1048576' > /etc/sysctl.d/99-dpad-mmap.conf && sysctl -p /etc/sysctl.d/99-dpad-mmap.conf
-# nvidia_drm.modeset=Y (one reboot if not already set)
-grep -q Y /sys/module/nvidia_drm/parameters/modeset || { echo Y > /sys/module/nvidia_drm/parameters/modeset; reboot; }
+# nvidia_drm.modeset=Y (gamescope --backend headless on NVIDIA needs it; one reboot if N):
+echo 'options nvidia_drm modeset=1' > /etc/modprobe.d/nvidia-drm.conf
+modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia 2>/dev/null; modprobe nvidia_drm modeset=1 || reboot
 
-# 2) Pull + launch (CDI, NO --privileged):
+# 2) Pull + launch ONE container (CDI, NO --privileged). UDP is recommended (lower
+#    latency under loss); Vast forbids the same port as both tcp+udp, so pick ONE.
 docker pull forcespt/dpadcloud-gaming:SteamUbuntu24.04VM
 docker run -d --name dpad-0 --runtime=nvidia --cap-add SYS_ADMIN \
   --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
   -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=0 \
   --device /dev/uinput --shm-size=2g --ulimit nofile=1048576:1048576 \
-  -p 3478:3478 \
+  -p 3478:3478/udp \
   -e DPAD_PROVIDER=runpod -e DPAD_COTURN_PORT=3478 \
-  -e DPAD_TURN_PUBLIC_IP=$PUBLIC_IPADDR -e DPAD_TURN_EXTERNAL_PORT=$VAST_TCP_PORT_3478 \
+  -e DPAD_TURN_PUBLIC_IP=$PUBLIC_IPADDR -e DPAD_TURN_UDP_EXTERNAL_PORT=$VAST_UDP_PORT_3478 \
   -e DPAD_GAMESCOPE=1 \
   -e SUNSHINE_PASSWORD=pass0 -e SELKIES_BASIC_AUTH_USER=dpad -e SELKIES_BASIC_AUTH_PASSWORD=pass0 \
   forcespt/dpadcloud-gaming:SteamUbuntu24.04VM
 
 # 3) Watch the boot log (~40-60s after the build-time Steam pre-bootstrap is baked):
 docker logs -f dpad-0
-# look for: GAMESCOPE SESSION READY → input -> gamescope Xwayland :0 → Selkies running → ▶ gamescope browser stream: https://…trycloudflare.com
-#   (gamepad: connect a controller in the browser + press a button; Steam Big Picture should detect "Selkies Controller". Check: docker exec dpad-0 tail /tmp/selkies_js.log)
-# then open that URL (login dpad / pass0) — video + audio + keyboard + mouse all work.
+# look for: GAMESCOPE SESSION READY -> input -> gamescope Xwayland :0 -> Selkies running ->
+#          ▶ gamescope browser stream: https://…trycloudflare.com  (login dpad / pass0)
 ```
 
 ---
@@ -165,12 +197,12 @@ docker run -d --name dpad-0 --runtime=nvidia --cap-add SYS_ADMIN \
 | `--device /dev/uinput` | Sunshine virtual input devices (DFP path). The gamescope path uses XTest on `:0` so doesn't strictly need uinput, but harmless and keeps the DFP path working. |
 | `--shm-size=2g` | **CEF/steamwebhelper shared memory.** Docker defaults `/dev/shm` to 64 MB; Chrome/CEF needs more → "Failed creating offscreen shared JS context" → steamwebhelper crash-loops. (The entrypoint also auto-remounts `/dev/shm` to 2G on the dfp path as a safety net.) Equivalent: `--ipc=host`. |
 | `--ulimit nofile=1048576:1048576` | Without `--privileged`, the nofile hard cap is **1024** (too low for Steam/Selkies). Bump it explicitly. Some hosts also need `--ulimit nproc=1048576:1048576` (hard `nproc=50` cap → whole stack hangs at PulseAudio EAGAIN; the in-image `ulimit -Hu` can't exceed a hard cap). |
-| `-p 3478:3478` | Expose the coturn TURN TCP port. Vast maps it to a random external port (`VAST_TCP_PORT_3478`). One port per session/container. |
+| `-p 3478:3478` or `-p 3478:3478/udp` | Expose the coturn TURN port. **UDP is recommended** (lower latency under packet loss); TCP also works. Vast maps it to a random external port (`VAST_UDP_PORT_3478` / `VAST_TCP_PORT_3478`). One port per session/container. Pick ONE protocol per port — Vast forbids the same port as both tcp AND udp ("Duplicate Port Detected"). `vm-bootstrap.sh` auto-detects which is exposed and maps/passes accordingly. |
 
 ### ❌ Flags NOT to use on Vast
 - `--privileged` — mounts ALL GPUs (no isolation); CDI + `--cap-add SYS_ADMIN` is the clean equivalent. (Was needed only on the old `ubuntu_desktop` SDDM workaround.)
 - `--jupyter`, `--ssh`, `--onstart-cmd` — override the entrypoint and kill our services.
-- `-p 3478:3478/udp` — Vast flags tcp+udp of the same port as a duplicate. TCP only.
+- `-p 3478:3478` **and** `-p 3478:3478/udp` together — Vast forbids the same port as BOTH tcp and udp ("Duplicate Port Detected"). Pick ONE protocol per port (UDP recommended). Either alone is fine.
 
 ---
 
