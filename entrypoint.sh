@@ -442,6 +442,79 @@ start_gamescope_stream() {
 # PipeWire+wireplumber run first so gamescope's capture node is available.
 # NOTE: capture/stream (PipeWire -> NVENC -> WebRTC) is wired in a later stage;
 # this function currently gets the Steam UI rendering in headless gamescope.
+# --- NVENC multi-GPU topology + flexgrip auto-enable (nvidia-container-toolkit #1249) ---
+# On driver >=570, NVENC's GET_ATTACHED_IDS returns ALL host GPUs; it then
+# peer-inits with the ones whose /dev/nvidiaX aren't mounted and bails with
+# NV_ENC_ERR_UNSUPPORTED_DEVICE (error code 2) — so a gamescope or DFP
+# container pinned to a non-zero GPU minor can't open an NVENC encode session
+# (reproduced: dpad-1 on /dev/nvidia1 failed every fresh boot; the Selkies
+# nvh264enc plugin failed to register / build_video_pipeline raised and Selkies
+# exited -> 502). The flexgrip libnvenc_fix.so LD_PRELOAD interposer filters
+# that list to only mounted GPUs (scripts/nvenc_fix.c — matches the RM gpuId
+# to the full PCI domain:bus:slot, since single-bus multi-GPU hosts share bus 0
+# and differ only by slot). Auto-enabled when the container has a SLICE of a
+# multi-GPU host (host GPU count > mounted /dev/nvidiaX count) on driver
+# 570..609; override with DPAD_NVENC_FIX=1|0|auto. Sets NVENC_FIX_ENABLED +
+# exports NVENC_FIX_AVAILABLE/DEBUG. The caller derives DPAD_PRELOAD and
+# assembles LD_PRELOAD. Shared by the gamescope path (start_gamescope_session)
+# and the DFP path (which has its own inline copy of this detection below).
+setup_nvenc_fix() {
+    echo "    --- NVENC topology (#1249 check) ---"
+    DRIVER_MAJOR="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | cut -d. -f1)"
+    HOST_GPU_COUNT="$(find /proc/driver/nvidia/gpus -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
+    MOUNTED_GPU_COUNT="$(ls /dev/nvidia[0-9] 2>/dev/null | wc -l)"
+    VISIBLE_GPU_COUNT="$(nvidia-smi -L 2>/dev/null | grep -c '^GPU ')"
+    VISIBLE_BITMASK=0
+    while IFS= read -r busid; do
+        [ -z "$busid" ] && continue
+        key="${busid#*:}"
+        for d in /proc/driver/nvidia/gpus/*; do
+            [ -d "$d" ] || continue
+            pkey="$(basename "$d")"; pkey="${pkey#*:}"
+            if [ "$pkey" = "$key" ]; then
+                minor="$(grep -oP 'Device Minor:\s*\K[0-9]+' "$d/information" 2>/dev/null)"
+                [ -n "$minor" ] && VISIBLE_BITMASK=$(( VISIBLE_BITMASK | (1 << minor) ))
+                break
+            fi
+        done
+    done < <(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader 2>/dev/null)
+    if [ "$VISIBLE_BITMASK" = "0" ]; then
+        while IFS= read -r idx; do
+            [ -z "$idx" ] && continue
+            VISIBLE_BITMASK=$(( VISIBLE_BITMASK | (1 << idx) ))
+        done < <(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null)
+    fi
+    if [ "$VISIBLE_BITMASK" = "0" ]; then
+        echo "    WARNING: visible-GPU mask is 0 (pci.bus_id='$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader 2>/dev/null | tr '\n' ' ')'); flexgrip won't filter"
+    fi
+    echo "    driver_major: ${DRIVER_MAJOR:-?}  host(/proc): ${HOST_GPU_COUNT}  mounted: ${MOUNTED_GPU_COUNT}  visible(nvidia-smi): ${VISIBLE_GPU_COUNT} (mask $(printf '0x%x' ${VISIBLE_BITMASK}))"
+    find /proc/driver/nvidia/gpus -mindepth 1 -maxdepth 1 -type d -printf '      /proc GPU: %f\n' 2>/dev/null | head -8
+    ls /dev/nvidia[0-9] 2>/dev/null | sed 's/^/      mounted: /'
+    NVENC_FIX_ENABLED=0
+    case "${DPAD_NVENC_FIX:-auto}" in
+        1) NVENC_FIX_ENABLED=1 ;;
+        0) NVENC_FIX_ENABLED=0 ;;
+        auto)
+            if (( ${DRIVER_MAJOR:-0} >= 570 )) && (( ${DRIVER_MAJOR:-0} < 610 )); then
+                if (( ${HOST_GPU_COUNT:-0} > ${MOUNTED_GPU_COUNT:-0} )) \
+                   || (( ${VISIBLE_GPU_COUNT:-0} < ${MOUNTED_GPU_COUNT:-0} )); then
+                    NVENC_FIX_ENABLED=1
+                fi
+            fi
+            ;;
+    esac
+    if [ "$NVENC_FIX_ENABLED" = "1" ] && [ -f /opt/dpadcloud/libnvenc_fix.so ]; then
+        export NVENC_FIX_DEBUG=1
+        export NVENC_FIX_AVAILABLE="$(printf '0x%x' "$VISIBLE_BITMASK")"
+        echo "    DPAD_NVENC_FIX: ENABLED — filter GET_ATTACHED_IDS to visible GPUs (mask ${NVENC_FIX_AVAILABLE})"
+    elif [ "$NVENC_FIX_ENABLED" = "1" ]; then
+        echo "    DPAD_NVENC_FIX: requested but /opt/dpadcloud/libnvenc_fix.so missing — cannot enable"
+        NVENC_FIX_ENABLED=0
+    else
+        echo "    DPAD_NVENC_FIX: disabled (all host GPUs accessible or driver<570/>=610 — NVENC native)"
+    fi
+}
+
 start_gamescope_session() {
     echo "[*] DPAD_GAMESCOPE mode: gamescope --backend headless + Steam (no DRM master)"
     # gamescope headless does NOT composite the X cursor into its PipeWire output,
@@ -556,6 +629,15 @@ start_gamescope_session() {
     # inotify IN_CREATE -> MaybeAddDevice("/dev/input/jsN") -> open intercepted by the
     # interposer -> the now-existing socket -> Steam hotplugs the controller. (mknod
     # needs root; Selkies runs as dpad, so the watcher runs as root here.)
+    # NVENC multi-GPU fix (nvidia-container-toolkit #1249): on driver 570+ a
+    # gamescope container pinned to a non-zero GPU minor fails NVENC peer-init
+    # (NvEncOpenEncodeSessionEx 'error code 2') — the flexgrip libnvenc_fix.so
+    # interposer filters NVENC's GET_ATTACHED_IDS to only mounted GPUs. Run it
+    # before the LD_PRELOAD assembly so the gamescope+Steam AND Selkies encoder
+    # inherit it. (The DFP path has its own inline copy of this detection.)
+    setup_nvenc_fix
+    DPAD_PRELOAD=""
+    [ "$NVENC_FIX_ENABLED" = "1" ] && DPAD_PRELOAD="/opt/dpadcloud/libnvenc_fix.so"
     export SELKIES_INTERPOSER='/usr/$LIB/selkies_joystick_interposer.so'
     mkdir -pm1777 /dev/input 2>/dev/null
     rm -f /dev/input/js0 /dev/input/js1 /dev/input/js2 /dev/input/js3 2>/dev/null || true
@@ -573,7 +655,7 @@ start_gamescope_session() {
       done ) &
     # as_user (su) strips the parent env, so LD_PRELOAD/SDL_JOYSTICK_* must be
     # re-exported explicitly inside each gamescope+Steam launch below.
-    export LD_PRELOAD="${SELKIES_INTERPOSER}${LD_PRELOAD:+:${LD_PRELOAD}}"
+    export LD_PRELOAD="${DPAD_PRELOAD}${DPAD_PRELOAD:+:}${SELKIES_INTERPOSER}${LD_PRELOAD:+:${LD_PRELOAD}}"
     # SDL_GameController mapping for the Selkies virtual gamepad. The v1.6.2
     # interposer presents a raw joystick named "Selkies Controller" with NO
     # vendor/product ID (its js_config_t has no vendor/product fields + it

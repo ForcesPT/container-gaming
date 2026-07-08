@@ -241,24 +241,47 @@ static void load_gpu_map(void) {
 
 static int match_gpuid_to_minor(NvU32 gpuId) {
     load_gpu_map();
-    unsigned int extracted_bus = (gpuId >> 8) & 0xFF;
-    unsigned int extracted_full = gpuId >> 8;
+    /* The RM gpuId encodes the PCI address as slot | (bus << 8) | (domain << 16):
+     *   gpuId 0x11800 -> domain 0x0001, bus 0x18, slot 0x00 -> 0001:18:00.0
+     *   gpuId 0x00007 -> domain 0x0000, bus 0x00, slot 0x07 -> 0000:00:07.0
+     * The original flexgrip heuristic matched on BUS only (gpuId>>8 & 0xFF), which
+     * breaks on single-bus multi-GPU hosts where every GPU shares bus 0 and differs
+     * only by slot — it matched every gpuId to the FIRST proc entry (all -> minor
+     * 0) and then gave up ('not filtering'), so NVENC still failed. Match the full
+     * domain:bus:slot address first; fall back to the bus-only / domain:bus
+     * heuristics only if no full match (preserves prior behaviour on hosts where
+     * the encoding differs). */
+    unsigned int extracted_slot   = gpuId & 0xFF;
+    unsigned int extracted_bus    = (gpuId >> 8) & 0xFF;
+    unsigned int extracted_domain = (gpuId >> 16) & 0xFFFF;
+    unsigned int extracted_full   = gpuId >> 8;
+    for (int i = 0; i < gpu_map_count; i++) {
+        if (gpu_map[i].domain == extracted_domain &&
+            gpu_map[i].bus == extracted_bus &&
+            gpu_map[i].slot == extracted_slot) {
+            log_msg("gpuId 0x%x: full PCI %04x:%02x:%02x.%x -> minor %d",
+                    gpuId, gpu_map[i].domain, gpu_map[i].bus,
+                    gpu_map[i].slot, gpu_map[i].func, gpu_map[i].device_minor);
+            return gpu_map[i].device_minor;
+        }
+    }
     for (int i = 0; i < gpu_map_count; i++) {
         if (gpu_map[i].bus == extracted_bus) {
-            log_msg("gpuId 0x%x: bus 0x%02x matches %04x:%02x:%02x.%x -> minor %d",
+            log_msg("gpuId 0x%x: bus-only fallback 0x%02x matches %04x:%02x:%02x.%x -> minor %d",
                     gpuId, extracted_bus, gpu_map[i].domain, gpu_map[i].bus,
                     gpu_map[i].slot, gpu_map[i].func, gpu_map[i].device_minor);
             return gpu_map[i].device_minor;
         }
         unsigned int combined = (gpu_map[i].domain << 8) | gpu_map[i].bus;
         if (combined == extracted_full) {
-            log_msg("gpuId 0x%x: domain:bus 0x%x matches %04x:%02x:%02x.%x -> minor %d",
+            log_msg("gpuId 0x%x: domain:bus fallback 0x%x matches %04x:%02x:%02x.%x -> minor %d",
                     gpuId, extracted_full, gpu_map[i].domain, gpu_map[i].bus,
                     gpu_map[i].slot, gpu_map[i].func, gpu_map[i].device_minor);
             return gpu_map[i].device_minor;
         }
     }
-    log_msg("gpuId 0x%x: no /proc match found (bus=0x%02x, full=0x%x)", gpuId, extracted_bus, extracted_full);
+    log_msg("gpuId 0x%x: no /proc match (dom=0x%x bus=0x%02x slot=0x%02x full=0x%x)",
+            gpuId, extracted_domain, extracted_bus, extracted_slot, extracted_full);
     return -1;
 }
 
