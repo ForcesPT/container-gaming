@@ -468,9 +468,10 @@ setup_nvenc_fix() {
     while IFS= read -r busid; do
         [ -z "$busid" ] && continue
         key="${busid#*:}"
+        key="${key,,}"   # nvidia-smi emits UPPERCASE hex (0B), /proc is lowercase (0b) — case-insensitive compare (slots with hex letters like 0B/0D fail otherwise)
         for d in /proc/driver/nvidia/gpus/*; do
             [ -d "$d" ] || continue
-            pkey="$(basename "$d")"; pkey="${pkey#*:}"
+            pkey="$(basename "$d")"; pkey="${pkey#*:}"; pkey="${pkey,,}"
             if [ "$pkey" = "$key" ]; then
                 minor="$(grep -oP 'Device Minor:\s*\K[0-9]+' "$d/information" 2>/dev/null)"
                 [ -n "$minor" ] && VISIBLE_BITMASK=$(( VISIBLE_BITMASK | (1 << minor) ))
@@ -1195,9 +1196,11 @@ VISIBLE_BITMASK=0
 while IFS= read -r busid; do
     [ -z "$busid" ] && continue
     key="${busid#*:}"                       # "00000000:2b:00.0" -> "2b:00.0"
+    key="${key,,}"   # nvidia-smi UPPERCASE hex vs /proc lowercase — case-insensitive compare (slots with hex letters)
     for d in /proc/driver/nvidia/gpus/*; do
         [ -d "$d" ] || continue
         pkey="$(basename "$d")"; pkey="${pkey#*:}"   # "0000:2b:00.0" -> "2b:00.0"
+        pkey="${pkey,,}"
         if [ "$pkey" = "$key" ]; then
             minor="$(grep -oP 'Device Minor:\s*\K[0-9]+' "$d/information" 2>/dev/null)"
             [ -n "$minor" ] && VISIBLE_BITMASK=$(( VISIBLE_BITMASK | (1 << minor) ))
