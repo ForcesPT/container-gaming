@@ -33,7 +33,28 @@ SELKIES_USER="${SELKIES_BASIC_AUTH_USER:-dpad}"
 SELKIES_PASS="${SELKIES_BASIC_AUTH_PASSWORD:-${OPEN_TOKEN}}"
 TURN_USER="${TURN_USERNAME:-turnuser}"
 TURN_PASS="${TURN_PASSWORD:-${OPEN_TOKEN}}"
-TURN_PORT_EXT="${VAST_UDP_PORT_73478:-${VAST_TCP_PORT_73478:-3478}}"
+# Auto-detect the exposed coturn port. Vast sets VAST_(TCP|UDP)_PORT_<internal>=<external>
+# for each -p <internal>:<internal>. coturn must LISTEN on the INTERNAL port
+# (the -p internal side) while the browser ICE uses the EXTERNAL (the value).
+# Prefer the identity port 73478, then the standard TURN port 3478; override the
+# internal listen port with DPAD_COTURN_PORT. (The previous hardcode of 73478
+# broke hosts/templates that expose 3478 instead — coturn bound 73478 internally
+# but the port-forward targeted 3478, so coturn was unreachable → "Connection
+# Failed".) Try TCP first, then UDP.
+TURN_PORT_LISTEN="${DPAD_COTURN_PORT:-${TURN_PORT_LISTEN:-}}"
+TURN_PORT_EXT=""
+for _p in 73478 3478; do
+    _v="$(printenv "VAST_TCP_PORT_$_p" 2>/dev/null | tr -d '[:space:]')"
+    [ -z "$_v" ] && _v="$(printenv "VAST_UDP_PORT_$_p" 2>/dev/null | tr -d '[:space:]')"
+    if [ -n "$_v" ]; then
+        TURN_PORT_EXT="$_v"
+        [ -z "$TURN_PORT_LISTEN" ] && TURN_PORT_LISTEN="$_p"
+        break
+    fi
+done
+# Fallback: nothing detected → assume 1:1 on the standard TURN port 3478.
+[ -z "$TURN_PORT_EXT" ] && TURN_PORT_EXT="${TURN_PORT_LISTEN:-3478}"
+[ -z "$TURN_PORT_LISTEN" ] && TURN_PORT_LISTEN="3478"
 
 # --- Provider: RunPod (userns-capable; no UDP; TCP port proxying) ------------
 # RunPod has no UDP and maps each TCP port to publicIp:<externalPort> where
@@ -505,7 +526,7 @@ setup_nvenc_fix() {
             ;;
     esac
     if [ "$NVENC_FIX_ENABLED" = "1" ] && [ -f /opt/dpadcloud/libnvenc_fix.so ]; then
-        export NVENC_FIX_DEBUG=1
+        export NVENC_FIX_DEBUG=${DPAD_NVENC_FIX_DEBUG:-0}
         export NVENC_FIX_AVAILABLE="$(printf '0x%x' "$VISIBLE_BITMASK")"
         echo "    DPAD_NVENC_FIX: ENABLED — filter GET_ATTACHED_IDS to visible GPUs (mask ${NVENC_FIX_AVAILABLE})"
     elif [ "$NVENC_FIX_ENABLED" = "1" ]; then
@@ -1058,6 +1079,88 @@ fi
 if [ -z "${STEAM_ARGS+x}" ]; then
     if [ "${DPAD_DISPLAY_MODE:-null}" = "dfp" ]; then STEAM_ARGS=""; else STEAM_ARGS="-silent"; fi
 fi
+# --- Launcher selection (DFP/non-gamescope path) ---
+# DPAD_LAUNCHER: steam (default, for the Vast KVM VM / RunPod full-Steam path) |
+#                heroic (Epic+GOG+Amazon, the Vast Docker storefront path:
+#                Electron + --no-sandbox + umu/Proton-direct, NO userns needed) |
+#                none (boot a bare desktop for debugging). On Vast Docker set
+#                DPAD_LAUNCHER=heroic; Steam is unusable there (no userns ->
+#                pressure-vessel/CEF crash). DPAD_GAMESCOPE=1 short-circuits this
+#                whole section (gamescope path exit 0's above), so this only
+#                governs the Xorg/XFCE/Selkies single-user path.
+# Back-compat: DPAD_AUTOSTART_STEAM=0 historically meant "bare desktop". Only
+# honour it as "none" when DPAD_LAUNCHER wasn't explicitly set by the user.
+if [ -z "${DPAD_LAUNCHER+x}" ]; then
+    if [ "${DPAD_AUTOSTART_STEAM:-1}" = "0" ]; then
+        DPAD_LAUNCHER="none"
+    else
+        DPAD_LAUNCHER="steam"
+    fi
+fi
+# --- Heroic: force umu to skip the Steam Runtime container (Vast Docker) ---
+# umu (Heroic's Proton wrapper) always wraps games in a pressure-vessel
+# (bubblewrap) Steam Runtime container, which needs user namespaces. Vast
+# Docker has no userns -> the container breaks game launches (game renders via
+# DXVK then exits). umu won't drop the container by design (upstream #40,
+# wontfix), but UMU_NO_RUNTIME=1 + PROTONFIXES_DISABLE=1 force umu to skip the
+# runtime container + protonfixes and run Proton DIRECTLY on the host — the same
+# Proton-direct path dpad-launch PATH B validated on Vast Docker.
+#
+# The catch: Heroic builds the game-launch environment itself and STRIPS our
+# exported UMU_NO_RUNTIME/PROTONFIXES_DISABLE before spawning umu_run.py (the
+# env never reaches the umu child). So we wrap umu_run.py itself with a tiny
+# Python shim that sets the env, then execs the real umu zipapp. Heroic calls
+# `python3 umu_run.py` on every Play, so the wrapper is used automatically.
+#
+# Heroic downloads umu_run.py into ~/.config/heroic/tools/runtimes/umu/ on first
+# use (NOT present at boot), so a background watcher waits for it to appear,
+# wraps it (idempotent — skips if already wrapped, detected by the marker), and
+# re-checks in case Heroic re-downloads/updates umu. Runs only for the Heroic
+# launcher path; harmless for the VM/Steam path (gated on DPAD_LAUNCHER=heroic).
+heroic_wrap_umu() {
+    local UMU_DIR="${USER_HOME}/.config/heroic/tools/runtimes/umu"
+    local UMU="${UMU_DIR}/umu_run.py" REAL="${UMU_DIR}/umu_run.real.py"
+    [ -f "${UMU}" ] || return 0
+    # Already wrapped? (marker present)
+    grep -q 'DPAD_UMU_WRAPPER' "${UMU}" 2>/dev/null && return 0
+    # Back up the real umu (kept for inspection/revert; we no longer exec it).
+    [ -f "${REAL}" ] || cp -p "${UMU}" "${REAL}"
+    cat > "${UMU}" <<'PYEOF'
+#!/usr/bin/env python3
+# DPAD_UMU_WRAPPER - bypass umu entirely on no-userns hosts (Vast Docker).
+# umu ALWAYS wraps games in a pressure-vessel (bubblewrap) Steam Runtime container
+# that needs user namespaces, and won't drop it by design (upstream #40). On
+# Vast Docker the container crashes or crawls via the bubbleroot/proot shim, and
+# umu 1.4.x ignores UMU_NO_RUNTIME=1. So instead of running umu at all, run
+# GE-Proton DIRECTLY - the same Proton-direct path dpad-launch PATH B validated on
+# Vast Docker (equivalent to Heroic's "Disable umu" = ON). Heroic sets PROTONPATH /
+# WINEPREFIX / STEAM_COMPAT_* in this process env and calls us as:
+#   python3 umu_run.py <game.exe> [game args...]
+# so we exec:  $PROTONPATH/proton waitforexitandrun <game.exe> [game args...]
+import os, sys
+proton = os.path.join(os.environ["PROTONPATH"], "proton")
+os.execv(proton, [proton, "waitforexitandrun"] + sys.argv[1:])
+PYEOF
+    chown "${USER_NAME}:${USER_NAME}" "${UMU}" "${REAL}" 2>/dev/null || true
+    chmod 755 "${UMU}"
+    echo "[*] Heroic: wrapped umu_run.py -> Proton-direct (bypass umu/pressure-vessel container; no userns needed)"
+}
+if [ "${DPAD_LAUNCHER}" = "heroic" ]; then
+    # Try once now (umu may already be present from a prior boot/persistent volume).
+    heroic_wrap_umu
+    # Background watcher: wrap umu_run.py as soon as Heroic downloads it, and
+    # re-check every 10s (re-wrap if Heroic updates umu). Low cost; exits never.
+    (
+        for _ in $(seq 1 30); do   # first ~5 min: check every 10s (first download)
+            heroic_wrap_umu
+            sleep 10
+        done
+        while true; do             # then every 60s forever (catch re-downloads)
+            heroic_wrap_umu
+            sleep 60
+        done
+    ) &
+fi
 # A root boot process (Xorg/D-Bus helpers) can create ~/.local (or other XDG
 # dirs) root-owned, which makes Steam's `mkdir ~/.local/share/icons` EPERM and
 # aborts the install. Re-claim the home dir right before Steam launches.
@@ -1065,7 +1168,12 @@ fi
 # copy-up of a blanket `chown -R`).
 find "${USER_HOME}" ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
 mkdir -p "${USER_HOME}/.config/autostart"
-if [ "${DPAD_AUTOSTART_STEAM:-1}" = "1" ]; then
+# --- Build the autostart .desktop + wrapper for the chosen launcher ---
+# Steam path: STEAM_EXEC (/usr/bin/steam on Xorg, vgl-steam on Xvfb) + STEAM_ARGS.
+# Heroic path: /opt/dpadcloud/heroic-launch (which adds --no-sandbox; the Vast
+# Docker no-userns case). "none" leaves a bare desktop (no autostart entry).
+rm -f "${USER_HOME}/.config/autostart/Steam.desktop" "${USER_HOME}/.config/autostart/Heroic.desktop"
+if [ "${DPAD_LAUNCHER}" = "steam" ] && [ "${DPAD_AUTOSTART_STEAM:-1}" = "1" ]; then
     if [ "${X_SERVER}" = "Xorg" ]; then
         STEAM_EXEC="/usr/bin/steam"
     else
@@ -1091,9 +1199,31 @@ X-GNOME-Autostart-enabled=true
 EOF
     find "${USER_HOME}/.config/autostart" ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
     echo "[*] Steam autostart configured: ${STEAM_EXEC} ${STEAM_ARGS} (direct launch after desktop -> /tmp/steam.log)"
+elif [ "${DPAD_LAUNCHER}" = "heroic" ]; then
+    # Heroic Games Launcher (Epic+GOG+Amazon). heroic-launch adds --no-sandbox
+    # (Electron sandbox needs userns, absent on Vast Docker) and logs to
+    # /tmp/heroic.log. Override args via DPAD_HEROIC_ARGS (e.g. "--no-sandbox
+    # --no-gui" for an orchestrator-triggered headless game launch, or add a
+    # heroic://launch/... URL).
+    HEROIC_AUTOSTART_ARGS="${DPAD_HEROIC_ARGS:---no-sandbox}"
+    cat > /opt/dpadcloud/heroic-autostart <<EOF
+#!/bin/bash
+exec /opt/dpadcloud/heroic-launch ${HEROIC_AUTOSTART_ARGS}
+EOF
+    chmod +x /opt/dpadcloud/heroic-autostart
+    cat > "${USER_HOME}/.config/autostart/Heroic.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Heroic Games Launcher
+Exec=/opt/dpadcloud/heroic-autostart
+Icon=heroic
+Terminal=false
+X-GNOME-Autostart-enabled=true
+EOF
+    find "${USER_HOME}/.config/autostart" ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
+    echo "[*] Heroic autostart configured: heroic-launch ${HEROIC_AUTOSTART_ARGS} (direct launch after desktop -> /tmp/heroic.log)"
 else
-    rm -f "${USER_HOME}/.config/autostart/Steam.desktop"
-    echo "[*] Steam autostart: disabled (DPAD_AUTOSTART_STEAM=0)"
+    echo "[*] Launcher autostart: disabled (DPAD_LAUNCHER=${DPAD_LAUNCHER})"
 fi
 
 # --- XFCE desktop components (light; started as user) ---
@@ -1115,43 +1245,75 @@ for p in xfwm4 xfsettingsd xfce4-panel xfdesktop; do
 done
 [ ! -s /tmp/xfce.log ] || { echo "    --- /tmp/xfce.log (tail) ---"; tail -n 15 /tmp/xfce.log | sed 's/^/      /'; }
 
-# --- Launch Steam directly (we DON'T run xfce4-session, so the XFCE autostart
-# .desktop above is never processed). Background it after a short delay so the
-# desktop + PulseAudio settle first. Logs to /tmp/steam.log (in the periodic dump).
-if [ "${DPAD_AUTOSTART_STEAM:-1}" = "1" ] && [ -n "${STEAM_EXEC:-}" ]; then
+# --- Launch the chosen launcher directly (we DON'T run xfce4-session, so
+# the XFCE autostart .desktop above is never processed). Background it after a
+# short delay so the desktop + PulseAudio settle first. Logs to /tmp/steam.log
+# or /tmp/heroic.log (both surfaced in the periodic dump).
+if [ "${DPAD_LAUNCHER}" = "steam" ] && [ "${DPAD_AUTOSTART_STEAM:-1}" = "1" ] && [ -n "${STEAM_EXEC:-}" ]; then
     (
         sleep 8
         as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' ${STEAM_ENV_EXTRAS}; ${STEAM_EXEC} ${STEAM_ARGS} >/tmp/steam.log 2>&1"
     ) &
     echo "[*] Steam launch scheduled in 8s (${STEAM_EXEC} ${STEAM_ARGS}) -> /tmp/steam.log"
+elif [ "${DPAD_LAUNCHER}" = "heroic" ] && command -v heroic >/dev/null 2>&1; then
+    HEROIC_DIRECT_ARGS="${DPAD_HEROIC_ARGS:---no-sandbox}"
+    (
+        sleep 8
+        as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}'; /opt/dpadcloud/heroic-launch ${HEROIC_DIRECT_ARGS}"
+    ) &
+    echo "[*] Heroic launch scheduled in 8s (heroic ${HEROIC_DIRECT_ARGS}) -> /tmp/heroic.log"
+elif [ "${DPAD_LAUNCHER}" = "heroic" ]; then
+    echo "    WARNING: DPAD_LAUNCHER=heroic but heroic not found on PATH — image is stale (Heroic step 4d missing?). Falling back to bare desktop."
 fi
 
-# --- PulseAudio (headless null sink; monitor is capturable for silence) ---
-# PipeWire's null-sink monitor suspends when idle and pulsesrc times out against
-# it; PulseAudio's null-sink monitor produces capturable silence even when idle,
-# which is what we need for headless cloud-gaming audio capture.
-echo "[*] Starting PulseAudio (headless null sink)..."
+# --- Audio (headless null sink; monitor is capturable for silence) ---
+# Prefer the pulseaudio daemon when present (its null-sink monitor synthesizes
+# capturable silence even when idle - ideal for headless cloud-gaming audio).
+# But the pulseaudio daemon is NOT always installed: on noble it can conflict
+# with pipewire-pulse (installed by the gamescope step), so the Dockerfile's
+# pulseaudio install is best-effort. When pulseaudio is absent, fall back to
+# pipewire-pulse (PipeWire's PulseAudio-compatible server, already installed)
+# plus a module-null-sink - same capturable-silence behaviour, unified across
+# both the DFP and gamescope audio paths.
+echo "[*] Starting audio (headless null sink)..."
 mkdir -p "${XDG_RUNTIME_DIR}/pulse"
 chmod 1777 "${XDG_RUNTIME_DIR}" "${XDG_RUNTIME_DIR}/pulse"
 find "${XDG_RUNTIME_DIR}" ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
-cat > /tmp/pulse-headless.pa <<EOF
+if command -v pulseaudio >/dev/null 2>&1; then
+    cat > /tmp/pulse-headless.pa <<EOF
 load-module module-native-protocol-unix socket=${XDG_RUNTIME_DIR}/pulse/native auth-anonymous=1
 load-module module-null-sink sink_name=dummy sink_properties=device.description="DummyOutput"
 load-module module-always-sink
 set-default-sink dummy
 set-default-source dummy.monitor
 EOF
-chown "${USER_NAME}:${USER_NAME}" /tmp/pulse-headless.pa
-# Run as the user (pulseaudio refuses root); unset PULSE_SERVER for the launch
-# itself so --start doesn't refuse to autospawn.
-as_user "unset PULSE_SERVER; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pulseaudio --start --log-target=stderr --disallow-exit --exit-idle-time=-1 -n -F /tmp/pulse-headless.pa" >/tmp/pulse.log 2>&1 || echo "    WARNING: pulseaudio start failed (see /tmp/pulse.log)"
-wait_sock "${XDG_RUNTIME_DIR}/pulse/native" "pulseaudio"
+    chown "${USER_NAME}:${USER_NAME}" /tmp/pulse-headless.pa
+    # Run as the user (pulseaudio refuses root); unset PULSE_SERVER for the launch
+    # itself so --start doesn't refuse to autospawn.
+    as_user "unset PULSE_SERVER; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pulseaudio --start --log-target=stderr --disallow-exit --exit-idle-time=-1 -n -F /tmp/pulse-headless.pa" >/tmp/pulse.log 2>&1 || echo "    WARNING: pulseaudio start failed (see /tmp/pulse.log)"
+    wait_sock "${XDG_RUNTIME_DIR}/pulse/native" "pulseaudio"
+else
+    echo "    pulseaudio daemon not installed - using pipewire-pulse (PipeWire PulseAudio compat)"
+    : > /tmp/pipewire.log; : > /tmp/wireplumber.log; : > /tmp/pipewire-pulse.log
+    chown "${USER_NAME}:${USER_NAME}" /tmp/pipewire.log /tmp/wireplumber.log /tmp/pipewire-pulse.log 2>/dev/null || true
+    as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME}; pipewire >>/tmp/pipewire.log 2>&1 & sleep 1; wireplumber >>/tmp/wireplumber.log 2>&1 &"
+    as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME}; pipewire-pulse >>/tmp/pipewire-pulse.log 2>&1 &"
+    wait_sock "${XDG_RUNTIME_DIR}/pulse/native" "pipewire-pulse"
+    # module-null-sink is supported by pipewire-pulse; gives a default sink + a
+    # capturable .monitor source (same shape as the pulseaudio daemon path).
+    if [ -S "${XDG_RUNTIME_DIR}/pulse/native" ]; then
+        as_user "export PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pactl load-module module-null-sink sink_name=dummy sink_properties=device.description=DummyOutput 2>/dev/null; pactl set-default-sink dummy 2>/dev/null; pactl set-default-source dummy.monitor 2>/dev/null" >/dev/null 2>&1 || true
+    fi
+fi
 if [ -S "${XDG_RUNTIME_DIR}/pulse/native" ]; then
-    echo "    PulseAudio socket OK (${PULSE_SERVER})"
+    echo "    Audio socket OK (${PULSE_SERVER})"
     echo "    --- sinks ---";  as_user "export PULSE_SERVER=${PULSE_SERVER} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pactl list short sinks 2>/dev/null"
     echo "    --- sources ---"; as_user "export PULSE_SERVER=${PULSE_SERVER} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pactl list short sources 2>/dev/null"
 else
-    echo "    PulseAudio socket MISSING:"; tail -n 20 /tmp/pulse.log 2>/dev/null || true
+    echo "    Audio socket MISSING:"
+    tail -n 20 /tmp/pulse.log 2>/dev/null || true
+    [ -f /tmp/pipewire-pulse.log ] && { echo "    --- /tmp/pipewire-pulse.log (tail) ---"; tail -n 20 /tmp/pipewire-pulse.log | sed 's/^/      /'; }
+    [ -f /tmp/pipewire.log ] && { echo "    --- /tmp/pipewire.log (tail) ---"; tail -n 15 /tmp/pipewire.log | sed 's/^/      /'; }
 fi
 
 # --- coturn (in-image TURN; Selkies WebRTC media relays through it) ---
@@ -1239,7 +1401,7 @@ case "${DPAD_NVENC_FIX:-auto}" in
         ;;
 esac
 if [ "$NVENC_FIX_ENABLED" = "1" ] && [ -f /opt/dpadcloud/libnvenc_fix.so ]; then
-    export NVENC_FIX_DEBUG=1
+    export NVENC_FIX_DEBUG=${DPAD_NVENC_FIX_DEBUG:-0}
     export NVENC_FIX_AVAILABLE="$(printf '0x%x' "$VISIBLE_BITMASK")"
     echo "    DPAD_NVENC_FIX: ENABLED — filter GET_ATTACHED_IDS to visible GPUs (mask ${NVENC_FIX_AVAILABLE})"
 elif [ "$NVENC_FIX_ENABLED" = "1" ]; then
@@ -1416,30 +1578,31 @@ rm -rf "${USER_HOME}/.cache/gstreamer-1.0"/* 2>/dev/null || true
 # also expose a UDP relay range.
 SELKIES_TURN_PROTOCOL="${SELKIES_TURN_PROTOCOL:-tcp}"
 
-# --- RunPod dual-ICE TURN config -------------------------------------------
-# On RunPod, the container usually can't reach its own public IP:port (no NAT
-# loopback/hairpin), so Selkies (in-container) can't gather a relay candidate
+# --- dual-ICE TURN config (any provider with a public IP: RunPod + Vast) -----
+# On RunPod AND Vast Docker, the container can't reach its own public IP:port
+# (no NAT loopback/hairpin), so Selkies (in-container) can't gather a relay candidate
 # if --turn_host points at the public address. Fix: give BOTH peers a TURN server
 # they can each reach, both landing on the SAME coturn (which short-circuits the
 # media internally over the two control connections, so only the listening port
 # needs to be exposed):
 #   - Selkies (in-container)  -> turn:127.0.0.1:3478   (local, always works)
-#   - browser (on the internet) -> turn:<publicIp>:<externalPort> (RunPod TCP map)
+#   - browser (on the internet) -> turn:<publicIp>:<externalPort> (RunPod/Vast TCP map)
 # We write an rtc_config.json with BOTH iceServers and pass it via --rtc_config_json
 # (which Selkies serves to the browser AND uses for its own peer). Two entries:
 #   - in-container peer  -> turn:127.0.0.1:<listen>   (coturn is in this container; always works, no NAT hairpin needed)
 #   - browser (internet)  -> turn:<publicIp>:<ext>     (browser reaches coturn directly — NO SSH tunnel required)
-# This fires whenever we have a REAL public IP (auto-resolved via checkip on a
-# Vast KVM VM, or RUNPOD_PUBLIC_IP on RunPod). Setting DPAD_TURN_PUBLIC_IP=127.0.0.1
+# This fires whenever we have a REAL public IP (auto-resolved from PUBLIC_IPADDR
+# on Vast, or RUNPOD_PUBLIC_IP on RunPod) — on ANY provider, not just RunPod
+# (Vast Docker has the same no-hairpin problem). Setting DPAD_TURN_PUBLIC_IP=127.0.0.1
 # keeps the old single-entry tunnel-mode for local debugging.
 SELKIES_RTC_CONFIG=""
-if [ "$DPAD_PROVIDER" = "runpod" ] && [ -n "${PUBLIC_IP:-}" ] && [ "${PUBLIC_IP:-}" != "127.0.0.1" ]; then
+if [ -n "${PUBLIC_IP:-}" ] && [ "${PUBLIC_IP:-}" != "127.0.0.1" ]; then
     SELKIES_RTC_CONFIG="/opt/dpadcloud/rtc_config.json"
     cat > "$SELKIES_RTC_CONFIG" <<EOF
 {"iceServers":[{"urls":["turn:127.0.0.1:${TURN_PORT_LISTEN}?transport=${SELKIES_TURN_PROTOCOL}"],"username":"${TURN_USER}","credential":"${TURN_PASS}"},{"urls":["turn:${PUBLIC_IP}:${TURN_PORT_EXT}?transport=${SELKIES_TURN_PROTOCOL}"],"username":"${TURN_USER}","credential":"${TURN_PASS}"}],"iceTransportPolicy":"all"}
 EOF
     chown root:root "$SELKIES_RTC_CONFIG"; chmod 644 "$SELKIES_RTC_CONFIG"   # trusted: root-owned, not group/world-writable
-    echo "[*] RunPod dual-ICE rtc_config.json written ($SELKIES_RTC_CONFIG): local 127.0.0.1:${TURN_PORT_LISTEN} + public ${PUBLIC_IP}:${TURN_PORT_EXT}"
+    echo "[*] dual-ICE rtc_config.json written ($SELKIES_RTC_CONFIG): local 127.0.0.1:${TURN_PORT_LISTEN} + public ${PUBLIC_IP}:${TURN_PORT_EXT}"
 fi
 
 if [ -n "$SELKIES_RTC_CONFIG" ]; then
@@ -1483,7 +1646,7 @@ if [ -x /opt/mws/web-server ]; then
         WEBRTC_ICE_SERVER_0_URL='turn:${PUBLIC_IP:-127.0.0.1}:${TURN_PORT_EXT}?transport=tcp' \
         WEBRTC_ICE_SERVER_0_USERNAME='${TURN_USER}' \
         WEBRTC_ICE_SERVER_0_CREDENTIAL='${TURN_PASS}' \
-        $(if [ "$DPAD_PROVIDER" = "runpod" ] && [ -n "${PUBLIC_IP:-}" ] && [ "${PUBLIC_IP:-}" != "127.0.0.1" ]; then echo "WEBRTC_ICE_SERVER_1_URL='turn:127.0.0.1:${TURN_PORT_LISTEN}?transport=tcp' WEBRTC_ICE_SERVER_1_USERNAME='${TURN_USER}' WEBRTC_ICE_SERVER_1_CREDENTIAL='${TURN_PASS}'"; fi) \
+        $(if [ -n "${PUBLIC_IP:-}" ] && [ "${PUBLIC_IP:-}" != "127.0.0.1" ]; then echo "WEBRTC_ICE_SERVER_1_URL='turn:127.0.0.1:${TURN_PORT_LISTEN}?transport=tcp' WEBRTC_ICE_SERVER_1_USERNAME='${TURN_USER}' WEBRTC_ICE_SERVER_1_CREDENTIAL='${TURN_PASS}'"; fi) \
         ./web-server" >/tmp/mws.log 2>&1 &
     # mws (Rust + actix) takes ~5-10s to initialize; wait for port 8080 to
     # accept connections instead of a fixed sleep (a 4s pgrep was a false
@@ -1600,9 +1763,15 @@ fi
 echo ""
 echo "  TURN (WebRTC media relay): ${PUBLIC_IP:-<ip>}:${TURN_PORT_EXT}  (${SELKIES_TURN_PROTOCOL}, ${TURN_USER}/<token>)"
 echo ""
-echo "  ▶ GPU-accelerated gaming (X server: ${X_SERVER:-?}):"
+echo "  ▶ GPU-accelerated gaming (X server: ${X_SERVER:-?}, launcher=${DPAD_LAUNCHER}):"
 if [ "${X_SERVER}" = "Xorg" ]; then
-    echo "      Steam auto-starts on login (${STEAM_ARGS}) — native Linux + Proton/DXVK"
+    if [ "${DPAD_LAUNCHER}" = "heroic" ]; then
+        echo "      Heroic auto-starts on login (Epic+GOG+Amazon, --no-sandbox) -> /tmp/heroic.log"
+        echo "      Windows games via umu/Proton-direct (no pressure-vessel, no userns);"
+        echo "      native Linux games run directly. Wine Manager: Proton-GE/Wine-GE."
+    else
+        echo "      Steam auto-starts on login (${STEAM_ARGS}) — native Linux + Proton/DXVK"
+    fi
     echo "      render directly on the GPU (real Vulkan present surface)."
     echo "      Manual: vgl-steam | steam steam://rungameid/<appid>"
 else
@@ -1620,9 +1789,18 @@ echo "=========================================="
     sleep 25
     while true; do
         echo ""
-        echo "=== /tmp/selkies.log (tail) ==="
-        tail -n 100 /tmp/selkies.log 2>/dev/null || true
+        echo "=== /tmp/selkies.log (WebRTC, no nvenc_fix) ==="
+        grep -v "nvenc_fix" /tmp/selkies.log 2>/dev/null | tail -n 100 || true
         echo "=== end selkies.log ==="
+        echo "=== /tmp/selkies.log (nvenc_fix poll count) ==="
+        echo "nvenc_fix lines: $(grep -c nvenc_fix /tmp/selkies.log 2>/dev/null || echo 0)"
+        echo "=== /tmp/rtc_config.json ==="
+        cat /tmp/rtc_config.json 2>/dev/null || true
+        echo "=== end rtc_config.json ==="
+        echo "=== coturn listen (ss) + /tmp/coturn.log (tail) ==="
+        ss -lntp 2>/dev/null | grep -iE "turnserver|3478|73478" || true
+        tail -n 40 /tmp/coturn.log 2>/dev/null || true
+        echo "=== end coturn ==="
         echo "=== /tmp/mws.log (tail) ==="
         tail -n 60 /tmp/mws.log 2>/dev/null || true
         echo "=== end mws.log ==="
@@ -1635,6 +1813,12 @@ echo "=========================================="
         echo "=== /tmp/pulse.log (tail) ==="
         tail -n 30 /tmp/pulse.log 2>/dev/null || true
         echo "=== end pulse.log ==="
+        echo "=== /tmp/pipewire-pulse.log (tail) ==="
+        tail -n 30 /tmp/pipewire-pulse.log 2>/dev/null || true
+        echo "=== end pipewire-pulse.log ==="
+        echo "=== /tmp/pipewire.log (tail) ==="
+        tail -n 20 /tmp/pipewire.log 2>/dev/null || true
+        echo "=== end pipewire.log ==="
         echo "=== /tmp/xfce.log (tail) ==="
         tail -n 30 /tmp/xfce.log 2>/dev/null || true
         echo "=== end xfce.log ==="
@@ -1644,6 +1828,9 @@ echo "=========================================="
         echo "=== /tmp/steam.log (tail) ==="
         tail -n 60 /tmp/steam.log 2>/dev/null || true
         echo "=== end steam.log ==="
+        echo "=== /tmp/heroic.log (tail) ==="
+        tail -n 60 /tmp/heroic.log 2>/dev/null || true
+        echo "=== end heroic.log ==="
         echo "=== steam procs ==="
         pgrep -af steam 2>/dev/null | head -n 10 || echo "      (no steam process)"
         echo "=== /tmp/gst-probe-*.log (encoder probe errors) ==="

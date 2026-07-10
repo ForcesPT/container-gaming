@@ -88,6 +88,8 @@ The entrypoint runs the named tunnel for mws and a quick tunnel for Selkies (or,
 | `SELKIES_ENCODER` | (auto: NVENC else x264) | Force the Selkies encoder |
 | `DPAD_NVENC_FIX` | `auto` | flexgrip #1249 fix: `auto` (multi-GPU slice on driver 570..609), `1`, `0` |
 | `DPAD_MWS_AUTOPAIR` | `1` | Auto-pair mws↔Sunshine at boot so the end user never sees a PIN. `0` to disable (manual pairing via the mws web UI) |
+| `DPAD_LAUNCHER` | `steam` | Frontend that auto-starts on the Xorg/XFCE desktop (DFP path; ignored when `DPAD_GAMESCOPE=1`). `steam` = Steam client (Vast KVM VM / RunPod full-Steam). `heroic` = Heroic Games Launcher — Epic+GOG+Amazon storefront, the **Vast Docker** path (Electron `--no-sandbox` + umu/Proton-direct, NO userns needed). `none` = bare desktop. |
+| `DPAD_HEROIC_ARGS` | `--no-sandbox` | Args passed to `heroic` (via `heroic-launch`). e.g. `--no-sandbox --no-gui` for an orchestrator-triggered headless game launch, or append a `heroic://launch/{runner}/{id}` URL. |
 | `MWS_ADMIN_USER` / `MWS_ADMIN_PASSWORD` | `dpad` / `SUNSHINE_PASSWORD` | mws admin login; auto-pair creates it on first boot, end user logs in with it |
 | `MWS_CLIENT_NAME` | `dpadcloud-web` | Friendly name registered in Sunshine for the mws client |
 

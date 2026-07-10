@@ -43,6 +43,7 @@ ARG PROTONGE_VERSION=GE-Proton11-1
 ARG MWS_VERSION=v2.10.0
 ARG CLOUDFLARED_VERSION=2025.7.0
 ARG VIRTUALGL_VERSION=3.1.4
+ARG HEROIC_VERSION=v2.22.0
 
 # --- Runtime env (uid 1001 = the desktop user) ---
 # NVIDIA_VISIBLE_DEVICES is intentionally NOT set here: on multi-GPU Vast hosts
@@ -187,6 +188,51 @@ RUN if command -v zenity >/dev/null 2>&1; then \
         'exec /usr/bin/zenity.real "$@"' > /usr/bin/zenity; \
       chmod +x /usr/bin/zenity; \
     fi
+
+# =============================================================================
+# 4d. Install Heroic Games Launcher (Epic + GOG + Amazon) — the Vast Docker
+#     storefront path. Steam is blocked on Vast Docker (no userns -> pressure-
+#     vessel/CEF crashes), but Heroic is Electron (runs with --no-sandbox, no
+#     userns needed) and launches games via umu-launcher (Proton WITHOUT
+#     pressure-vessel) -> the same Proton-direct flow validated by dpad-launch.
+#     Heroic bundles Legendary (Epic), gogdl (GOG), Nile (Amazon) + umu itself.
+#     accountsservice is installed because Heroic queries org.freedesktop.Accounts
+#     over D-Bus and degrades/aborts if it can't reach it (Steam-Headless #210).
+#     Opt-in at runtime via DPAD_LAUNCHER=heroic (default launcher stays Steam,
+#     for the Vast KVM VM / RunPod full-Steam path). .deb pulls its own deps.
+#     The .deb asset name is Heroic-<ver-without-v>-linux-amd64.deb (e.g. v2.22.0
+#     -> Heroic-2.22.0-linux-amd64.deb).
+# =============================================================================
+RUN set -e; \
+    HEROIC_VER_STR="${HEROIC_VERSION#v}"; \
+    HEROIC_DEB="Heroic-${HEROIC_VER_STR}-linux-amd64.deb"; \
+    apt-get update && apt-get install -y --no-install-recommends accountsservice curl; \
+    cd /tmp && curl -fsSL -o "/tmp/${HEROIC_DEB}" \
+      "https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher/releases/download/${HEROIC_VERSION}/${HEROIC_DEB}" \
+    && ( dpkg -i "/tmp/${HEROIC_DEB}" || apt-get install -f -y ) \
+    && rm -f "/tmp/${HEROIC_DEB}" \
+    && rm -rf /var/lib/apt/lists/* \
+    && command -v heroic
+
+# =============================================================================
+# 4e. Firefox (real .deb from Mozilla's apt repo — NOT snap). The container has
+#     no system browser, so Heroic's external-link clicks (target=_blank, "buy on
+#     store", xdg-open) fail with "failed to execute default web browser".
+#     Ubuntu's firefox/chromium are snap stubs that break in Docker, so we use
+#     Mozilla's apt repo (packages.mozilla.org). Registers Firefox as the
+#     x-www-browser alternative so xdg-open works. ~80 MB. Heroic's actual
+#     Epic/GOG/Amazon LOGIN is in-app (Electron) and doesn't need this; it's only
+#     for external links / a desktop browser on the streamed session.
+# =============================================================================
+RUN set -e; \
+    install -d -m 0755 /etc/apt/keyrings; \
+    wget -q https://packages.mozilla.org/apt/repo-signing-key.gpg \
+      -O /etc/apt/keyrings/packages.mozilla.org.asc; \
+    echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" \
+      > /etc/apt/sources.list.d/mozilla.list; \
+    apt-get update && apt-get install -y --no-install-recommends firefox; \
+    update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/firefox 200 2>/dev/null || true; \
+    rm -rf /var/lib/apt/lists/*
 
 # =============================================================================
 # 5. Install Proton-GE (Windows game compatibility, Steam-Deck-grade)
@@ -477,18 +523,18 @@ RUN chmod +x /tmp/build-bootstrap-steam.sh \
 COPY configs/ ${HOME}/.config/
 COPY configs/xorg/xorg.conf.template /opt/dpadcloud/xorg.conf.template
 COPY entrypoint.sh healthcheck.sh /opt/dpadcloud/
-COPY scripts/vgl-steam scripts/proton-wined3d scripts/vgl-test scripts/install-display-drivers scripts/mws-autopair scripts/bubbleroot scripts/dpad-launch /opt/dpadcloud/
+COPY scripts/vgl-steam scripts/proton-wined3d scripts/vgl-test scripts/install-display-drivers scripts/mws-autopair scripts/bubbleroot scripts/dpad-launch scripts/heroic-launch /opt/dpadcloud/
 # Strip any CR (CRLF) line endings — the repo is edited on Windows and
 # `#!/bin/bash\r` fails to exec with "no such file or directory". Defense-in-depth.
 RUN sed -i 's/\r$//' /opt/dpadcloud/entrypoint.sh /opt/dpadcloud/healthcheck.sh \
         /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \
         /opt/dpadcloud/install-display-drivers /opt/dpadcloud/mws-autopair /opt/dpadcloud/bubbleroot \
-        /opt/dpadcloud/dpad-launch \
+        /opt/dpadcloud/dpad-launch /opt/dpadcloud/heroic-launch \
         ${HOME}/.config/sunshine/sunshine.conf 2>/dev/null || true && \
     chmod +x /opt/dpadcloud/*.sh \
         /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \
         /opt/dpadcloud/install-display-drivers /opt/dpadcloud/mws-autopair /opt/dpadcloud/bubbleroot \
-        /opt/dpadcloud/dpad-launch && \
+        /opt/dpadcloud/dpad-launch /opt/dpadcloud/heroic-launch && \
     chown -R ${USERNAME}:${USERNAME} ${HOME}/.config && \
     rm -f ${HOME}/.config/autostart/*.desktop 2>/dev/null || true
 
@@ -498,17 +544,18 @@ RUN sed -i 's/\r$//' /opt/dpadcloud/entrypoint.sh /opt/dpadcloud/healthcheck.sh 
 # 16100 = Selkies (localhost only; cloudflared tunnels it out over HTTPS) — fallback
 # 8080  = moonlight-web-stream (primary browser path; cloudflared tunnels it) —
 #         bound 0.0.0.0 so the in-container cloudflared can reach it.
-# 3478  = in-image coturn TURN, TCP (relays over the single listening conn — no UDP
-#         relay-port range needed). On Vast.ai request the 73478 identity tag
-#         (TCP only: -p 73478:73478) and the runtime binds coturn to the real
-#         port in VAST_TCP_PORT_73478. (Do NOT also add 73478/udp — Vast flags
-#         tcp+udp of the same port as a duplicate.) Both mws and Selkies reuse
-#         this one TURN for their WebRTC media relay.
+# 3478  = in-image coturn TURN (TCP + UDP; relays over the single listening conn —
+#         no UDP relay-port range needed). Expose at launch with -p 3478:3478 (TCP)
+#         or -p 3478:3478/udp (UDP, lower latency under loss); Vast injects
+#         VAST_(TCP|UDP)_PORT_3478 and the entrypoint auto-detects it. Do NOT use
+#         the old 73478 identity tag: 73478 > 65535 is an invalid port (coturn
+#         wraps it to 7942 and it isn't mapped). Both mws and Selkies reuse this
+#         one TURN. Not EXPOSE'd below — opt-in via -p so VAST_*_PORT_3478 is set
+#         and there's no auto-map duplicate.
 # 47989/47990 = Sunshine (native Moonlight over Tailnet; direct if exposed)
 # 41641 = Tailscale WireGuard
 EXPOSE 16100/tcp
 EXPOSE 8080/tcp
-EXPOSE 3478/tcp
 EXPOSE 47989/tcp
 EXPOSE 47990/tcp
 EXPOSE 41641/udp

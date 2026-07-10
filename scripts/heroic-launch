@@ -1,0 +1,41 @@
+#!/bin/bash
+# =============================================================================
+# heroic-launch — wrapper to start Heroic Games Launcher in the headless
+# cloud-gaming container. Heroic is an Electron app; on no-userns hosts (Vast
+# Docker) Chromium's renderer sandbox (which uses user namespaces) cannot
+# initialize, so we pass --no-sandbox. Heroic then runs its React UI natively
+# (NOT wrapped in pressure-vessel like Steam's CEF) -> no userns dependency.
+#
+# Heroic launches games via umu-launcher (Proton WITHOUT pressure-vessel) for
+# Windows titles, and directly for native Linux titles -> the same Proton-direct
+# flow validated by dpad-launch. Stores: Epic (Legendary), GOG (gogdl),
+# Amazon (Nile). Ubisoft/EA are NOT native (sideload only).
+#
+# Usage:  heroic-launch [--no-gui] [--no-sandbox] [heroic://launch/...]
+# Env:    DPAD_HEROIC_ARGS  extra args (default: --no-sandbox)
+#         DISPLAY / XDG_RUNTIME_DIR / PULSE_SERVER / DBUS_SESSION_BUS_ADDRESS
+#         must be exported by the caller (the entrypoint does this).
+# Logs:   /tmp/heroic.log (surfaced in the Vast Logs tab by the periodic dump).
+# =============================================================================
+set -e
+
+# NOTE on umu/Proton: Heroic launches Windows games via umu, which wraps them
+# in a pressure-vessel (bubblewrap) container that needs user namespaces -
+# unavailable on Vast Docker. We can't just export UMU_NO_RUNTIME=1 here because
+# Heroic strips it from the game-launch env. Instead the ENTRYPOINT wraps
+# ~/.config/heroic/tools/runtimes/umu/umu_run.py with a shim that sets the env
+# inside umu itself (see heroic_wrap_umu in entrypoint.sh). So games run via
+# Proton-direct here, no container. Nothing to do in this launcher script for that.
+
+# Always disable the Electron/Chromium sandbox on this no-userns container.
+ARGS="--no-sandbox"
+# Allow caller overrides / additions (e.g. DPAD_HEROIC_ARGS="--no-gui" for a
+# headless protocol-triggered launch, or "" to drop --no-sandbox on a userns
+# host where the sandbox would actually work).
+if [ -n "${DPAD_HEROIC_ARGS:-}" ]; then
+    ARGS="${DPAD_HEROIC_ARGS}"
+fi
+# Append any CLI args passed through (e.g. a heroic://launch/... URL).
+ARGS="${ARGS} $*"
+
+exec heroic ${ARGS} >/tmp/heroic.log 2>&1
