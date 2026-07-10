@@ -11,7 +11,7 @@
 #          --backend headless path AND the DFP Xorg path; if the VM boots with
 #          N, set it persistently + reload, or reboot once)
 #   2. install nvidia-container-toolkit (needed for `docker run --gpus ...`)
-#   3. pull  forcespt/dpadcloud-gaming:SteamUbuntu24.04VM  (or build; DPAD_BUILD=1)
+#   3. pull  forcespt/dpadcloud-gaming:dpad-SteamOS  (or build; DPAD_BUILD=1)
 #   4. detect GPU count N, launch N containers (one per GPU):
 #        container i  ->  --gpus '"device=i"'  -p (3478+i):(3478+i)
 #                        DPAD_COTURN_PORT=3478+i  DPAD_TURN_EXTERNAL_PORT=VAST_TCP_PORT_(3478+i)
@@ -80,8 +80,8 @@ REPO_URL="${DPAD_REPO_URL:-https://github.com/ForcesPT/container-gaming.git}"
 REPO_DIR="${DPAD_REPO_DIR:-/opt/dpadcloud/container-gaming}"
 SCRIPT_PATH="/opt/dpadcloud/vm-bootstrap.sh"
 # Image tag is selected dynamically by image_tag_for_gpu() in Phase 3:
-# Blackwell (compute_cap >= 12 / sm_120+) -> :SteamUbuntu24.04VM-rtx50 (CUDA 12.8.1);
-# else -> :SteamUbuntu24.04VM (CUDA 12.5.1). DPAD_IMAGE_TAG overrides both.
+# Blackwell (compute_cap >= 12 / sm_120+) -> :dpad-SteamOS-rtx50 (CUDA 12.8.1);
+# else -> :dpad-SteamOS (CUDA 12.5.1). DPAD_IMAGE_TAG overrides both.
 CONTAINER_PREFIX="dpad"
 URL_FILE="/opt/dpadcloud/selkies-urls.txt"
 TAG_FILE="/opt/dpadcloud/.image-tag"
@@ -206,8 +206,8 @@ ensure_repo() {
 }
 
 # Pick the image tag: DPAD_IMAGE_TAG override wins; else Blackwell
-# (compute_cap major >= 12, sm_120+) -> :SteamUbuntu24.04VM-rtx50 (CUDA 12.8.1);
-# else the regular :SteamUbuntu24.04VM (CUDA 12.5.1). Mirrors detect_build_args'
+# (compute_cap major >= 12, sm_120+) -> :dpad-SteamOS-rtx50 (CUDA 12.8.1);
+# else the regular :dpad-SteamOS (CUDA 12.5.1). Mirrors detect_build_args'
 # CUDA-version pick so the pulled tag always matches the GPU arch.
 image_tag_for_gpu() {
     [ -n "${DPAD_IMAGE_TAG:-}" ] && { echo "${DPAD_IMAGE_TAG}"; return; }
@@ -215,9 +215,9 @@ image_tag_for_gpu() {
     cc="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')"
     major="${cc%%.*}"
     if [ -n "$major" ] && [ "$major" -ge 12 ] 2>/dev/null; then
-        echo "forcespt/dpadcloud-gaming:SteamUbuntu24.04VM-rtx50"
+        echo "forcespt/dpadcloud-gaming:dpad-SteamOS-rtx50"
     else
-        echo "forcespt/dpadcloud-gaming:SteamUbuntu24.04VM"
+        echo "forcespt/dpadcloud-gaming:dpad-SteamOS"
     fi
 }
 
