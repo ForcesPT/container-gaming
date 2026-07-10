@@ -76,23 +76,36 @@ compute_cap>=750 cuda_max_good>=12.1 gpu_display_active=false rentable=true veri
 Cheapest NVENC: `gpu_frac=1 num_gpus=1` (single-GPU machines, any driver).
 
 **Docker Options** (Selkies-only — coturn on the standard TURN port `3478`,
-**TCP**, no `--privileged` needed; `--ulimit` covers hosts with low hard caps):
+**Docker Options** (Selkies-only — coturn on the standard TURN port `3478`,
+**UDP** (validated on RTX 4070/3060 hosts); no `--privileged` needed; `--ulimit`
+covers hosts with low hard caps):
 ```
--p 22:22 -p 3478:3478 -e SELKIES_BASIC_AUTH_USER=dpad -e SELKIES_BASIC_AUTH_PASSWORD=pass \
+-p 22:22 -p 3478:3478/udp -e SELKIES_TURN_PROTOCOL=udp -e SELKIES_BASIC_AUTH_USER=dpad -e SELKIES_BASIC_AUTH_PASSWORD=pass \
   --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
   --shm-size 2g --ulimit nproc=1048576:1048576 --ulimit nofile=1048576:1048576
 ```
 - `DPAD_LAUNCHER=heroic` is the image default (no need to set it).
 - The **dual-ICE TURN config is automatic** — the entrypoint writes an
-  `rtc_config.json` with `turn:127.0.0.1:3478` (in-container peer) +
-  `turn:<publicIp>:<extPort>` (browser) whenever a real public IP resolves, on
-  **any** provider. No `DPAD_PROVIDER` needed. This fixes the old
+  `rtc_config.json` with `turn:127.0.0.1:3478?transport=udp` (in-container peer) +
+  `turn:<publicIp>:<extPort>?transport=udp` (browser) whenever a real public IP
+  resolves, on **any** provider. No `DPAD_PROVIDER` needed. This fixes the old
   "Connection failed" (the container can't hairpin to its own public IP; the
   dual-ICE makes both peers TURN clients of the same coturn, which short-circuits
-  the media internally).
-- Vast maps `3478` to a random external port, injected as `VAST_TCP_PORT_3478`;
+  the media internally). `SELKIES_TURN_PROTOCOL` must match the exposed port
+  protocol (udp here). (TCP `-p 3478:3478` + `SELKIES_TURN_PROTOCOL=tcp` also works
+  on hosts that forward TCP, but UDP is the validated default.)
+- Vast maps `3478/udp` to a random external port, injected as `VAST_UDP_PORT_3478`;
   the entrypoint auto-detects it. **Do NOT use the old `73478` identity tag** —
   73478 > 65535 is an invalid port (coturn wraps it to 7942 and it isn't mapped).
+- **Host inbound requirement (important):** the browser must reach coturn on
+  Vast's mapped port. Most Vast hosts forward inbound ports, but **some (e.g.
+  behind a NAT) don't** — on those the browser gets no `relay` ICE candidate and
+  Selkies shows "Connection failed" even though the image is fine (the in-container
+  peer still relays, since it reaches coturn locally). Validated working: RTX 4070
+  and RTX 3060 single-GPU hosts. If you hit a bad host, verify coturn is reachable
+  from outside (a TURN Allocate must get a `401` reply) — e.g. with Python:
+  send a STUN `0x0003` (Allocate) UDP packet to `<publicIp>:<mappedUdpPort>` and
+  check for any reply; no reply ⇒ destroy and relaunch on a different host.
 
 On boot, read the Vast **Logs** tab for:
 ```
@@ -168,4 +181,5 @@ session token (or front with Cloudflare Access).
 - **The two use-cases have near-zero heavy overlap** (desktop/Heroic vs Steam/gamescope), so they ship as two images instead of one 16 GB image carrying both.
 - **Noble t64 apt renames** applied only where the lib was actually renamed in noble (`libasound2t64`, `libssl3t64`, `libgtk-3-0t64`); `libpulse0`/`libva2`/`libvdpau1`/`libwayland-egl1`/`libjack-jackd2-0` keep plain names, `libvpx7`→`libvpx9`.
 - **Possible ~1 GB VM trim** (needs a runtime test): drop the `steam-libs-amd64/i386` apt packages — the pre-baked `steamrt64/32` already include the Steam Runtime, so the system steam-libs may be redundant.
-- **Base-swap validation:** the `nvidia/cuda:-base` + `cuda-cudart` + `cuda-nvrtc` swap is build-validated; confirm Selkies `nvh264enc` inits on a real GPU on first boot (the math libs it replaces were unused by NVENC).
+- **Base-swap validation:** the `nvidia/cuda:-base` + `cuda-cudart` + `cuda-nvrtc` swap is build-validated; confirm Selkies `nvh264enc` inits on a real GPU on first boot (the math libs it replaces were unused by NVENC). Validated streaming on RTX 4070 / RTX 3060 hosts.
+- **Known non-fatal warning (base swap):** the boot/GStreamer logs show `libgstpython.so: libpython3.12.so.1.0: cannot open shared object file` and `Spawning gst-plugin-scanner helper failed: … Operation not permitted`. Both are cosmetic — the GStreamer **python** plugin can't load (the gst plugin scanner can't find `libpython3.12.so.1.0` on its `LD_LIBRARY_PATH`, and the scanner fork is seccomp-blocked on Vast which ignores `--security-opt`). Selkies' NVENC pipeline doesn't use the python plugin, so `nvh264enc` still probes/works. Verify `Selected encoder: nvh264enc` in the boot log (not `x264enc`) on first boot.
