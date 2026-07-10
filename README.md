@@ -1,116 +1,171 @@
-# DpadCloud Gaming Container (Ubuntu 24.04 + CUDA 12.5.1)
+# DpadCloud Gaming Containers (Ubuntu 24.04 + CUDA 12.5.1)
 
-A lean headless cloud-gaming container with **hardware NVENC** for low latency,
-built on `nvidia/cuda:12.5.1-runtime-ubuntu24.04`.
+Two slim cloud-gaming images, **one Dockerfile (multi-stage)**, both with
+**hardware NVENC** and **Selkies-GStreamer** as the only browser stream.
 
-**Why 24.04 + CUDA 12.5.1?**
-- **24.04 (noble, glibc 2.39)** lets the prebuilt [moonlight-web-stream](https://github.com/MrCreativ3001/moonlight-web-stream) binary run natively — no from-source Rust build, no patchelf. That gives the **browser path hardware NVENC via Sunshine** on *all* drivers (Selkies' `nvh264enc` falls back to `x264enc` on driver ≥570 / NVENC 13).
-- **CUDA 12.5.1 runs on any driver ≥525** via [CUDA minor-version compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html) (the whole 12.x family shares the R525 baseline). So the **wide Vast pool is preserved** — keep the offer filter at `cuda_max_good>=12.1` (it includes driver 535/545/550 hosts like the 3080 Ti). NVENC is driver-gated, not CUDA-gated, so the encoder story is unchanged. (A `12.8.1` variant for RTX 50/Blackwell is buildable with `--build-arg CUDA_VERSION=12.8.1 --build-arg CUDA_PKG=12-8`.)
+| Tag | Target | Use-case | Size |
+|-----|--------|----------|------|
+| `forcespt/dpadcloud-gaming:dpad-heroic` | `vast-docker` | **Vast Docker** (no userns): Heroic desktop + Selkies — Epic/GOG/Amazon games + a general cloud desktop (XFCE + Firefox). Steam is blocked on Vast Docker (no userns → CEF crashes). | ~3.9 GB |
+| `forcespt/dpadcloud-gaming:dpad-SteamOS` | `vast-vm` | **Vast KVM VM** (userns): Steam + gamescope (full Steam, Big Picture) + Selkies. No desktop. Fast-boot: the Steam client is pre-baked (~2.1 GB) so a fresh container reaches the stream URL in ~50 s. | ~7 GB |
+| `…:dpad-SteamOS-rtx50` | `vast-vm` (+`--build-arg CUDA_VERSION=12.8.1`) | same, for **RTX 50 / Blackwell** (sm_120+, needs CUDA 12.8.1) | ~7 GB |
 
-**Three streaming paths, one image:**
-- **Browser (primary)** → `moonlight-web-stream` (Sunshine `h264_nvenc`) → in-image **coturn TURN** → **Cloudflare Tunnel** (HTTPS → secure context → gamepad + pointer-lock + WebCodecs decode). No client install, browser NVENC on every driver.
-- **Browser (fallback)** → `Selkies-GStreamer` (NVENC on driver <570, `x264enc` on ≥570) → same coturn → its own Cloudflare Tunnel.
-- **Native enthusiast** → `Sunshine` (NVENC) + Moonlight over **Tailscale** (lowest latency, direct UDP over the Tailnet).
+A shared `base` stage (Selkies + coturn + cloudflared + the NVENC #1249 fix +
+`cuda-cudart`/`cuda-nvrtc` + display/audio/Mesa/X/Python) is built once and both
+final stages extend it. An `interposer-builder` stage compiles the joystick
+interposer + NVENC-fix `.so` so `gcc` never ships in the final images.
+
+> **Why 24.04 + CUDA 12.5.1?** CUDA 12.5.1 runs on any driver ≥525 via [CUDA
+> minor-version compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html)
+> (the whole 12.x family shares the R525 baseline) → the wide Vast pool is
+> preserved (offer filter `cuda_max_good>=12.1`). The base is
+> `nvidia/cuda:12.5.1-BASE`, **not `-runtime`**: the runtime base's CUDA math
+> libs (cublas/cusparse/cufft/npp/cusolver/curand, ~1.6 GB) are unused by
+> NVENC/Selkies — only `cuda-cudart` (cudaupload/cudaconvert) + `cuda-nvrtc`
+> (nvh264enc JIT) are installed. RTX 50/Blackwell needs the 12.8.1 variant
+> (`--build-arg CUDA_VERSION=12.8.1 --build-arg CUDA_PKG=12-8`).
 
 ## What's inside
-- Ubuntu 24.04 + CUDA 12.5.1 runtime (runs on driver ≥525 via minor compat → wide pool)
-- Steam + Proton-GE · Sunshine (ubuntu-24.04 deb) · Selkies-GStreamer 1.24.6 · moonlight-web-stream v2.10
-- PulseAudio headless null-sink (monitor captures silence reliably — PipeWire's suspends when idle)
-- VirtualGL 3.1 (GPU GL into headless Xvfb) · coturn (TCP 3478 / Vast tag 73478) · cloudflared · Tailscale
-- flexgrip NVENC interposer (auto on multi-GPU slices, driver 570..609 — fixes nvidia-container-toolkit #1249)
-- Xvfb (Mesa EGL) + XFCE · ~8 GB image
+
+**Both images (base):** Selkies-GStreamer 1.24.6 (WebRTC + NVENC), coturn (TURN),
+cloudflared (HTTPS tunnel), the flexgrip NVENC interposer (`libnvenc_fix.so` —
+auto on multi-GPU slices, driver 570..609, fixes nvidia-container-toolkit #1249),
+`cuda-cudart` + `cuda-nvrtc`, Xorg/Xvfb + Mesa/EGL + Vulkan loader, PulseAudio,
+VirtualGL 3.1 (Xvfb debug path), the `dpad` user.
+
+**`:dpad-heroic` adds:** XFCE4, **Heroic Games Launcher** (Epic+GOG+Amazon,
+Electron `--no-sandbox` + umu/Proton-direct — no userns needed),
+**Firefox** (real Mozilla `.deb`, apt-pinned over the Ubuntu snap stub),
+accountsservice. Default `DPAD_LAUNCHER=heroic`. No Steam/gamescope/Proton.
+
+**`:dpad-SteamOS` adds:** **Steam** (pre-bootstrapped at build time, fast-boot),
+gamescope + PipeWire + wireplumber (the no-DRM-master multi-tenant path), the
+`patch_selkies_pipewire` pipewiresrc zero-copy capture patch, the XTest
+`dpad_input_patch`, the Steam license `zenity` wrapper. Default `DPAD_GAMESCOPE=1`.
+No desktop/Heroic/Firefox. **GE-Proton is not baked in** — native Steam downloads
+its own Proton at runtime.
+
+**Removed (both images — Selkies is the only stream):** moonlight-web-stream,
+Sunshine, Tailscale/native-Moonlight, steamcmd, dpad-launch, bubbleroot/proot,
+the GE-Proton pre-bake, the CUDA math libs, snapd, and the build toolchain.
 
 ## Build & push
+
 ```bash
 cd dpadcloud/container-gaming
-./deploy.sh build                         # -> dpadcloud/gaming:ubuntu24.04 (CUDA 12.5.1)
-# RTX 50/Blackwell variant:
-# ./deploy.sh build 12.8                   # -> dpadcloud/gaming:ubuntu24.04-rtx50 (CUDA 12.8.1)
-./deploy.sh push YOUR_DOCKERHUB_USER      # push to Docker Hub
+# Vast Docker (Heroic desktop + Selkies)
+docker build --target vast-docker -t forcespt/dpadcloud-gaming:dpad-heroic .
+docker push   forcespt/dpadcloud-gaming:dpad-heroic
+# Vast VM (Steam/gamescope + Selkies, fast-boot)
+docker build --target vast-vm      -t forcespt/dpadcloud-gaming:dpad-SteamOS .
+docker push   forcespt/dpadcloud-gaming:dpad-SteamOS
+# RTX 50 / Blackwell variant of the VM tag (CUDA 12.8.1) — only if you use RTX 50
+docker build --target vast-vm --build-arg CUDA_VERSION=12.8.1 --build-arg CUDA_PKG=12-8 \
+  -t forcespt/dpadcloud-gaming:dpad-SteamOS-rtx50 .
+docker push   forcespt/dpadcloud-gaming:dpad-SteamOS-rtx50
 ```
 
-## Deploy on Vast.ai
+## Deploy
 
-**Pick a compatible host** — the NVENC-safe offer predicate (corrected: #1249 is multi-GPU-only; single-GPU hosts are immune on any driver):
+### Vast Docker → `:dpad-heroic`
+
+**NVENC-safe offer predicate** (`#1249` is multi-GPU-only; single-GPU hosts are
+immune on any driver):
 ```
 compute_cap>=750 cuda_max_good>=12.1 gpu_display_active=false rentable=true verified=true
 ```
-(CLI: `vastai search offers 'compute_cap>=750 cuda_max_good>=12.1 gpu_display_active=false'`)
-`cuda_max_good>=12.1` keeps the wide pool (driver 535+); the 12.5.1 image runs on those via minor compat. Cheapest NVENC: `gpu_frac=1 num_gpus=1` (single-GPU machines, any driver). RTX 50 needs the `ubuntu24.04-rtx50` (CUDA 12.8) variant.
+Cheapest NVENC: `gpu_frac=1 num_gpus=1` (single-GPU machines, any driver).
 
-Docker Options (browser streaming — the 73478 identity tag is required, **TCP only**, so both mws and Selkies WebRTC media relay through the in-image coturn. Do NOT add `73478/udp` — Vast flags tcp+udp of the same port as a duplicate. `--privileged` is needed so Sunshine can create virtual input devices via `/dev/uinput` on stream start; `--ulimit nproc`/`nofile` cover hosts with low hard caps.):
+**Docker Options** (Selkies-only — coturn on the standard TURN port `3478`,
+**TCP**, no `--privileged` needed; `--ulimit` covers hosts with low hard caps):
 ```
---privileged --ulimit nproc=1048576:1048576 --ulimit nofile=1048576:1048576 -p 73478:73478 -e SUNSHINE_PASSWORD=pass -e SELKIES_BASIC_AUTH_USER=dpad -e SELKIES_BASIC_AUTH_PASSWORD=pass
+-p 22:22 -p 3478:3478 -e SELKIES_BASIC_AUTH_USER=dpad -e SELKIES_BASIC_AUTH_PASSWORD=pass \
+  --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+  --shm-size 2g --ulimit nproc=1048576:1048576 --ulimit nofile=1048576:1048576
+```
+- `DPAD_LAUNCHER=heroic` is the image default (no need to set it).
+- The **dual-ICE TURN config is automatic** — the entrypoint writes an
+  `rtc_config.json` with `turn:127.0.0.1:3478` (in-container peer) +
+  `turn:<publicIp>:<extPort>` (browser) whenever a real public IP resolves, on
+  **any** provider. No `DPAD_PROVIDER` needed. This fixes the old
+  "Connection failed" (the container can't hairpin to its own public IP; the
+  dual-ICE makes both peers TURN clients of the same coturn, which short-circuits
+  the media internally).
+- Vast maps `3478` to a random external port, injected as `VAST_TCP_PORT_3478`;
+  the entrypoint auto-detects it. **Do NOT use the old `73478` identity tag** —
+  73478 > 65535 is an invalid port (coturn wraps it to 7942 and it isn't mapped).
+
+On boot, read the Vast **Logs** tab for:
+```
+▶ Browser click-and-play (Selkies):
+    https://<random>.trycloudflare.com   (Login: dpad / <SELKIES_BASIC_AUTH_PASSWORD>)
 ```
 
-On boot, read the boot log (Vast **Logs** tab). It prints **two Cloudflare quick-tunnel URLs**:
-- `mws tunnel URL: https://<random>.trycloudflare.com` — **primary** (Sunshine NVENC). Auto-pairs at boot; log in (`dpad` / your `SUNSHINE_PASSWORD`), the `localhost` host is already paired, click it → launch an app.
-- `Selkies tunnel URL: https://<random>.trycloudflare.com` — fallback (login `dpad` / `pass`).
+### Vast KVM VM → `:dpad-SteamOS`
 
-> **If mws shows no video / `WebRTC negotiation timed out`:** check `/tmp/sunshine.log` for
-> `Unable to create virtual touch screen: Operation not permitted` — that means `/dev/uinput`
-> access is blocked by the device cgroup (the in-image `mknod` can't bypass it). `--privileged`
-> is the fix (see `docs/PROJECT_STATE.md` → "CURRENT STATUS & BLOCKER").
+Use `scripts/vm-bootstrap.sh` run **inside** the VM — it auto-selects the tag by
+GPU arch (`:dpad-SteamOS` or `:dpad-SteamOS-rtx50` for Blackwell), exposes one
+coturn port per GPU, sets the gamescope + TURN env, launches one CDI container
+per GPU, and prints each Selkies URL. Full recipe in
+[`docs/VAST-VM-DEPLOY.md`](docs/VAST-VM-DEPLOY.md). (This is the validated
+N-on-N-GPUs multi-tenant full-Steam path.)
 
-Both URLs are HTTPS so the secure-context gaming APIs (gamepad, WebCodecs, keyboard lock) are enabled.
+### RunPod
 
-For the **native Moonlight** enthusiast path, add Tailscale:
-```
--e TAILSCALE_AUTH_KEY=tskey-... -e TAILSCALE_HOSTNAME=dpadcloud-1 -p 41641:41641/udp
-```
-Then in Moonlight on your client → Add PC → the container's Tailnet IP (`100.x.x.x`, printed in the boot log) on port 47989, pair via Sunshine's Web UI.
+RunPod is still supported (the entrypoint auto-detects `RUNPOD_POD_ID` and reads
+`RUNPOD_PUBLIC_IP` / `RUNPOD_TCP_PORT_3478`). **Secure Cloud** (userns → full
+Steam) → use `:dpad-SteamOS`; **Community Cloud** (no userns → Heroic) → use
+`:dpad-heroic`. See [`docs/RUNPOD.md`](docs/RUNPOD.md). (mws/Sunshine/Tailscale
+are removed — Selkies only.)
 
-> The Selkies encoder is auto-selected at boot by a 1-frame encode test: `nvh264enc` (NVENC) when the GPU is reachable, else `x264enc`. mws uses Sunshine's FFmpeg `h264_nvenc` directly (confirmed working on driver 595 where Selkies' `nvh264enc` failed) — so the browser NVENC path no longer depends on the GStreamer 1.24.6 / NVENC-13 preset situation.
+## Production (named Cloudflare tunnel)
 
-## Production (your website → "Play Game" → browser)
-
-Replace the quick tunnels with a **single named Cloudflare Tunnel** that has two ingress rules in the Cloudflare dashboard:
+Replace the quick tunnel with a named tunnel for a stable URL:
 ```
-play-<id>.dpadcloud.com     -> http://localhost:8080    (mws, primary)
-selkies-<id>.dpadcloud.com  -> http://localhost:16100   (fallback)
+-e CLOUDFLARED_TUNNEL_TOKEN=<token> -e CLOUDFLARED_HOSTNAME=https://play-<id>.dpadcloud.com -p 3478:3478
 ```
-and pass the tunnel token + the primary hostname:
-```
--e CLOUDFLARED_TUNNEL_TOKEN=<token> -e CLOUDFLARED_HOSTNAME=https://play-<id>.dpadcloud.com -p 73478:73478
-```
-The entrypoint runs the named tunnel for mws and a quick tunnel for Selkies (or, with a two-ingress named tunnel, both are covered). Your Fastify orchestrator creates the tunnel + DNS CNAME per session, provisions the Vast instance with the token, and returns the HTTPS URL for the website to open. Per-session auth: the first mws login creates the admin user (or front with Cloudflare Access); for the Selkies fallback set `SELKIES_BASIC_AUTH_PASSWORD` to a session token.
+The entrypoint runs the named tunnel for Selkies. Your orchestrator creates the
+tunnel + DNS CNAME per session, provisions the instance with the token, and
+returns the HTTPS URL. Per-session auth: set `SELKIES_BASIC_AUTH_PASSWORD` to a
+session token (or front with Cloudflare Access).
 
 ## Config (env)
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `SCREEN_RESOLUTION` | `1920x1080x24` | Xvfb screen (fixed at boot) |
-| `SUNSHINE_PASSWORD` | `dpadcloud` | Sunshine Web UI / creds |
-| `SELKIES_BASIC_AUTH_USER` / `_PASSWORD` | `dpad` / `OPEN_BUTTON_TOKEN` | Selkies (fallback) login gate |
-| `CLOUDFLARED_TUNNEL_TOKEN` + `_HOSTNAME` | (unset → quick tunnels) | Named tunnel (prod); hostname is the mws/primary URL |
-| `TAILSCALE_AUTH_KEY` + `_HOSTNAME` | (unset → disabled) | Native Moonlight path |
-| `TURN_USERNAME` / `TURN_PASSWORD` | `turnuser` / `OPEN_BUTTON_TOKEN` | coturn creds (shared by mws + Selkies) |
+| `SELKIES_BASIC_AUTH_USER` / `_PASSWORD` | `dpad` / `OPEN_BUTTON_TOKEN` | Selkies browser login gate (set the password to a per-session token in production) |
+| `CLOUDFLARED_TUNNEL_TOKEN` + `_HOSTNAME` | (unset → quick tunnel) | Named tunnel (production) |
+| `TURN_USERNAME` / `TURN_PASSWORD` | `turnuser` / `OPEN_BUTTON_TOKEN` | coturn creds (shared by the in-container peer + the browser) |
+| `DPAD_COTURN_PORT` | auto (`3478`) | Internal port coturn binds; auto-detected from `VAST_TCP_PORT_3478`/`VAST_UDP_PORT_3478` |
+| `DPAD_TURN_PUBLIC_IP` / `DPAD_TURN_EXTERNAL_PORT` / `DPAD_TURN_UDP_EXTERNAL_PORT` | auto | Override the browser-facing TURN address/port (auto from `PUBLIC_IPADDR` + `VAST_*_PORT_3478`) |
+| `SELKIES_TURN_PROTOCOL` | `tcp` | TURN transport (match the exposed port protocol) |
 | `SELKIES_ENCODER` | (auto: NVENC else x264) | Force the Selkies encoder |
 | `DPAD_NVENC_FIX` | `auto` | flexgrip #1249 fix: `auto` (multi-GPU slice on driver 570..609), `1`, `0` |
-| `DPAD_MWS_AUTOPAIR` | `1` | Auto-pair mws↔Sunshine at boot so the end user never sees a PIN. `0` to disable (manual pairing via the mws web UI) |
-| `DPAD_LAUNCHER` | `steam` | Frontend that auto-starts on the Xorg/XFCE desktop (DFP path; ignored when `DPAD_GAMESCOPE=1`). `steam` = Steam client (Vast KVM VM / RunPod full-Steam). `heroic` = Heroic Games Launcher — Epic+GOG+Amazon storefront, the **Vast Docker** path (Electron `--no-sandbox` + umu/Proton-direct, NO userns needed). `none` = bare desktop. |
-| `DPAD_HEROIC_ARGS` | `--no-sandbox` | Args passed to `heroic` (via `heroic-launch`). e.g. `--no-sandbox --no-gui` for an orchestrator-triggered headless game launch, or append a `heroic://launch/{runner}/{id}` URL. |
-| `MWS_ADMIN_USER` / `MWS_ADMIN_PASSWORD` | `dpad` / `SUNSHINE_PASSWORD` | mws admin login; auto-pair creates it on first boot, end user logs in with it |
-| `MWS_CLIENT_NAME` | `dpadcloud-web` | Friendly name registered in Sunshine for the mws client |
-
-## Local test
-```bash
-./deploy.sh build && ./deploy.sh up   # then ./deploy.sh logs
-```
-(needs an NVIDIA GPU + NVIDIA Container Toolkit for NVENC; otherwise Selkies falls back to software `x264enc`. mws requires Sunshine to capture — Sunshine's NVENC also needs the GPU.)
+| `DPAD_NVENC_FIX_DEBUG` | `0` | `1` to log the interposer's `GET_ATTACHED_IDS` filtering (noisy) |
+| `DPAD_LAUNCHER` | `heroic` (`:dpad-heroic`) / `steam` (`:dpad-SteamOS` DFP path) | Frontend that auto-starts on the desktop. `heroic` / `steam` / `none` (bare desktop). Ignored when `DPAD_GAMESCOPE=1`. |
+| `DPAD_HEROIC_ARGS` | `--no-sandbox` | Args for `heroic` (via `heroic-launch`) |
+| `DPAD_GAMESCOPE` | `1` (`:dpad-SteamOS`) / `0` (`:dpad-heroic`) | `1` = gamescope headless + Steam (no DRM master → N-on-N-GPUs); `0` = Xorg/XFCE single-user path |
+| `DPAD_VIDEO_SRC` | `pipewiresrc` (gamescope) / `ximagesrc` (Xorg) | Selkies capture source |
+| `DPAD_INPUT_DISPLAY` | (auto, gamescope) | XTest input target (gamescope's Xwayland `:N`) |
+| `SCREEN_RESOLUTION` | `1920x1080x24` | Xvfb/Xorg screen (fixed at boot) |
+| `SUNSHINE_PASSWORD` | (unused) | Kept for back-compat only (Sunshine was removed) |
 
 ## Files
+
 | File | Purpose |
 |------|---------|
-| `Dockerfile` | Ubuntu 24.04 / CUDA 12.5.1 image (Steam + Sunshine + Selkies + mws + PulseAudio + coturn + cloudflared + Tailscale + VGL + flexgrip) |
-| `entrypoint.sh` | Boot orchestration: Xvfb → XFCE → PulseAudio → coturn → NVENC/flexgrip → Sunshine → Selkies → mws → cloudflared(x2) → Tailscale |
-| `configs/sunshine/sunshine.conf` | Tuned Sunshine capture/gamepad config |
-| `scripts/nvenc_fix.c` | Vendored flexgrip interposer (built → `/opt/dpadcloud/libnvenc_fix.so`) |
-| `scripts/{vgl-steam,proton-wined3d,vgl-test,install-display-drivers}` | VirtualGL launchers + matched .run graphics-lib extractor |
+| `Dockerfile` | Multi-stage: `interposer-builder` → `base` → `vast-docker` (`:dpad-heroic`) / `vast-vm` (`:dpad-SteamOS`) |
+| `entrypoint.sh` | Boot orchestration (shared): coturn → NVENC/flexgrip → display (Xorg or gamescope) → Selkies → cloudflared. mws/Sunshine/Tailscale blocks removed. |
+| `scripts/vm-bootstrap.sh` | Vast VM host setup + one-CDI-container-per-GPU launcher (pulls `:dpad-SteamOS[-rtx50]`) |
+| `scripts/nvenc_fix.c` | flexgrip NVENC #1249 interposer (built in `interposer-builder` → `/opt/dpadcloud/libnvenc_fix.so`) |
+| `scripts/joystick_interposer_v162.c` | Patched Selkies v1.6.2 gamepad interposer (built for x86_64 + i386) |
+| `scripts/{patch_selkies_pipewire.py, dpad_input_patch.py, patch_gst_web_cursors.sh}` | Selkies patches (pipewiresrc zero-copy / XTest input / cursor visibility) |
+| `scripts/{vgl-steam,proton-wined3d,vgl-test,install-display-drivers,dpad-launch,heroic-launch}` | Launchers + matched `.run` graphics-lib extractor |
+| `scripts/build-bootstrap-steam.sh` | Build-time Steam client pre-bootstrap (fast-boot, `vast-vm` only) |
 | `docker-compose.yml` / `deploy.sh` / `healthcheck.sh` | Local dev helpers |
+| `docs/` | `PROJECT_STATE.md` (history), `VAST-VM-DEPLOY.md` (VM runbook), `RUNPOD.md` (RunPod) |
 
 ## Notes / future
-- **mws↔Sunshine pairing is automated** (`scripts/mws-autopair`, runs at boot): it logs in to mws (creates the admin), adds the `localhost` host, calls mws `POST /api/pair` (mws generates the PIN), and submits that PIN to Sunshine `POST /api/pin` — so by the time the end user opens the mws URL, the host is already paired and they just log in + launch an app (no PIN). Disable with `DPAD_MWS_AUTOPAIR=0`. Watch `/tmp/mws-autopair.log` (in the periodic log dump) if pairing doesn't complete.
-- **Noble t64 apt renames** are applied only where the lib was actually renamed in noble (`libasound2t64`, `libssl3t64`, `libgtk-3-0t64`); `libpulse0`/`libva2`/`libvdpau1`/`libwayland-egl1`/`libjack-jackd2-0` keep their plain names, and `libvpx7`→`libvpx9`. If a package name drifts in a future point release, the first build may need a one-line fix.
-- **DX12 / true DXVK perf** still needs a Vulkan present surface (gamescope), deferred. Interim Windows path = WineD3D + `vglrun` (DX9–11) via `proton-wined3d`.
-- **Drop Selkies** once mws+Sunshine is validated on Vast (it's kept as a fallback now).
+- **The two use-cases have near-zero heavy overlap** (desktop/Heroic vs Steam/gamescope), so they ship as two images instead of one 16 GB image carrying both.
+- **Noble t64 apt renames** applied only where the lib was actually renamed in noble (`libasound2t64`, `libssl3t64`, `libgtk-3-0t64`); `libpulse0`/`libva2`/`libvdpau1`/`libwayland-egl1`/`libjack-jackd2-0` keep plain names, `libvpx7`→`libvpx9`.
+- **Possible ~1 GB VM trim** (needs a runtime test): drop the `steam-libs-amd64/i386` apt packages — the pre-baked `steamrt64/32` already include the Steam Runtime, so the system steam-libs may be redundant.
+- **Base-swap validation:** the `nvidia/cuda:-base` + `cuda-cudart` + `cuda-nvrtc` swap is build-validated; confirm Selkies `nvh264enc` inits on a real GPU on first boot (the math libs it replaces were unused by NVENC).

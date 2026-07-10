@@ -1,5 +1,14 @@
 # DpadCloud on RunPod
 
+> **UPDATE (image split + Selkies-only):** This repo now ships **two images**.
+> RunPod **Secure Cloud** (userns → full Steam) → use **`:dpad-SteamOS`** (Steam/
+> gamescope + Selkies). RunPod **Community Cloud** (no userns) → use **`:dpad-heroic`**
+> (Heroic desktop + Selkies). **mws, Sunshine, and Tailscale/native-Moonlight were
+> removed** — Selkies-GStreamer is the only browser stream, so the mws/Sunshine/
+> Tailscale-specific instructions below are historical. The coturn/dual-ICE
+> networking model is unchanged and now auto-fires on any provider (no `DPAD_PROVIDER`
+> needed). The `steamcmd + dpad-launch` path was removed too.
+
 RunPod is the **userns-capable provider** (the second provider after Vast). Two
 things make it interesting vs. Vast:
 
@@ -67,7 +76,7 @@ inbound HTTP port needed). The browser URL is printed in the pod logs as
 
 ```
 Name:                DpadCloud Gaming (Steam, Ubuntu 24.04)
-Container image:     forcespt/dpadcloud-gaming:SteamUbuntu24.04
+Container image:     forcespt/dpadcloud-gaming:dpad-SteamOS        # Secure Cloud (userns → Steam). Community Cloud (no userns) → :dpad-heroic
 Compute type:        NVIDIA GPU
 Container disk:      32 GB
 Volume disk:         0 GB   (persistent storage; 0 for ephemeral per-session)
@@ -116,17 +125,16 @@ Environment variables:
 
 1. Deploy the pod from the template (pick an RTX 30/40/A-series GPU; the image
    is CUDA 12.5.1 so any driver ≥525 works; RTX 50/Blackwell needs the
-   `:ubuntu24.04-rtx50` image variant with CUDA 12.8).
-2. Wait ~60–90s, then open the pod **Logs** tab and look for:
+   `:dpad-SteamOS-rtx50` variant with CUDA 12.8).
+2. Wait ~50–90s, then open the pod **Logs** tab and look for:
    ```
-   [*] Provider: RunPod  turn_port=<NNNNN>  public_ip=<A.B.C.D>
-   [mws-autopair] SUCCESS — mws is paired with Sunshine
-   mws running on 0.0.0.0:8080 (Sunshine NVENC -> WebRTC)
-   mws tunnel URL: https://<random>.trycloudflare.com
+   [*] Provider: RunPod  coturn_listen=3478  turn_ext=<NNNNN>  public_ip=<A.B.C.D>
+   [*] dual-ICE rtc_config.json written (...): local 127.0.0.1:3478 + public <ip>:<NNNNN>
+   Selkies running on 127.0.0.1:16100 (encoder=nvh264enc)
+   Selkies tunnel URL: https://<random>.trycloudflare.com   (login dpad / <SELKIES_BASIC_AUTH_PASSWORD>)
    ```
-3. Open the **`mws tunnel URL`** in a browser → log in (`dpad` / the
-   `SUNSHINE_PASSWORD`) → the `localhost` host is already paired (auto-pair at
-   boot) → launch an app / Desktop.
+3. Open the **`Selkies tunnel URL`** in a browser → log in (`dpad` / the
+   `SELKIES_BASIC_AUTH_PASSWORD`) → launch an app / Desktop.
 4. The browser's WebRTC peer connection relays media through coturn at
    `<publicIp>:<NNNNN>` (TCP). If video doesn't connect, verify coturn is
    reachable: from outside, `nc -vz <publicIp> <NNNNN>` should succeed.
