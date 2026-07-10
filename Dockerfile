@@ -1,55 +1,77 @@
 # =============================================================================
 # DpadCloud Gaming Container — Ubuntu 24.04 (noble) + CUDA 12.5.1
-# Base: nvidia/cuda:12.5.1-runtime-ubuntu24.04
-#   * 24.04 (glibc 2.39) is required so the prebuilt moonlight-web-stream
-#     binary (built against glibc 2.39) runs natively — no from-source Rust
-#     build, no patchelf/glibc juggling. mws bridges Sunshine's NVENC stream
-#     to a browser over WebRTC, giving the BROWSER path hardware NVENC on ALL
-#     drivers (Selkies' nvh264enc falls back to x264 on driver>=570 / NVENC 13).
-#   * CUDA 12.5.1 runs on ANY driver >=525 via CUDA minor-version compatibility
-#     (the whole 12.x family shares the R525 baseline driver). So the wide
-#     Vast pool is preserved: keep the offer filter at cuda_max_good>=12.1.
-#     (A 12.8.1 variant for RTX 50/Blackwell is possible with --build-arg
-#     CUDA_VERSION=12.8.1 --build-arg CUDA_PKG=12-8.)
 #
-# Three streaming paths, one image:
-#   Browser (primary)  -> moonlight-web-stream (Sunshine h264_nvenc) <- coturn TURN
-#                        <- cloudflared HTTPS tunnel (secure context: gamepad +
-#                        WebCodecs + keyboard lock). No client install.
-#   Browser (fallback) -> Selkies-GStreamer (NVENC on driver<570, x264 on >=570)
-#                        <- same coturn <- its own cloudflared tunnel.
-#   Native enthusiast  -> Sunshine (NVENC) + Moonlight over Tailscale (lowest
-#                        latency, direct UDP over the Tailnet).
+# Two slim images, ONE Dockerfile (multi-stage):
+#   docker build --target vast-docker -t forcespt/dpadcloud-gaming:dpad-heroic   .
+#   docker build --target vast-vm      -t forcespt/dpadcloud-gaming:dpad-SteamOS .
 #
-# Patterns ported from vastai/linux-desktop (PulseAudio headless null-sink,
-# in-image coturn, Xvfb+Mesa-EGL display, Selkies bound to 127.0.0.1,
-# OPEN_BUTTON_TOKEN creds) and vastai/base-image (install-display-drivers,
-# configure_cuda minor/forward-compat, PIP_BREAK_SYSTEM_PACKAGES for noble).
+#   :dpad-heroic   Vast Docker (no userns): Heroic desktop + Selkies stream.
+#                  Steam is blocked on Vast Docker (no userns -> CEF crashes),
+#                  so Heroic (Electron + --no-sandbox, no userns) is the launcher
+#                  for Epic/GOG/Amazon; games run via umu/Proton-direct. A general
+#                  cloud desktop (XFCE + Firefox) for non-Steam games + work.
+#   :dpad-SteamOS  Vast KVM VM (userns): Steam/gamescope (full Steam, Big Picture)
+#                  + Selkies stream. No desktop. Fast-boot: the Steam client is
+#                  pre-bootstrapped at build time (~2.1 GB) so a fresh container
+#                  reaches the stream URL in ~50 s instead of a 3-4 min download.
+#                  Native Steam downloads its own Proton at runtime, so GE-Proton
+#                  is NOT baked in (it was only for the dpad-launch Proton-direct
+#                  path, which is gone).
+#
+# Both images use Selkies-GStreamer as the ONLY browser stream (mws, Sunshine,
+# and Tailscale/native-Moonlight have been removed).
+#
+# Base is nvidia/cuda:12.5.1-BASE (not -runtime): the runtime base's CUDA math
+# libs (libcublas/libcusparse/libcufft/libnpp/libcusolver/libcurand, ~1.6 GB)
+# are unused by NVENC/Selkies — we install only cuda-cudart (cudaupload/
+# cudaconvert) + cuda-nvrtc (nvh264enc JIT). cuda-compat (datacenter forward-
+# compat) is dropped (consumer GPUs). Big image-size win vs the old 16 GB image.
+#
+# An `interposer-builder` stage compiles the Selkies joystick interposer .so
+# (x86_64 + i386) and libnvenc_fix.so, so gcc-multilib stays out of the finals.
 # =============================================================================
+
 ARG CUDA_VERSION=12.5.1
 ARG CUDA_PKG=12-5
-FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu24.04
-
-LABEL maintainer="dpadcloud"
-LABEL description="Lean headless cloud-gaming container: mws + Selkies + Sunshine + NVENC (Ubuntu 24.04)"
-
-# Re-declare inside the stage: an ARG before FROM is only visible to the FROM
-# line, not to RUN/ENV below. Redeclaring without a value inherits the --build-arg
-# (or the global default above), so cuda-nvrtc-${CUDA_PKG} resolves correctly.
-ARG CUDA_VERSION
-ARG CUDA_PKG
 ARG DEBIAN_FRONTEND=noninteractive
-ARG PROTONGE_VERSION=GE-Proton11-1
-ARG MWS_VERSION=v2.10.0
 ARG CLOUDFLARED_VERSION=2025.7.0
 ARG VIRTUALGL_VERSION=3.1.4
 ARG HEROIC_VERSION=v2.22.0
 
+# =============================================================================
+# Stage: interposer-builder
+#   Builds the patched Selkies v1.6.2 joystick interposer .so (x86_64 AND i386 —
+#   Steam's main binary is 32-bit and loads the i386 .so) + libnvenc_fix.so
+#   (NVENC #1249 multi-GPU fix). Keeps gcc-multilib out of the final images.
+# =============================================================================
+FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS interposer-builder
+RUN apt-get update && apt-get install -y --no-install-recommends gcc-multilib libc6-dev-i386 \
+    && rm -rf /var/lib/apt/lists/*
+COPY scripts/joystick_interposer_v162.c /tmp/joystick_interposer_v162.c
+COPY scripts/nvenc_fix.c /tmp/nvenc_fix.c
+RUN mkdir -p /out/x86_64 /out/i386 \
+    && gcc -shared -fPIC -O2 -ldl -o /out/x86_64/selkies_joystick_interposer.so /tmp/joystick_interposer_v162.c \
+    && gcc -shared -fPIC -O2 -m32 -ldl -o /out/i386/selkies_joystick_interposer.so /tmp/joystick_interposer_v162.c \
+    && gcc -shared -fPIC -O2 -o /out/x86_64/libnvenc_fix.so /tmp/nvenc_fix.c -ldl
+
+# =============================================================================
+# Stage: base — shared by both final images
+#   Selkies-GStreamer + coturn + cloudflared + NVENC fix + display/audio/Mesa/
+#   X/Python + the dpad user. No launcher, no desktop — those are per-target.
+# =============================================================================
+FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS base
+ARG CUDA_VERSION
+ARG CUDA_PKG
+ARG DEBIAN_FRONTEND
+ARG CLOUDFLARED_VERSION
+ARG VIRTUALGL_VERSION
+
+LABEL maintainer="dpadcloud"
+LABEL description="DpadCloud gaming base: Selkies + coturn + NVENC (Ubuntu 24.04)"
+
 # --- Runtime env (uid 1001 = the desktop user) ---
-# NVIDIA_VISIBLE_DEVICES is intentionally NOT set here: on multi-GPU Vast hosts
-# `=all` makes the container see every GPU and the encoder grabs device 0, which
-# may not be the one assigned to this instance, so NvEncOpenEncodeSessionEx fails.
-# Letting Vast inject the assigned GPU keeps device 0 = the assigned GPU.
+# NVIDIA_VISIBLE_DEVICES is intentionally NOT set: on multi-GPU Vast hosts
+# `=all` makes the encoder grab device 0, which may not be the assigned GPU.
 ENV NVIDIA_DRIVER_CAPABILITIES=all
 ENV DISPLAY=:0
 ENV USERNAME=dpad
@@ -64,46 +86,35 @@ ENV PIPEWIRE_LATENCY=128/48000
 ENV GST_DEBUG="*:2"
 ENV GSTREAMER_PATH=/opt/gstreamer
 ENV SELKIES_WEB_ROOT=/opt/gst-web
-ENV MWS_PATH=/opt/mws
-# Put our launcher scripts (vgl-test, vgl-steam, proton-wined3d, mws-autopair,
-# install-display-drivers) on PATH so they work bare inside the container.
 ENV PATH=/opt/dpadcloud:${PATH}
-# Encoder chosen at runtime by entrypoint (1-frame test). Do NOT hardcode here.
 ENV SDL_VIDEODRIVER=x11
-# Noble (24.04) enforces PEP 668 — allow pip3 to install the Selkies wheel into
-# the system interpreter (mirrors vastai/base-image's noble handling).
+# Noble (24.04) enforces PEP 668 — allow pip3 to install the Selkies wheel.
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
-# =============================================================================
-# 1. Enable i386 + base + display + audio + gaming runtime deps (no build tools)
-#    Noble t64 package renames are applied ONLY where the lib was actually
-#    renamed: libasound2t64, libssl3t64, libgtk-3-0t64 (confirmed present).
-#    These were NOT renamed and keep their plain names: libpulse0, libva2,
-#    libvdpau1, libwayland-egl1, libvpx9, libjack-jackd2-0. libgl1-mesa-glx
-#    was removed in noble (libgl1-mesa-dri + libgl1 cover GL). atk/atk-bridge
-#    are pulled as deps of libgtk-3-0t64. We use PulseAudio (not PipeWire) for
-#    the headless null-sink monitor-capture fix, so pipewire packages are NOT
-#    installed (noble's default pipewire-pulse is left inert).
-# =============================================================================
+# --- 1. i386 + base + display + audio + gaming deps + coturn + mesa + vulkan + python (gstreamer gir) ---
+# Build tools (gcc/multilib/dev) are NOT installed here — the interposer .so
+# comes from the interposer-builder stage. (xfce4/xfce4-goodies are per-target.)
 RUN dpkg --add-architecture i386 && \
     apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl wget git gnupg2 sudo socat jq unzip xz-utils \
       xserver-xorg-core xserver-xorg-legacy xvfb x11-xserver-utils x11-utils mesa-utils \
       libgl1-mesa-dri libegl-mesa0 libgles2 libglvnd0 \
       libglx-mesa0 libglx0 libgl1 \
-      xfce4 xfce4-goodies dbus-x11 \
+      dbus-x11 \
       libpulse0 libopus0 libvpx9 libdrm2 libva2 libvdpau1 \
       libssl3t64 libffi8 libwayland-egl1 libxcb-dri3-0 libxext6 libxfixes3 \
       libxv1 libxtst6 libxi6 libxrandr2 libxinerama1 libxcursor1 \
       libxcomposite1 libxdamage1 libnss3 libgbm1 \
       libgtk-3-0t64 libasound2t64 libc6:i386 libgl1:i386 \
       coturn \
-      htop nano vim tmux p7zip-full \
+      python3 python3-pip python3-gi python3-gi-cairo \
+      gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
+      glib-networking libgudev-1.0-0 libgcrypt20 libjack-jackd2-0 \
+      alsa-utils x264 x265 aom-tools libopenh264-dev \
+      htop nano tmux \
     && rm -rf /var/lib/apt/lists/*
 
-# =============================================================================
-# 2. Create the desktop user (uid 1001 — matches the XDG_RUNTIME_DIR paths)
-# =============================================================================
+# --- 2. Create the desktop user (uid 1001) ---
 RUN useradd -m -s /bin/bash -u ${PUID} ${USERNAME} && \
     groupadd -f games && \
     usermod -aG sudo,audio,video,input,plugdev,games ${USERNAME} && \
@@ -111,213 +122,24 @@ RUN useradd -m -s /bin/bash -u ${PUID} ${USERNAME} && \
     echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/${USERNAME} && \
     chmod 0440 /etc/sudoers.d/${USERNAME}
 
-# =============================================================================
-# 3. NVIDIA NVRTC + cuda-compat (forward-compat for datacenter GPUs)
-#    Parameterized by CUDA_PKG (12-5 default). NVRTC is required by the GStreamer
-#    nvcodec plugin (nvh264enc compiles kernels at runtime); cuda-compat enables
-#    forward-compat for datacenter GPUs. Both come from the CUDA apt repo that
-#    the nvidia/cuda base image already configures.
-# =============================================================================
+# --- 3. CUDA: cudart (cudaupload/cudaconvert) + nvrtc (nvh264enc JIT) only.
+#    NO math libs (cublas/cusparse/...), NO cuda-compat (datacenter) — unused by
+#    NVENC/Selkies; the -base image doesn't ship them, so we save ~1.7 GB. ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      cuda-nvrtc-${CUDA_PKG} cuda-compat-${CUDA_PKG} \
+      cuda-cudart-${CUDA_PKG} cuda-nvrtc-${CUDA_PKG} \
     && rm -rf /var/lib/apt/lists/*
 
-# =============================================================================
-# 4. Install Steam (+ steam-libs amd64/i386 so the Steam runtime has its deps).
-#    --no-install-recommends is intentionally DROPPED for this step — Steam's
-#    runtime libs (steam-libs-amd64 / steam-libs-i386) are Recommends of
-#    steam-installer on Ubuntu and are needed for the client to actually run.
-#    If steam-installer isn't in the enabled apt repos (multiverse may not be
-#    enabled on the nvidia/cuda base), fall back to Valve's official steam.deb
-#    (linuxserver/docker-steam's approach) which adds the Steam apt repo itself.
-#    Symlink steam onto PATH (matches Steam-Headless) so the XFCE autostart
-#    Exec=/usr/bin/steam works.
-# =============================================================================
-RUN apt-get update && \
-    ( apt-get install -y steam-installer \
-      || ( curl -fsSL -o /tmp/steam.deb "https://cdn.fastly.steamstatic.com/client/installer/steam.deb" \
-           && apt-get install -y /tmp/steam.deb && rm -f /tmp/steam.deb ) ) && \
-    apt-get update && \
-    ( apt-get install -y steam-libs-amd64 steam-libs-i386 2>/dev/null \
-      || echo "    (steam-libs-* not separate packages; Steam will fetch its runtime on first launch)" ) && \
-    ( ln -sf /usr/games/steam /usr/bin/steam 2>/dev/null || ln -sf /usr/bin/steam-launch /usr/bin/steam 2>/dev/null || true ) && \
-    rm -rf /var/lib/apt/lists/*
-
-# =============================================================================
-# 4b. Install steamcmd (headless Steam console client — the Vast product path:
-#     NO Steam UI, NO pressure-vessel needed; downloads native games and the
-#     dpad-launch wrapper runs the binary directly). steamcmd is 32-bit (i386,
-#     already enabled in step 1) and lives in multiverse, which the nvidia/cuda
-#     base does NOT enable by default — so we add multiverse (and universe, for
-#     the SDL2 libs) to noble's deb822 sources first (idempotent). Also
-#     pre-install the SYSTEM SDL2 mixer/image libs so native Linux games that
-#     ship against the Steam Linux Runtime (sniper) can load SDL2 add-ons from
-#     the SYSTEM (matching SONAMEs libSDL2_mixer-2.0.so.0 /
-#     libSDL2_image-2.0.so.0) instead of pulling the whole sniper SDL2 stack +
-#     its codec cascade (FLAC/opus). dpad-launch still symlinks version-pinned
-#     libs the system can't provide (ICU 67 vs system 74, OpenSSL 1.1 vs
-#     system 3.x) from the bundled sniper platform at runtime — see
-#     scripts/dpad-launch.
-# =============================================================================
-RUN set -e; \
-    SRC=/etc/apt/sources.list.d/ubuntu.sources; \
-    if [ -f "$SRC" ]; then \
-        sed -i '/^Components:/ { /multiverse/! s/$/ multiverse/; /universe/! s/$/ universe/; }' "$SRC"; \
-    elif [ -f /etc/apt/sources.list ]; then \
-        sed -i '/^# deb .* multiverse$/s/^# //; /^# deb .* universe$/s/^# //' /etc/apt/sources.list; \
-    fi; \
-    echo steam steam/question select "I AGREE" | debconf-set-selections; \
-    echo steam steam/license note "" | debconf-set-selections; \
-    apt-get update && apt-get install -y --no-install-recommends \
-      steamcmd libsdl2-mixer-2.0-0 libsdl2-image-2.0-0 \
-    && rm -rf /var/lib/apt/lists/* \
-    && ( command -v steamcmd || ln -sf /usr/games/steamcmd /usr/bin/steamcmd ) \
-    && command -v steamcmd
-
-# -----------------------------------------------------------------------------
-# 4c. zenity license wrapper — auto-accept the Steam "proprietary (binary-only)"
-# license dialog (Steam-Headless issue #218) so the interactive Steam UI starts
-# non-interactively on userns hosts (Vast KVM VM / RunPod Secure Cloud). Other
-# zenity calls pass through to the real binary. Only matters for the full-Steam
-# (DFP) path; harmless on the headless (Vast Docker) path.
-# -----------------------------------------------------------------------------
-RUN if command -v zenity >/dev/null 2>&1; then \
-      mv /usr/bin/zenity /usr/bin/zenity.real; \
-      printf '%s\n' '#!/bin/bash' \
-        'for a in "$@"; do case "$a" in *"Steam is proprietary"*|*"binary-only"*) exit 0;; esac; done' \
-        'exec /usr/bin/zenity.real "$@"' > /usr/bin/zenity; \
-      chmod +x /usr/bin/zenity; \
-    fi
-
-# =============================================================================
-# 4d. Install Heroic Games Launcher (Epic + GOG + Amazon) — the Vast Docker
-#     storefront path. Steam is blocked on Vast Docker (no userns -> pressure-
-#     vessel/CEF crashes), but Heroic is Electron (runs with --no-sandbox, no
-#     userns needed) and launches games via umu-launcher (Proton WITHOUT
-#     pressure-vessel) -> the same Proton-direct flow validated by dpad-launch.
-#     Heroic bundles Legendary (Epic), gogdl (GOG), Nile (Amazon) + umu itself.
-#     accountsservice is installed because Heroic queries org.freedesktop.Accounts
-#     over D-Bus and degrades/aborts if it can't reach it (Steam-Headless #210).
-#     Opt-in at runtime via DPAD_LAUNCHER=heroic (default launcher stays Steam,
-#     for the Vast KVM VM / RunPod full-Steam path). .deb pulls its own deps.
-#     The .deb asset name is Heroic-<ver-without-v>-linux-amd64.deb (e.g. v2.22.0
-#     -> Heroic-2.22.0-linux-amd64.deb).
-# =============================================================================
-RUN set -e; \
-    HEROIC_VER_STR="${HEROIC_VERSION#v}"; \
-    HEROIC_DEB="Heroic-${HEROIC_VER_STR}-linux-amd64.deb"; \
-    apt-get update && apt-get install -y --no-install-recommends accountsservice curl; \
-    cd /tmp && curl -fsSL -o "/tmp/${HEROIC_DEB}" \
-      "https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher/releases/download/${HEROIC_VERSION}/${HEROIC_DEB}" \
-    && ( dpkg -i "/tmp/${HEROIC_DEB}" || apt-get install -f -y ) \
-    && rm -f "/tmp/${HEROIC_DEB}" \
-    && rm -rf /var/lib/apt/lists/* \
-    && command -v heroic
-
-# =============================================================================
-# 4e. Firefox (real .deb from Mozilla's apt repo — NOT snap). The container has
-#     no system browser, so Heroic's external-link clicks (target=_blank, "buy on
-#     store", xdg-open) fail with "failed to execute default web browser".
-#     Ubuntu's firefox/chromium are snap stubs that break in Docker, so we use
-#     Mozilla's apt repo (packages.mozilla.org). Registers Firefox as the
-#     x-www-browser alternative so xdg-open works. ~80 MB. Heroic's actual
-#     Epic/GOG/Amazon LOGIN is in-app (Electron) and doesn't need this; it's only
-#     for external links / a desktop browser on the streamed session.
-# =============================================================================
-RUN set -e; \
-    install -d -m 0755 /etc/apt/keyrings; \
-    wget -q https://packages.mozilla.org/apt/repo-signing-key.gpg \
-      -O /etc/apt/keyrings/packages.mozilla.org.asc; \
-    echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" \
-      > /etc/apt/sources.list.d/mozilla.list; \
-    apt-get update && apt-get install -y --no-install-recommends firefox; \
-    update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/firefox 200 2>/dev/null || true; \
-    rm -rf /var/lib/apt/lists/*
-
-# =============================================================================
-# 5. Install Proton-GE (Windows game compatibility, Steam-Deck-grade)
-# =============================================================================
-RUN mkdir -p ${HOME}/.steam/root/compatibilitytools.d && \
-    cd /tmp && wget -q --show-progress \
-      "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/${PROTONGE_VERSION}/${PROTONGE_VERSION}.tar.gz" \
-      -O proton-ge.tar.gz && \
-    tar -xzf proton-ge.tar.gz -C ${HOME}/.steam/root/compatibilitytools.d/ && \
-    rm proton-ge.tar.gz && \
-    chown -R ${USERNAME}:${USERNAME} ${HOME}/.steam
-
-# =============================================================================
-# 5b. Install Valve Proton builds (Proton Experimental + latest Proton) via
-#     steamcmd anonymous download, into compatibilitytools.d alongside GE-Proton.
-#     Used by dpad-launch's Proton-direct path for Windows games (PROTONPATH).
-#     Proton tools are free Steam tools downloadable anonymously. Steam appids:
-#       Proton Experimental = 1493710  (rolling bleeding-edge)
-#       Proton 11.0-1 Beta5 = 4628710  (latest Proton; 11.0 stable pending)
-#     Each tool is ~1.5GB. We deliberately do NOT install the Steam Linux Runtime
-#     (sniper) — dpad-launch runs Proton DIRECTLY (not via Steam), and the proton
-#     script runs its bundled wine natively when no runtime is present (no
-#     pressure-vessel / no userns needed on Vast). Anonymous download failures
-#     are non-fatal (warn + continue) so a build never hard-fails if Valve
-#     changes anonymous access; the missing tool just won't be selectable.
-# =============================================================================
-RUN set -e; \
-    PROTON_TMP=/tmp/proton-dl && mkdir -p "$PROTON_TMP" ${HOME}/.steam/root/compatibilitytools.d; \
-    for appid in 1493710 4628710; do \
-      echo "[*] Downloading Proton tool $appid via steamcmd (anonymous) ..."; \
-      if steamcmd +force_install_dir "$PROTON_TMP" +login anonymous +app_update "$appid" validate +quit; then \
-        :; \
-      else \
-        echo "    WARN: steamcmd download of Proton $appid failed (continuing; that tool won't be available)."; \
-      fi; \
-    done; \
-    if [ -d "$PROTON_TMP/steamapps/common" ]; then \
-      for d in "$PROTON_TMP/steamapps/common"/*/; do \
-        name="$(basename "$d")"; \
-        [ -d "${HOME}/.steam/root/compatibilitytools.d/$name" ] && rm -rf "${HOME}/.steam/root/compatibilitytools.d/$name"; \
-        mv "$d" "${HOME}/.steam/root/compatibilitytools.d/" && echo "    installed Proton: $name"; \
-      done; \
-    fi; \
-    rm -rf "$PROTON_TMP"; \
-    chown -R ${USERNAME}:${USERNAME} ${HOME}/.steam ${HOME}/.local/share/Steam
-
-# =============================================================================
-# 6. Install Sunshine (host for native Moonlight AND the encoder for mws)
-#    .deb from GitHub, matched to the base (ubuntu-24.04-amd64).
-# =============================================================================
-RUN cd /tmp && wget -q --show-progress \
-      "https://github.com/LizardByte/Sunshine/releases/latest/download/sunshine-ubuntu-24.04-amd64.deb" \
-      -O sunshine.deb && \
-    apt-get update && dpkg -i sunshine.deb || true && \
-    apt-get install -f -y --no-install-recommends && \
-    rm -f sunshine.deb && rm -rf /var/lib/apt/lists/* && \
-    which sunshine || (echo "ERROR: sunshine binary not found after install" && exit 1)
-
-# =============================================================================
-# 7. Install Selkies-GStreamer (browser WebRTC streaming — FALLBACK browser path)
-#    GPL GStreamer tarball + python wheel + web app + joystick interposer. The
-#    tarball/deb URLs are parameterized by ${UBUNTU_VER} (read from os-release),
-#    so on 24.04 they resolve to the *_ubuntu24.04_amd64 artifacts automatically.
-#    (Latest Selkies release = v1.6.2, bundles GStreamer 1.24.6. NOTE: 1.24.6's
-#    nvcodec uses old NVENC preset GUIDs removed in NVENC 13 / driver >=570, so
-#    nvh264enc falls back to x264enc on driver >=570 hosts — the mws+Sunshine
-#    path above is the primary browser path on those drivers; Selkies is the
-#    fallback for driver <570 or as a second opinion.)
-# =============================================================================
-# Selkies v1.6.2 joystick interposer source (patched: JSIOCGNAME returns name length)
-# used to rebuild the .so after the deb install below.
+# --- 4. Selkies-GStreamer (browser WebRTC streaming — the only stream) ---
+#    GPL GStreamer tarball + python wheel + web app + joystick interposer deb.
+#    The deb's interposer .so has the JSIOCGNAME-returns-0 bug (SDL3 rejects the
+#    device), so we OVERWRITE it with the patched .so from interposer-builder.
 COPY scripts/joystick_interposer_v162.c /tmp/joystick_interposer_v162.c
-
-# gcc-multilib + libc6-dev-i386 are REQUIRED so `gcc -m32` can rebuild the i386
-# interposer below (Steam's main binary is 32-bit -> loads the i386 .so). Without
-# these, the i386 rebuild silently no-ops and the OLD unpatched deb .so (JSIOCGNAME
-# returns 0 -> SDL3 rejects the device) ships in the image -> no gamepad.
+# Build deps (python3-dev/build-essential/libevdev-dev/libudev-dev) are needed ONLY
+# to build the Selkies wheel's `evdev` C extension; they are PURGED at the end of
+# this RUN so the compiler doesn't ship in the final image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 python3-pip python3-dev build-essential gcc-multilib libc6-dev-i386 \
-      libevdev-dev libudev-dev \
-      python3-gi python3-gi-cairo gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
-      glib-networking libgudev-1.0-0 \
-      libgcrypt20 libjack-jackd2-0 alsa-utils x264 x265 aom-tools libopenh264-dev \
-    && rm -rf /var/lib/apt/lists/* && \
-    SELKIES_VERSION="$(curl -fsSL 'https://api.github.com/repos/selkies-project/selkies/releases/latest' | jq -r '.tag_name' | sed 's/[^0-9\.\-]*//g')" && \
+        python3-dev build-essential libevdev-dev libudev-dev \
+    && SELKIES_VERSION="$(curl -fsSL 'https://api.github.com/repos/selkies-project/selkies/releases/latest' | jq -r '.tag_name' | sed 's/[^0-9\.\-]*//g')" && \
     UBUNTU_VER="$(grep '^VERSION_ID=' /etc/os-release | cut -d= -f2 | tr -d '\"')" && \
     ARCH="$(dpkg --print-architecture)" && \
     echo "Installing Selkies-GStreamer v${SELKIES_VERSION} (ubuntu${UBUNTU_VER})..." && \
@@ -329,105 +151,41 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cd /tmp && curl -o selkies-js-interposer.deb -fsSL "https://github.com/selkies-project/selkies/releases/download/v${SELKIES_VERSION}/selkies-js-interposer_v${SELKIES_VERSION}_ubuntu${UBUNTU_VER}_${ARCH}.deb" && \
     apt-get update && apt-get install -y --no-install-recommends ./selkies-js-interposer.deb && \
     rm -f selkies-js-interposer.deb && \
-    # PATCH the v1.6.2 interposer: JSIOCGNAME must return the name LENGTH, not 0.
-    # SDL3's IsJoystick treats ioctl(JSIOCGNAME) <= 0 as failure and rejects the
-    # device (falls into GuessIsJoystick evdev probes, which the interposer doesn't
-    # hook -> goto error -> device not added -> Steam never sees a gamepad). The
-    # upstream v1.6.2 returns 0; rebuild the .so from the patched source (COPY'd
-    # above) so SDL3 accepts the Selkies virtual gamepad.
-    gcc -shared -fPIC -O2 -ldl -o /usr/lib/x86_64-linux-gnu/selkies_joystick_interposer.so /tmp/joystick_interposer_v162.c && \
-    gcc -shared -fPIC -O2 -m32 -ldl -o /usr/lib/i386-linux-gnu/selkies_joystick_interposer.so /tmp/joystick_interposer_v162.c && \
     rm -f /tmp/joystick_interposer_v162.c && \
+    apt-get purge -y python3-dev build-essential libevdev-dev libudev-dev && \
+    apt-get autoremove -y --purge && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/debconf/* /var/log/* /tmp/* /var/tmp/*
+# Overwrite the deb's interposer .so with the patched build (JSIOCGNAME returns
+# name length so SDL3 accepts the Selkies virtual gamepad) for BOTH arches.
+COPY --from=interposer-builder /out/x86_64/selkies_joystick_interposer.so /usr/lib/x86_64-linux-gnu/selkies_joystick_interposer.so
+COPY --from=interposer-builder /out/i386/selkies_joystick_interposer.so /usr/lib/i386-linux-gnu/selkies_joystick_interposer.so
 
-# Stage 3a: Selkies input router for the gamescope path. Auto-loaded at Python
-# startup via the .pth; monkey-patches WebRTCInput.send_x11_keypress/send_mouse
-# to inject XTest on DPAD_INPUT_DISPLAY (gamescope's headless Xwayland, e.g. :0)
-# instead of the capture display (:2). No-op when DPAD_INPUT_DISPLAY is unset.
+# Selkies input router (.pth, auto-loaded; no-op when DPAD_INPUT_DISPLAY unset —
+# only the gamescope path sets it). Kept in base so both images share it.
 COPY scripts/dpad_input_patch.py scripts/dpad_input_patch.pth /usr/local/lib/python3.12/dist-packages/
 
-# Stage 2-zero-copy: patch Selkies' build_video_pipeline to capture gamescope's
-# PipeWire node directly (pipewiresrc -> cudaupload -> cudaconvert -> nvh264enc)
-# instead of ximagesrc on an Xvfb :2 bridge — removes the GPU->CPU->:2->ximagesrc
-# round-trip + the CPU videoconvert passes. Gated on DPAD_VIDEO_SRC=pipewiresrc at
-# runtime (the entrypoint default for gamescope mode); set DPAD_VIDEO_SRC=ximagesrc
-# to revert. Also guards set_pointer_visible (show-pointer is ximagesrc-only).
-# Idempotent; runs against the installed selkies_gstreamer wheel.
-COPY scripts/patch_selkies_pipewire.py /opt/dpadcloud/patch_selkies_pipewire.py
-RUN python3 /opt/dpadcloud/patch_selkies_pipewire.py /usr/local/lib/python3.12/dist-packages/selkies_gstreamer/gstwebrtc_app.py \
-    && rm -f /opt/dpadcloud/patch_selkies_pipewire.py
-
-# gamescope headless does not composite the X cursor into its PipeWire output, so
-# the only visible cursor source is Selkies' XFIXES cursor overlay. This patcher
-# injects a gate into the web client's input.js that disables Selkies' auto
-# pointer-lock (which hides the CSS cursor) so the server cursor stays visible +
-# mouse stays absolute for UI nav. Idempotent; re-applied by the entrypoint too.
+# gamescope headless does not composite the X cursor into its PipeWire output,
+# so the only visible cursor source is Selkies' XFIXES cursor overlay. This
+# patcher disables Selkies' auto pointer-lock in the web client so the server
+# cursor stays visible + mouse stays absolute for UI nav. Both paths need it.
 COPY scripts/patch_gst_web_cursors.sh /opt/dpadcloud/patch_gst_web_cursors.sh
 RUN chmod +x /opt/dpadcloud/patch_gst_web_cursors.sh \
     && /opt/dpadcloud/patch_gst_web_cursors.sh /opt/gst-web/input.js
 
-# =============================================================================
-# 7b. Install moonlight-web-stream (PRIMARY browser path: Sunshine NVENC -> WebRTC)
-#     Prebuilt x86_64-unknown-linux-gnu release requires glibc 2.39 (= noble),
-#     which is the reason this image is on 24.04. web-server spawns the streamer
-#     subprocess; both + the static/ web frontend land in /opt/mws. At runtime
-#     the entrypoint writes /opt/mws/server/config.json (bind 0.0.0.0:8080, coturn
-#     TURN ICE) and launches web-server as the desktop user under its own
-#     cloudflared tunnel. mws pairs with Sunshine like a Moonlight client (the
-#     first browser login creates the mws admin user; then add host localhost,
-#     pair via Sunshine's Web UI PIN, launch an app).
-# =============================================================================
-RUN mkdir -p /opt/mws/server && cd /tmp && \
-    curl -fsSL -o mws.tar.gz \
-      "https://github.com/MrCreativ3001/moonlight-web-stream/releases/download/${MWS_VERSION}/moonlight-web-x86_64-unknown-linux-gnu.tar.gz" && \
-    tar -xzf mws.tar.gz --strip-components=1 -C /opt/mws && \
-    rm mws.tar.gz && \
-    chmod +x /opt/mws/web-server /opt/mws/streamer && \
-    ls -l /opt/mws/web-server /opt/mws/streamer && \
-    chown -R ${USERNAME}:${USERNAME} /opt/mws
-
-# =============================================================================
-# 8. Install cloudflared (HTTPS tunnel front for both browser paths)
-# =============================================================================
+# --- 5. cloudflared (HTTPS tunnel front for Selkies) ---
 RUN cd /tmp && curl -fsSL -o cloudflared \
       "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64" && \
     install -m 0755 cloudflared /usr/local/bin/cloudflared && rm -f cloudflared && \
     cloudflared --version || true
 
-# =============================================================================
-# 9. Install Tailscale (native-Moonlight enthusiast path overlay)
-# =============================================================================
-RUN curl -fsSL https://tailscale.com/install.sh | sh
+# --- 6. NVENC #1249 fix (libnvenc_fix.so from interposer-builder) ---
+# Fixes nvidia-container-toolkit #1249 on driver >=570 when only a slice of a
+# multi-GPU host is assigned (filters GET_ATTACHED_IDS to mounted GPUs).
+COPY --from=interposer-builder /out/x86_64/libnvenc_fix.so /opt/dpadcloud/libnvenc_fix.so
 
-# pulseaudio-utils (pactl) is REQUIRED by both the DFP PulseAudio path and the
-# gamescope pipewire-pulse path (pactl talks to whichever server is up). The
-# pulseaudio DAEMON is only needed by the DFP path; it can coexist with
-# pipewire-pulse but on some noble setups apt may want to remove one — so install
-# it best-effort (|| true) so a conflict never breaks the build or drops
-# pipewire-pulse from the gamescope path.
-RUN apt-get update && apt-get install -y --no-install-recommends pulseaudio-utils xsel \
-    && (apt-get install -y --no-install-recommends pulseaudio || echo "pulseaudio daemon install skipped (pipewire-pulse is the gamescope audio server)") \
-    && rm -rf /var/lib/apt/lists/*
-
-# =============================================================================
-# 9b. Vulkan loader + tools (diag only). gamescope/DXVK present path is deferred;
-#     this just lets us print what Vulkan the host exposes at boot.
-# =============================================================================
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      libvulkan1 libvulkan1:i386 vulkan-tools mesa-vulkan-drivers mesa-vulkan-drivers:i386 \
-    && rm -rf /var/lib/apt/lists/*
-
-# =============================================================================
-# 9c. VirtualGL 3.1 (GPU-accelerated OpenGL into the headless Xvfb)
-#     Without VGL, GL apps render on Mesa llvmpipe (CPU) on Xvfb → slow. vglrun
-#     routes GL to the GPU's EGL offscreen backend (VGL_DISPLAY=egl needs no
-#     real display) and blits the finished frame onto the Xvfb window, which
-#     mws/Selkies/Sunshine then capture. VGL does NOT solve Vulkan PRESENT
-#     (DXVK/Proton) — that needs a present surface (gamescope), deferred.
-#     Interim Windows-title path is WineD3D (D3D→OpenGL) + vglrun.
-# =============================================================================
-#     libglu1-mesa is a hard runtime dep of the VirtualGL deb; we pre-install it
-#     (and refresh apt lists, which earlier steps wiped) so dpkg -i + apt -f succeed.
+# --- 7. VirtualGL (GPU-accelerated GL into the headless Xvfb; the Xorg path
+#    doesn't need it, but the Xvfb debug fallback / vgl-steam / proton-wined3d
+#    launchers do). Small (~3 MB); kept in base for the debug path. ---
 RUN apt-get update && apt-get install -y --no-install-recommends libglu1-mesa && \
     cd /tmp && wget -q --show-progress \
       "https://github.com/VirtualGL/virtualgl/releases/download/${VIRTUALGL_VERSION}/virtualgl_${VIRTUALGL_VERSION}_amd64.deb" \
@@ -437,38 +195,159 @@ RUN apt-get update && apt-get install -y --no-install-recommends libglu1-mesa &&
     (command -v vglrun >/dev/null 2>&1 && echo "VirtualGL ${VIRTUALGL_VERSION} installed: $(command -v vglrun)") || \
       (echo "ERROR: vglrun not found after install" && exit 1)
 
-# =============================================================================
-# 9d. NVENC multi-GPU fix (flexgrip interposer) — fixes nvidia-container-toolkit
-#     #1249 on driver >=570 when only a slice of a multi-GPU host is assigned.
-#     libnvenc_fix.so intercepts NV0000_CTRL_CMD_GPU_GET_ATTACHED_IDS and filters
-#     the host's GPU list to only the GPUs whose /dev/nvidiaX nodes are mounted
-#     in this container, so NVENC takes the single-GPU init path instead of
-#     peer-init'ing unreachable GPUs and returning NV_ENC_ERR_UNSUPPORTED_DEVICE.
-#     Gated at runtime by DPAD_NVENC_FIX (auto-enabled by the entrypoint when host
-#     GPU count > mounted GPU count on driver 570..609) so it never perturbs the
-#     compute path unless needed. gcc is already present via build-essential (step 7).
-#     Source vendored from flexgrip/nvidia-gpu-enumeration (2026-05-07 release).
-# =============================================================================
-COPY scripts/nvenc_fix.c /opt/dpadcloud/src/nvenc_fix.c
-RUN gcc -shared -fPIC -O2 -o /opt/dpadcloud/libnvenc_fix.so /opt/dpadcloud/src/nvenc_fix.c -ldl && \
-    ls -l /opt/dpadcloud/libnvenc_fix.so
+# --- 8. pulseaudio-utils (pactl) + the pulseaudio daemon (Xorg path audio).
+#    vast-vm uses pipewire-pulse (installed in its own stage); this is for the
+#    Xorg/Heroic path. Best-effort (|| true) so a noble pipewire-pulse conflict
+#    can't break the build. ---
+RUN apt-get update && apt-get install -y --no-install-recommends pulseaudio-utils xsel \
+    && (apt-get install -y --no-install-recommends pulseaudio || echo "pulseaudio daemon install skipped") \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- 9. Vulkan loader + tools (diag only) ---
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libvulkan1 libvulkan1:i386 vulkan-tools mesa-vulkan-drivers mesa-vulkan-drivers:i386 \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- 10. locale + Xwrapper (common) ---
+RUN apt-get update && apt-get install -y --no-install-recommends locales && \
+    echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen && locale-gen en_US.UTF-8 && \
+    rm -rf /var/lib/apt/lists/*
+ENV LANG=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
+RUN mkdir -p /etc/X11 && \
+    printf 'allowed_users=anybody\nneeds_root_rights=yes\n' > /etc/X11/Xwrapper.config
+
+# --- 11. COPY configs + entrypoint + common launcher scripts + display-driver installer ---
+COPY configs/ ${HOME}/.config/
+COPY configs/xorg/xorg.conf.template /opt/dpadcloud/xorg.conf.template
+COPY entrypoint.sh healthcheck.sh /opt/dpadcloud/
+# vgl-steam / proton-wined3d / vgl-test = the Xvfb+VGL debug launchers; dpad-launch
+# = the steamcmd-based headless launcher (still useful as a manual CLI for native
+# games). mws-autopair + bubbleroot are GONE (mws/Sunshine + proot removed).
+COPY scripts/vgl-steam scripts/proton-wined3d scripts/vgl-test scripts/install-display-drivers scripts/dpad-launch /opt/dpadcloud/
+# Strip CR (CRLF) — repo is edited on Windows; `#!/bin/bash\r` fails to exec.
+RUN sed -i 's/\r$//' /opt/dpadcloud/entrypoint.sh /opt/dpadcloud/healthcheck.sh \
+        /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \
+        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/dpad-launch \
+        ${HOME}/.config/sunshine/sunshine.conf 2>/dev/null || true && \
+    chmod +x /opt/dpadcloud/*.sh \
+        /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \
+        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/dpad-launch && \
+    chown -R ${USERNAME}:${USERNAME} ${HOME}/.config && \
+    rm -f ${HOME}/.config/autostart/*.desktop 2>/dev/null || true
+
+# Put the user-facing launchers on the DEFAULT PATH (survives /etc/environment reset).
+RUN ln -sf /opt/dpadcloud/vgl-steam /usr/local/bin/vgl-steam && \
+    ln -sf /opt/dpadcloud/vgl-test /usr/local/bin/vgl-test && \
+    ln -sf /opt/dpadcloud/proton-wined3d /usr/local/bin/proton-wined3d && \
+    ln -sf /opt/dpadcloud/dpad-launch /usr/local/bin/dpad-launch
 
 # =============================================================================
-# 9e. gamescope + PipeWire — the multi-tenant full-Steam path (DPAD_GAMESCOPE).
-#     gamescope --backend headless renders Steam on the GPU via Vulkan/gamescope-WSI
-#     with NO DRM master (so N sessions on N GPUs don't contend for the
-#     nvidia-modeset singleton), and exposes a PipeWire video node for capture.
-#     gamescope isn't in Ubuntu 24.04 repos; use the 3v1n0 PPA (latest prebuilt
-#     for noble). The binary lands in /usr/games (NOT in PATH) — symlink the
-#     gamescope helpers to /usr/bin so gamescope can find gamescopereaper/stream/ctl.
-#     PipeWire + wireplumber must run before gamescope for the capture node.
-#     libeis-dev for gamescope's libei input emulation (input integration later).
+# Stage: vast-docker  ->  :dpad-heroic
+#   Vast Docker: Heroic Games Launcher + XFCE desktop + Firefox (cloud desktop +
+#   non-Steam games). No Steam, no gamescope, no Proton baked in (Heroic
+#   downloads its own Proton at runtime). Default launcher = heroic.
 # =============================================================================
+FROM base AS vast-docker
+ARG DEBIAN_FRONTEND
+ARG HEROIC_VERSION
+LABEL description="DpadCloud Vast Docker: Heroic desktop + Selkies (Ubuntu 24.04)"
+# Default to the Heroic launcher (Steam is blocked on Vast Docker).
+ENV DPAD_LAUNCHER=heroic
+
+# --- XFCE desktop (light) ---
+RUN apt-get update && apt-get install -y --no-install-recommends xfce4 xfce4-goodies \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Heroic Games Launcher (Epic + GOG + Amazon) ---
+# Heroic is Electron (runs with --no-sandbox, no userns). Games launch via
+# umu-launcher (Proton WITHOUT pressure-vessel) -> the Proton-direct flow.
+# accountsservice: Heroic queries org.freedesktop.Accounts over D-Bus and
+# degrades if it can't reach it (Steam-Headless #210).
+RUN set -e; \
+    HEROIC_VER_STR="${HEROIC_VERSION#v}"; \
+    HEROIC_DEB="Heroic-${HEROIC_VER_STR}-linux-amd64.deb"; \
+    apt-get update && apt-get install -y --no-install-recommends accountsservice curl; \
+    cd /tmp && curl -fsSL -o "/tmp/${HEROIC_DEB}" \
+      "https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher/releases/download/${HEROIC_VERSION}/${HEROIC_DEB}" \
+    && ( dpkg -i "/tmp/${HEROIC_DEB}" || apt-get install -f -y ) \
+    && rm -f "/tmp/${HEROIC_DEB}" \
+    && rm -rf /var/lib/apt/lists/* \
+    && command -v heroic
+
+# --- Firefox (real .deb from Mozilla's apt repo — NOT snap). For Heroic
+#    external "buy on store" links + a desktop browser on the streamed session. ---
+RUN set -e; \
+    install -d -m 0755 /etc/apt/keyrings; \
+    wget -q https://packages.mozilla.org/apt/repo-signing-key.gpg \
+      -O /etc/apt/keyrings/packages.mozilla.org.asc; \
+    echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" \
+      > /etc/apt/sources.list.d/mozilla.list; \
+    # Pin the Mozilla origin above the Ubuntu snap-stub firefox (whose 1: epoch
+    # would otherwise win) so apt installs the real .deb, not the broken snap.
+    printf 'Package: firefox*\nPin: origin packages.mozilla.org\nPin-Priority: 1001\n' > /etc/apt/preferences.d/mozilla; \
+    apt-get update && apt-get install -y --no-install-recommends firefox; \
+    update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/firefox 200 2>/dev/null || true; \
+    rm -rf /var/lib/apt/lists/*
+
+# Heroic launcher wrapper (the entrypoint calls /opt/dpadcloud/heroic-launch).
+COPY scripts/heroic-launch /opt/dpadcloud/heroic-launch
+RUN sed -i 's/\r$//' /opt/dpadcloud/heroic-launch && chmod +x /opt/dpadcloud/heroic-launch
+
+EXPOSE 16100/tcp
+# 3478 (coturn TURN) is opt-in via -p 3478:3478 at launch (not EXPOSE'd — see
+# the ports comment in the base stage). No 8080/47989/47990/41641 (mws/Sunshine/
+# Tailscale removed).
+USER root
+ENTRYPOINT ["/opt/dpadcloud/entrypoint.sh"]
+
+# =============================================================================
+# Stage: vast-vm  ->  :dpad-SteamOS
+#   Vast KVM VM: Steam + gamescope (full Steam, Big Picture) + Selkies stream.
+#   Fast-boot: the Steam client is pre-bootstrapped at build time. No desktop
+#   (XFCE), no Heroic, no Firefox. Native Steam downloads its own Proton at
+#   runtime, so GE-Proton is NOT baked in. Default mode = gamescope.
+# =============================================================================
+FROM base AS vast-vm
+ARG DEBIAN_FRONTEND
+LABEL description="DpadCloud Vast VM: Steam + gamescope + Selkies (Ubuntu 24.04)"
+# Default to the gamescope headless + Steam multi-tenant path.
+ENV DPAD_GAMESCOPE=1
+
+# --- Steam (+ steam-libs amd64/i386 so the Steam runtime has its deps) ---
+RUN apt-get update && \
+    ( apt-get install -y steam-installer \
+      || ( curl -fsSL -o /tmp/steam.deb "https://cdn.fastly.steamstatic.com/client/installer/steam.deb" \
+           && apt-get install -y /tmp/steam.deb && rm -f /tmp/steam.deb ) ) && \
+    apt-get update && \
+    ( apt-get install -y steam-libs-amd64 steam-libs-i386 2>/dev/null \
+      || echo "    (steam-libs-* not separate packages; Steam fetches its runtime on first launch)" ) && \
+    ( ln -sf /usr/games/steam /usr/bin/steam 2>/dev/null || ln -sf /usr/bin/steam-launch /usr/bin/steam 2>/dev/null || true ) && \
+    rm -rf /var/lib/apt/lists/*
+
+# --- zenity license wrapper — auto-accept Steam's "proprietary (binary-only)"
+#    license dialog (Steam-Headless #218) so the Steam UI starts non-interactively
+#    on userns hosts. Other zenity calls pass through to the real binary. ---
+RUN apt-get update && apt-get install -y --no-install-recommends zenity && rm -rf /var/lib/apt/lists/* && \
+    if command -v zenity >/dev/null 2>&1; then \
+      mv /usr/bin/zenity /usr/bin/zenity.real; \
+      printf '%s\n' '#!/bin/bash' \
+        'for a in "$@"; do case "$a" in *"Steam is proprietary"*|*"binary-only"*) exit 0;; esac; done' \
+        'exec /usr/bin/zenity.real "$@"' > /usr/bin/zenity; \
+      chmod +x /usr/bin/zenity; \
+    fi
+
+# --- gamescope + PipeWire (the multi-tenant full-Steam path; no DRM master) ---
+#    gamescope isn't in Ubuntu 24.04 repos — use the 3v1n0 PPA. Binary lands in
+#    /usr/games (NOT in PATH); symlink helpers to /usr/bin so gamescope finds
+#    gamescopereaper. PipeWire + wireplumber must run before gamescope. The
+#    pipewiresrc zero-copy Selkies capture path (patch below) needs gstreamer1.0-
+#    pipewire; gstreamer1.0-x provides ximagesink for the :2-bridge fallback.
 RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common && \
     add-apt-repository -y ppa:3v1n0/gamescope && \
     apt-get update && apt-get install -y --no-install-recommends \
         gamescope pipewire pipewire-audio pipewire-pulse pipewire-audio-client-libraries \
-        wireplumber libeis-dev gstreamer1.0-pipewire libpipewire-0.3-dev \
+        wireplumber libeis-dev gstreamer1.0-pipewire \
         gstreamer1.0-tools gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
         gstreamer1.0-x gstreamer1.0-plugins-base pulseaudio-utils && \
     for b in gamescope gamescopereaper gamescopestream gamescopectl; do \
@@ -477,120 +356,38 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     (command -v gamescope && gamescope --version 2>&1 | head -1) && \
     rm -rf /var/lib/apt/lists/*
 
-# =============================================================================
-# 9f. Fix ~/.steam/root: step 5 created it as a real directory (for Proton-GE),
-#     but steam.sh expects a symlink it can `rm -f` and recreate. A real dir
-#     there makes steam.sh's rm fail, and under gamescope headless Xwayland that
-#     corrupt state makes Steam's first-run GL updater UI abort
-#     ("UpdateUI CreateGlFont regular failed" -> gamescope segfault loop).
-#     Relocate Proton-GE to the real install root's compatibilitytools.d and
-#     replace root with a symlink. The entrypoint's bootstrap_steam_on_xvfb()
-#     does the same fix at runtime as a safety net. Done LATE in the layer order
-#     so the big-download steps (5..9) stay cached.
-# =============================================================================
+# --- Stage 2 zero-copy: patch Selkies' build_video_pipeline to capture
+#    gamescope's PipeWire node directly (pipewiresrc -> cudaupload -> cudaconvert
+#    -> nvh264enc) instead of ximagesrc on an Xvfb :2 bridge. Gated on
+#    DPAD_VIDEO_SRC=pipewiresrc at runtime (the entrypoint default for gamescope
+#    mode); DPAD_VIDEO_SRC=ximagesrc reverts. Idempotent. ---
+COPY scripts/patch_selkies_pipewire.py /opt/dpadcloud/patch_selkies_pipewire.py
+RUN python3 /opt/dpadcloud/patch_selkies_pipewire.py /usr/local/lib/python3.12/dist-packages/selkies_gstreamer/gstwebrtc_app.py \
+    && rm -f /opt/dpadcloud/patch_selkies_pipewire.py
+
+# --- Fix ~/.steam/root: Steam's steam.sh expects a symlink it can rm -f and
+#    recreate; a real dir there makes steam.sh's rm fail and corrupts Steam's
+#    first-run GL updater under gamescope headless. (No Proton-GE step here —
+#    compatibilitytools.d is created empty; native Steam downloads Proton.) ---
 RUN mkdir -p ${HOME}/.steam/debian-installation/compatibilitytools.d && \
-    if [ -d ${HOME}/.steam/root/compatibilitytools.d ]; then \
-      for d in ${HOME}/.steam/root/compatibilitytools.d/*; do \
-        [ -d "$d" ] && mv "$d" ${HOME}/.steam/debian-installation/compatibilitytools.d/ 2>/dev/null; \
-      done; \
-    fi && \
     rm -rf ${HOME}/.steam/root && \
     ln -s ${HOME}/.steam/debian-installation ${HOME}/.steam/root && \
     chown -R ${USERNAME}:${USERNAME} ${HOME}/.steam
 
-# -----------------------------------------------------------------------------
-# 9g. Pre-bootstrap the full Steam client at BUILD TIME (downloads ~300MB once,
-#     baked into the image) so a fresh-boot container's entrypoint
-#     bootstrap_steam_on_xvfb() is a no-op and gamescope+Steam come up in ~40s
-#     instead of a ~3-4min first-run download. Runs on Xvfb :8 + mesa/llvmpipe
-#     (software GL — NO GPU needed; works in a plain `docker build`). Does NOT
-#     log in (just downloads the client) -> no Steam Guard at build. The zenity
-#     wrapper (step 4c) auto-accepts the license prompt. Best-effort: always
-#     succeeds; if the download fails the entrypoint re-bootstraps at runtime.
-#     Placed BEFORE step 10's COPY so editing entrypoint/scripts does NOT
-#     invalidate this expensive layer. Idempotent (skips if steamwebhelper is
-#     already present), so it is also a no-op on layer-cache rebuilds.
-# -----------------------------------------------------------------------------
+# --- Pre-bootstrap the full Steam client at BUILD TIME (~2.1 GB, baked in) so
+#    a fresh-boot container reaches the stream URL in ~50 s instead of a 3-4 min
+#    first-run download. Runs on Xvfb :8 + mesa/llvmpipe (software GL — NO GPU
+#    needed; works in a plain `docker build`). Does NOT log in (no Steam Guard
+#    at build). Best-effort: always succeeds; the entrypoint re-bootstraps at
+#    runtime as a fallback. Placed late so editing entrypoint/scripts does NOT
+#    invalidate this expensive layer. Idempotent. ---
 COPY scripts/build-bootstrap-steam.sh /tmp/build-bootstrap-steam.sh
 RUN chmod +x /tmp/build-bootstrap-steam.sh \
     && /tmp/build-bootstrap-steam.sh \
     && rm -f /tmp/build-bootstrap-steam.sh \
     && chown -R ${USERNAME}:${USERNAME} ${HOME}/.steam
 
-# =============================================================================
-# 10. Copy configs + entrypoint + launcher scripts + display-driver installer
-# =============================================================================
-COPY configs/ ${HOME}/.config/
-COPY configs/xorg/xorg.conf.template /opt/dpadcloud/xorg.conf.template
-COPY entrypoint.sh healthcheck.sh /opt/dpadcloud/
-COPY scripts/vgl-steam scripts/proton-wined3d scripts/vgl-test scripts/install-display-drivers scripts/mws-autopair scripts/bubbleroot scripts/dpad-launch scripts/heroic-launch /opt/dpadcloud/
-# Strip any CR (CRLF) line endings — the repo is edited on Windows and
-# `#!/bin/bash\r` fails to exec with "no such file or directory". Defense-in-depth.
-RUN sed -i 's/\r$//' /opt/dpadcloud/entrypoint.sh /opt/dpadcloud/healthcheck.sh \
-        /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \
-        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/mws-autopair /opt/dpadcloud/bubbleroot \
-        /opt/dpadcloud/dpad-launch /opt/dpadcloud/heroic-launch \
-        ${HOME}/.config/sunshine/sunshine.conf 2>/dev/null || true && \
-    chmod +x /opt/dpadcloud/*.sh \
-        /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \
-        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/mws-autopair /opt/dpadcloud/bubbleroot \
-        /opt/dpadcloud/dpad-launch /opt/dpadcloud/heroic-launch && \
-    chown -R ${USERNAME}:${USERNAME} ${HOME}/.config && \
-    rm -f ${HOME}/.config/autostart/*.desktop 2>/dev/null || true
-
-# =============================================================================
-# 11. Ports
-# =============================================================================
-# 16100 = Selkies (localhost only; cloudflared tunnels it out over HTTPS) — fallback
-# 8080  = moonlight-web-stream (primary browser path; cloudflared tunnels it) —
-#         bound 0.0.0.0 so the in-container cloudflared can reach it.
-# 3478  = in-image coturn TURN (TCP + UDP; relays over the single listening conn —
-#         no UDP relay-port range needed). Expose at launch with -p 3478:3478 (TCP)
-#         or -p 3478:3478/udp (UDP, lower latency under loss); Vast injects
-#         VAST_(TCP|UDP)_PORT_3478 and the entrypoint auto-detects it. Do NOT use
-#         the old 73478 identity tag: 73478 > 65535 is an invalid port (coturn
-#         wraps it to 7942 and it isn't mapped). Both mws and Selkies reuse this
-#         one TURN. Not EXPOSE'd below — opt-in via -p so VAST_*_PORT_3478 is set
-#         and there's no auto-map duplicate.
-# 47989/47990 = Sunshine (native Moonlight over Tailnet; direct if exposed)
-# 41641 = Tailscale WireGuard
 EXPOSE 16100/tcp
-EXPOSE 8080/tcp
-EXPOSE 47989/tcp
-EXPOSE 47990/tcp
-EXPOSE 41641/udp
-
-# Install proot (for bubbleroot — the proot-based bwrap shim used when user
-# namespaces are unavailable, e.g. on Vast). Try the distro package first; fall
-# back to the static proot binary if the apt package isn't in the enabled repos.
-RUN (apt-get update && apt-get install -y --no-install-recommends proot) \
-    || (curl -fsSL -o /usr/local/bin/proot https://proot.gitlab.io/proot/bin/proot \
-        && chmod +x /usr/local/bin/proot) \
-    && (command -v proot || test -x /usr/local/bin/proot) \
-    && rm -rf /var/lib/apt/lists/*
-
-# Generate the en_US.UTF-8 locale (Steam otherwise warns
-# "setlocale('en_US.UTF-8') failed" and mangles international characters).
-RUN apt-get update && apt-get install -y --no-install-recommends locales && \
-    echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen && locale-gen en_US.UTF-8 && \
-    rm -rf /var/lib/apt/lists/*
-ENV LANG=en_US.UTF-8
-ENV LC_ALL=en_US.UTF-8
-
-# Put the user-facing launchers on the DEFAULT PATH. The container's `su`/login
-# shells reset PATH via pam_env/`/etc/environment`, dropping /opt/dpadcloud, so
-# `vgl-steam` was "command not found" in an interactive terminal. /usr/local/bin
-# survives that reset.
-RUN ln -sf /opt/dpadcloud/vgl-steam /usr/local/bin/vgl-steam && \
-    ln -sf /opt/dpadcloud/vgl-test /usr/local/bin/vgl-test && \
-    ln -sf /opt/dpadcloud/proton-wined3d /usr/local/bin/proton-wined3d && \
-    ln -sf /opt/dpadcloud/dpad-launch /usr/local/bin/dpad-launch
-
-# xserver-xorg-legacy reads this to allow a headless Xorg started by root (and
-# non-root via the wrapper) to acquire the server — required for the real
-# Xorg+nvidia-DDX gaming path. Xvfb ignores it.
-RUN mkdir -p /etc/X11 && \
-    printf 'allowed_users=anybody\nneeds_root_rights=yes\n' > /etc/X11/Xwrapper.config
-
+# 3478 (coturn TURN) opt-in via -p 3478:3478 at launch. No 8080/47989/47990/41641.
 USER root
 ENTRYPOINT ["/opt/dpadcloud/entrypoint.sh"]

@@ -4,10 +4,8 @@
 # Boot order:
 #   dbus -> Xvfb -> XFCE -> PulseAudio(null-sink) -> coturn
 #        -> NVENC topology + flexgrip LD_PRELOAD
-#        -> Sunshine (NVENC host; encoder for BOTH mws and native Moonlight)
-#        -> Selkies-GStreamer (127.0.0.1:16100, TURN=coturn) [browser fallback]
-#        -> moonlight-web-stream (0.0.0.0:8080, Sunshine NVENC) [browser primary]
-#        -> cloudflared (HTTPS tunnels: mws + Selkies) -> Tailscale (native Moonlight)
+#        -> Selkies-GStreamer (127.0.0.1:16100, TURN=coturn) [browser stream]
+#        -> cloudflared (HTTPS tunnel for Selkies)
 # =============================================================================
 
 set -o pipefail
@@ -1427,21 +1425,7 @@ if [ ! -e /dev/uinput ]; then
 fi
 chmod 666 /dev/uinput 2>/dev/null || true
 
-# --- Sunshine (native Moonlight host) ---
-SUNSHINE_BIN="$(command -v sunshine 2>/dev/null || echo /usr/bin/sunshine)"
-if [ -x "$SUNSHINE_BIN" ]; then
-    echo "[*] Configuring Sunshine..."
-    as_user "mkdir -p ~/.config/sunshine"
-    cp -f /home/dpad/.config/sunshine/sunshine.conf "${USER_HOME}/.config/sunshine/sunshine.conf" 2>/dev/null || true
-    find "${USER_HOME}/.config/sunshine" ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
-    as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER}; ${SUNSHINE_BIN} --creds admin '${SUNSHINE_PASS}'" 2>/dev/null || true
-    echo "[*] Starting Sunshine..."
-    as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} LD_PRELOAD='${LD_PRELOAD}'; ${SUNSHINE_BIN} >/tmp/sunshine.log 2>&1" &
-    sleep 3
-    pgrep -x sunshine >/dev/null && echo "    Sunshine running" || echo "    WARNING: sunshine failed (see /tmp/sunshine.log)"
-else
-    echo "WARNING: sunshine not found"
-fi
+# (Sunshine / mws / native Moonlight removed — Selkies is the only browser stream.)
 
 # --- Selkies-GStreamer (browser WebRTC streaming, bound to localhost) ---
 echo "[*] Starting Selkies-GStreamer..."
@@ -1613,111 +1597,32 @@ fi
 sleep 4
 pgrep -f "selkies-gstreamer" >/dev/null && echo "    Selkies running on 127.0.0.1:16100 (encoder=${SELKIES_ENC})" || { echo "    WARNING: selkies failed (see /tmp/selkies.log)"; tail -n 30 /tmp/selkies.log; }
 
-# --- moonlight-web-stream (PRIMARY browser path: Sunshine NVENC -> WebRTC) ---
-# mws is a Moonlight client that bridges Sunshine's h264_nvenc stream to a
-# browser over WebRTC, fronted by its own cloudflared tunnel. It reuses the
-# in-image coturn TURN (TCP) for the WebRTC media relay — same model as Selkies,
-# so on Vast only the 73478 TCP identity port needs exposing (no extra UDP range
-# as long as clients relay through TURN). First-run flow (in the browser UI):
-#   1) first login creates the mws admin user
-#   2) add a host -> address "localhost", port empty (Sunshine default 47989)
-#   3) click pair -> Sunshine shows the PIN in its Web UI -> enter it
-#   4) launch an app. (Future: the orchestrator automates pairing via Sunshine's API.)
-# Config: mws STRICTLY deserializes server/config.json and panics on a partial
-# config (missing required fields like first_login_create_admin). So we DON'T
-# hand-write it — we delete any stale one and let mws generate a schema-valid
-# default (bind 0.0.0.0:8080, first_login_create_admin=true), then drive the ICE
-# servers via env vars (cli.rs): DISABLE_DEFAULT_WEBRTC_ICE_SERVERS=true strips
-# the bundled Google STUN, and WEBRTC_ICE_SERVER_0_* appends our coturn TURN —
-# the only path that reaches mws on Vast (mws's own UDP port range isn't exposed).
-MWS_URL=""
-if [ -x /opt/mws/web-server ]; then
-    echo "[*] Configuring moonlight-web-stream (env -> coturn TURN)..."
-    mkdir -p /opt/mws/server
-    find /opt/mws ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
-    # Force fresh config generation each boot (avoids a stale/partial config
-    # panicking; data.json — users/hosts — is separate and persists if the
-    # /opt/mws/server volume is mounted).
-    rm -f /opt/mws/server/config.json
-    echo "[*] Starting moonlight-web-stream (web-server on 0.0.0.0:8080)..."
-    as_user "cd /opt/mws && \
-        DISABLE_DEFAULT_WEBRTC_ICE_SERVERS=true \
-        WEBRTC_NETWORK_TYPES=udp4,tcp4 \
-        WEBRTC_ICE_SERVER_0_URL='turn:${PUBLIC_IP:-127.0.0.1}:${TURN_PORT_EXT}?transport=tcp' \
-        WEBRTC_ICE_SERVER_0_USERNAME='${TURN_USER}' \
-        WEBRTC_ICE_SERVER_0_CREDENTIAL='${TURN_PASS}' \
-        $(if [ -n "${PUBLIC_IP:-}" ] && [ "${PUBLIC_IP:-}" != "127.0.0.1" ]; then echo "WEBRTC_ICE_SERVER_1_URL='turn:127.0.0.1:${TURN_PORT_LISTEN}?transport=tcp' WEBRTC_ICE_SERVER_1_USERNAME='${TURN_USER}' WEBRTC_ICE_SERVER_1_CREDENTIAL='${TURN_PASS}'"; fi) \
-        ./web-server" >/tmp/mws.log 2>&1 &
-    # mws (Rust + actix) takes ~5-10s to initialize; wait for port 8080 to
-    # accept connections instead of a fixed sleep (a 4s pgrep was a false
-    # negative — mws was actually starting, just slowly).
-    MWS_UP=0
-    for i in $(seq 1 25); do
-        if curl -sS -o /dev/null --connect-timeout 1 --max-time 2 "http://127.0.0.1:8080/" 2>/dev/null; then MWS_UP=1; break; fi
-        sleep 1
-    done
-    if [ "$MWS_UP" = "1" ]; then
-        echo "    mws running on 0.0.0.0:8080 (Sunshine NVENC -> WebRTC)"
-    else
-        echo "    WARNING: mws web-server not listening on :8080 after 25s (see /tmp/mws.log):"; tail -n 30 /tmp/mws.log
-    fi
-else
-    echo "WARNING: moonlight-web-stream not found at /opt/mws/web-server"
-fi
+# (mws + mws-autopair removed — Selkies is the only browser stream.)
 
-# --- mws <-> Sunshine auto-pairing (so the end user never sees a PIN) ---
-# A background one-shot drives mws's /api/pair + Sunshine's /api/pin. Disabled
-# with DPAD_MWS_AUTOPAIR=0. Only runs if mws came up. Logs to stdout +
-# /tmp/mws-autopair.log (included in the periodic log dump below).
-if [ "${DPAD_MWS_AUTOPAIR:-1}" = "1" ] && [ "${MWS_UP:-0}" = "1" ] && [ -x /opt/dpadcloud/mws-autopair ]; then
-    echo "[*] Launching mws<->Sunshine auto-pairing (background)..."
-    SUNSHINE_PASSWORD="${SUNSHINE_PASS}" /opt/dpadcloud/mws-autopair 2>&1 &
-fi
-
-# --- cloudflared (HTTPS tunnels for BOTH browser paths) ---
-# mws (primary, :8080) and Selkies (fallback, :16100) each get an HTTPS tunnel
-# so the secure-context gaming APIs (gamepad, WebCodecs, keyboard lock) work.
-# Production: ONE named tunnel with two ingress rules in the Cloudflare dashboard
-#   play-<id>.dpadcloud.com    -> http://localhost:8080  (mws, primary)
-#   selkies-<id>.dpadcloud.com -> http://localhost:16100 (fallback)
-# and pass CLOUDFLARED_TUNNEL_TOKEN + CLOUDFLARED_HOSTNAME (the mws/primary one).
-# MVP: each gets a quick trycloudflare.com URL (two cloudflared processes).
+# --- cloudflared (HTTPS tunnel for Selkies) ---
+# Selkies (:16100) gets an HTTPS tunnel so the secure-context gaming APIs
+# (gamepad, WebCodecs, keyboard lock) work with no inbound port. Production:
+# a named tunnel — pass CLOUDFLARED_TUNNEL_TOKEN + CLOUDFLARED_HOSTNAME.
+# MVP: a quick trycloudflare.com URL (one cloudflared process).
 start_quick_tunnel() {
   local local_url="$1" logfile="$2"
   cloudflared tunnel --no-autoupdate --url "$local_url" >"$logfile" 2>&1 &
   sleep 8
   grep -oE 'https://[a-z0-9.-]+trycloudflare\.com' "$logfile" 2>/dev/null | head -1
 }
+SELKIES_URL=""
 if [ -n "${CLOUDFLARED_TUNNEL_TOKEN:-}" ]; then
-    echo "[*] Starting cloudflared named tunnel (primary -> mws :8080)..."
+    echo "[*] Starting cloudflared named tunnel (-> Selkies :16100)..."
     cloudflared tunnel --no-autoupdate run --token "${CLOUDFLARED_TUNNEL_TOKEN}" >/tmp/cloudflared.log 2>&1 &
-    MWS_URL="${CLOUDFLARED_HOSTNAME:-https://<your-tunnel-hostname>}"
-    echo "    mws tunnel URL: ${MWS_URL}"
-    if command -v cloudflared >/dev/null 2>&1; then
-        SELKIES_URL="$(start_quick_tunnel http://localhost:16100 /tmp/cloudflared-selkies.log)"
-        [ -n "$SELKIES_URL" ] && echo "    Selkies fallback tunnel: ${SELKIES_URL}" || echo "    Selkies fallback tunnel not captured (see /tmp/cloudflared-selkies.log)"
-    fi
+    SELKIES_URL="${CLOUDFLARED_HOSTNAME:-https://<your-tunnel-hostname>}"
+    echo "    Selkies tunnel URL: ${SELKIES_URL}"
 elif command -v cloudflared >/dev/null 2>&1; then
-    echo "[*] Starting cloudflared quick tunnels (mws + Selkies)..."
-    MWS_URL="$(start_quick_tunnel http://localhost:8080 /tmp/cloudflared-mws.log)"
-    [ -n "$MWS_URL" ] && echo "    mws tunnel URL: ${MWS_URL}" || { echo "    mws tunnel URL not captured (see /tmp/cloudflared-mws.log):"; tail -n 15 /tmp/cloudflared-mws.log; }
+    echo "[*] Starting cloudflared quick tunnel (Selkies :16100)..."
     SELKIES_URL="$(start_quick_tunnel http://localhost:16100 /tmp/cloudflared-selkies.log)"
     [ -n "$SELKIES_URL" ] && echo "    Selkies tunnel URL: ${SELKIES_URL}" || { echo "    Selkies tunnel URL not captured (see /tmp/cloudflared-selkies.log):"; tail -n 15 /tmp/cloudflared-selkies.log; }
 fi
 
-# --- Tailscale (native-Moonlight enthusiast overlay) ---
-TAILSCALE_IP=""
-if [ -n "${TAILSCALE_AUTH_KEY:-}" ] && command -v tailscaled >/dev/null 2>&1; then
-    echo "[*] Starting Tailscale..."
-    mkdir -p /var/lib/tailscale /var/run/tailscale
-    tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock >/tmp/tailscaled.log 2>&1 &
-    sleep 3
-    tailscale up --authkey="${TAILSCALE_AUTH_KEY}" --hostname="${TAILSCALE_HOSTNAME:-dpadcloud}" 2>/dev/null \
-        || tailscale up --authkey="${TAILSCALE_AUTH_KEY}" --hostname="${TAILSCALE_HOSTNAME:-dpadcloud}" --accept-routes 2>/dev/null \
-        || echo "    WARNING: tailscale up failed (see /tmp/tailscaled.log)"
-    TAILSCALE_IP="$(tailscale ip -4 2>/dev/null | head -1)"
-    echo "    Tailnet IP: ${TAILSCALE_IP:-<pending>}"
-fi
+# (Tailscale / native Moonlight removed — Selkies is the only stream.)
 
 # --- Status ---
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -1729,36 +1634,13 @@ echo "  Display:          ${DISPLAY_NUM} @ ${SCREEN_RES}  (${X_SERVER:-?}$( [ "$
 echo "  Encoder:           ${SELKIES_ENC}"
 [ -n "$PUBLIC_IP" ] && echo "  Public IP:        ${PUBLIC_IP}"
 echo ""
-echo "  ▶ Browser click-and-play — PRIMARY (mws: Sunshine NVENC -> WebRTC):"
-if [ -n "$MWS_URL" ]; then
-    echo "      ${MWS_URL}"
-    if [ "${DPAD_MWS_AUTOPAIR:-1}" = "1" ]; then
-        echo "      Auto-pairs with Sunshine at boot — just log in and launch an app."
-        echo "      (mws login: ${MWS_ADMIN_USER:-dpad} / <SUNSHINE_PASSWORD>; host 'localhost' already paired)"
-    else
-        echo "      First login creates the admin user; then add host 'localhost',"
-        echo "      pair via Sunshine Web UI PIN, then launch an app."
-    fi
-else
-    echo "      (no tunnel — set CLOUDFLARED_TUNNEL_TOKEN or quick-tunnel failed)"
-    echo "      Local fallback: http://localhost:8080"
-fi
-echo ""
-echo "  ▶ Browser click-and-play — FALLBACK (Selkies):"
+echo "  ▶ Browser click-and-play (Selkies):"
 if [ -n "$SELKIES_URL" ]; then
     echo "      ${SELKIES_URL}"
     echo "      Login: ${SELKIES_USER} / ${SELKIES_PASS}"
 else
     echo "      (no tunnel — Selkies quick-tunnel failed)"
     echo "      Local fallback: http://localhost:16100  (Login: ${SELKIES_USER} / ${SELKIES_PASS})"
-fi
-echo ""
-echo "  ▶ Native Moonlight (enthusiast, low latency):"
-if [ -n "$TAILSCALE_IP" ]; then
-    echo "      Moonlight → ${TAILSCALE_IP} (port 47989), Sunshine PIN in its Web UI"
-else
-    echo "      Set TAILSCALE_AUTH_KEY to enable; or Sunshine Web UI:"
-    echo "      https://${PUBLIC_IP:-<ip>}:${VAST_TCP_PORT_47990:-47990} (admin / ${SUNSHINE_PASS})"
 fi
 echo ""
 echo "  TURN (WebRTC media relay): ${PUBLIC_IP:-<ip>}:${TURN_PORT_EXT}  (${SELKIES_TURN_PROTOCOL}, ${TURN_USER}/<token>)"
@@ -1798,18 +1680,9 @@ echo "=========================================="
         cat /tmp/rtc_config.json 2>/dev/null || true
         echo "=== end rtc_config.json ==="
         echo "=== coturn listen (ss) + /tmp/coturn.log (tail) ==="
-        ss -lntp 2>/dev/null | grep -iE "turnserver|3478|73478" || true
+        ss -lntp 2>/dev/null | grep -iE "turnserver|3478" || true
         tail -n 40 /tmp/coturn.log 2>/dev/null || true
         echo "=== end coturn ==="
-        echo "=== /tmp/mws.log (tail) ==="
-        tail -n 60 /tmp/mws.log 2>/dev/null || true
-        echo "=== end mws.log ==="
-        echo "=== /tmp/mws-autopair.log (tail) ==="
-        tail -n 40 /tmp/mws-autopair.log 2>/dev/null || true
-        echo "=== end mws-autopair.log ==="
-        echo "=== /tmp/sunshine.log (tail) ==="
-        tail -n 60 /tmp/sunshine.log 2>/dev/null || true
-        echo "=== end sunshine.log ==="
         echo "=== /tmp/pulse.log (tail) ==="
         tail -n 30 /tmp/pulse.log 2>/dev/null || true
         echo "=== end pulse.log ==="
@@ -1849,9 +1722,4 @@ while true; do
         pgrep -x Xvfb >/dev/null || { echo "WARNING: Xvfb died, restarting"; Xvfb "${DISPLAY_NUM}" -screen 0 "${SCREEN_RES}" -dpi 96 +extension GLX +extension RANDR +extension RENDER -ac -noreset -shmem & }
     fi
     pgrep -f "selkies-gstreamer" >/dev/null || echo "WARNING: selkies not running (see /tmp/selkies.log)"
-    # mws is launched as `./web-server` (cwd /opt/mws), so pgrep on the path
-    # doesn't match — check the port instead (returns 0 on any HTTP response,
-    # incl. the 401 for unauthenticated /, which still means it's listening).
-    curl -sS -o /dev/null --max-time 2 "http://127.0.0.1:8080/" 2>/dev/null || echo "WARNING: mws not listening on :8080 (see /tmp/mws.log)"
-    pgrep -x sunshine >/dev/null || echo "WARNING: sunshine not running (see /tmp/sunshine.log)"
 done
