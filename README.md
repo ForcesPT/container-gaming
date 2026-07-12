@@ -6,10 +6,11 @@ Two slim cloud-gaming images, **one Dockerfile (multi-stage)**, both with
 | Tag | Target | Use-case | Size |
 |-----|--------|----------|------|
 | `forcespt/dpadcloud-gaming:dpad-heroic` | `vast-docker` | **Vast Docker** (no userns): Heroic desktop + Selkies — Epic/GOG/Amazon games + a general cloud desktop (XFCE + Firefox). Steam is blocked on Vast Docker (no userns → CEF crashes). | ~3.9 GB |
+| `…:dpad-heroic-rtx50` | `vast-docker` (+`--build-arg CUDA_VERSION=12.8.1`) | same, for **RTX 50 / Blackwell** (sm_120+, needs CUDA 12.8.1) | ~3.9 GB |
 | `forcespt/dpadcloud-gaming:dpad-SteamOS` | `vast-vm` | **Vast KVM VM** (userns): Steam + gamescope (full Steam, Big Picture) + Selkies. No desktop. Fast-boot: the Steam client is pre-baked (~2.1 GB) so a fresh container reaches the stream URL in ~50 s. | ~7 GB |
 | `…:dpad-SteamOS-rtx50` | `vast-vm` (+`--build-arg CUDA_VERSION=12.8.1`) | same, for **RTX 50 / Blackwell** (sm_120+, needs CUDA 12.8.1) | ~7 GB |
 
-**You publish 2 images** — `:dpad-heroic` and `:dpad-SteamOS` (plus `:dpad-SteamOS-rtx50` for RTX 50/Blackwell). `base` and `interposer-builder` are **internal multi-stage build stages, NOT published images** — there is no `:dpad-base` tag to build/pull/run. When you run `docker build --target vast-docker` (or `--target vast-vm`), Docker builds `interposer-builder` + `base` automatically (cached), then layers the final target on top. `base` is just the shared foundation both final images extend — Selkies + coturn + cloudflared + the NVENC #1249 fix + `cuda-cudart`/`cuda-nvrtc` + display/audio/Mesa/X/Python + the `dpad` user (no launcher, no desktop). `interposer-builder` compiles the joystick interposer + NVENC-fix `.so` so `gcc` never ships in the final images.
+**You publish 4 image tags** — `:dpad-heroic`, `:dpad-heroic-rtx50`, `:dpad-SteamOS`, `:dpad-SteamOS-rtx50` (the `-rtx50` variants are CUDA 12.8.1 for Blackwell; the dpadplay cloud orchestrator auto-selects `:dpad-heroic-rtx50` for `compute_cap>=1200`). `base` and `interposer-builder` are **internal multi-stage build stages, NOT published images** — there is no `:dpad-base` tag to build/pull/run. When you run `docker build --target vast-docker` (or `--target vast-vm`), Docker builds `interposer-builder` + `base` automatically (cached), then layers the final target on top. `base` is just the shared foundation both final images extend — Selkies + coturn + cloudflared + the NVENC #1249 fix + `cuda-cudart`/`cuda-nvrtc` + display/audio/Mesa/X/Python + the `dpad` user (no launcher, no desktop). `interposer-builder` compiles the joystick interposer + NVENC-fix `.so` so `gcc` never ships in the final images.
 
 > **Why 24.04 + CUDA 12.5.1?** CUDA 12.5.1 runs on any driver ≥525 via [CUDA
 > minor-version compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html)
@@ -52,10 +53,14 @@ cd dpadcloud/container-gaming
 # Vast Docker (Heroic desktop + Selkies)
 docker build --target vast-docker -t forcespt/dpadcloud-gaming:dpad-heroic .
 docker push   forcespt/dpadcloud-gaming:dpad-heroic
+# Vast Docker, RTX 50 / Blackwell (CUDA 12.8.1) — the dpadplay cloud auto-selects this for compute_cap>=1200
+docker build --target vast-docker --build-arg CUDA_VERSION=12.8.1 --build-arg CUDA_PKG=12-8 \
+  -t forcespt/dpadcloud-gaming:dpad-heroic-rtx50 .
+docker push   forcespt/dpadcloud-gaming:dpad-heroic-rtx50
 # Vast VM (Steam/gamescope + Selkies, fast-boot)
 docker build --target vast-vm      -t forcespt/dpadcloud-gaming:dpad-SteamOS .
 docker push   forcespt/dpadcloud-gaming:dpad-SteamOS
-# RTX 50 / Blackwell variant of the VM tag (CUDA 12.8.1) — only if you use RTX 50
+# RTX 50 / Blackwell variant of the VM tag (CUDA 12.8.1)
 docker build --target vast-vm --build-arg CUDA_VERSION=12.8.1 --build-arg CUDA_PKG=12-8 \
   -t forcespt/dpadcloud-gaming:dpad-SteamOS-rtx50 .
 docker push   forcespt/dpadcloud-gaming:dpad-SteamOS-rtx50
