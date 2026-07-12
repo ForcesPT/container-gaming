@@ -941,13 +941,42 @@ X_SERVER=""
 if [ "${DPAD_XORG}" = "1" ] && [ -x /usr/bin/Xorg ] && [ -f /usr/lib/xorg/modules/nvidia/drivers/nvidia_drv.so ]; then
     echo "[*] Starting real Xorg + nvidia DDX on ${DISPLAY_NUM} (Vulkan present for DXVK/Proton)..."
     generate_xorg_conf
+    # --- Force nvidia's GLX vendor to own screen 0 (fix the
+    #     "GLX: Another vendor is already registered for screen 0" -> zink ->
+    #     no-stream bug on cuda_max_good>=13.3 Blackwell hosts). ---
+    # On 610.x nvidia ships only libglxserver_nvidia.so (no standalone libglx.so),
+    # so Mesa's libglx-mesa0 libglx.so self-registers its swrast GLX vendor for
+    # screen 0 BEFORE nvidia -> nvidia rejected -> GL falls back to Mesa/zink ->
+    # ximagesrc can't capture -> no stream. The Dockerfile bakes
+    # xserver-xorg-core's GLVND-neutral libglx.so into this nvidia private
+    # ModulePath (listed first by xorg.conf); here we hide Mesa's libglx.so so
+    # Xorg loads that neutral dispatcher, which loads only nvidia's vendor ->
+    # nvidia wins screen 0. Mesa's libglx.so is restored on the Xvfb fallback.
+    NV_GLX_DIR="/usr/lib/xorg/modules/nvidia/extensions"
+    MESAGLX="/usr/lib/xorg/modules/extensions/libglx.so"
+    if [ -e "${NV_GLX_DIR}/libglx.so" ]; then
+        echo "    nvidia GLX dispatcher present -> hiding Mesa's libglx.so so nvidia's GLX vendor wins screen 0"
+        if [ -e "$MESAGLX" ] && [ ! -e "${MESAGLX}.mesa-hidden" ]; then
+            mv "$MESAGLX" "${MESAGLX}.mesa-hidden" 2>/dev/null || true
+        fi
+    else
+        echo "    WARNING: ${NV_GLX_DIR}/libglx.so missing (Dockerfile GLVND bake failed?) -> Mesa's libglx.so stays; on cuda>=13.3 hosts this breaks the stream (zink). Rebuild the image."
+    fi
     # Do NOT set __EGL_VENDOR_LIBRARY_FILENAMES=50_mesa.json here — that Mesa
     # override only exists to stop NVIDIA EGL GBM segfaulting on a virtual
     # framebuffer. On a real nvidia X screen we WANT the NVIDIA GLX/EGL vendor.
+    # NOTE: do NOT pass -iglx (indirect GLX) on the nvidia Xorg. With -iglx, Mesa's
+    # DRISWRAST AIGLX provider initializes and claims screen 0 first
+    # ("GLX: Another vendor is already registered for screen 0") on hosts where
+    # the nvidia DDX can't make screen 0 DRI2-capable (e.g. cuda_max_good>=13.3
+    # NULL-mode Blackwell hosts). nvidia's GLX vendor is then rejected, GL falls
+    # back to Mesa/zink, and Selkies' ximagesrc can't capture -> no stream.
+    # Games use direct GLX (DRI3), not indirect, so leaving indirect GLX off (the
+    # Xorg 21.1+ default) is safe and fixes the 13.3 no-stream bug.
     /usr/bin/Xorg "${DISPLAY_NUM}" -config /etc/X11/xorg.conf -noreset -novtswitch \
         -sharevts +extension RANDR +extension RENDER +extension GLX +extension XVideo \
         +extension DOUBLE-BUFFER +extension DAMAGE +extension COMPOSITE +extension XTEST \
-        -dpms -s off -nolisten tcp -ac -iglx -verbose vt7 >/tmp/xorg.log 2>&1 &
+        -dpms -s off -nolisten tcp -ac -verbose vt7 >/tmp/xorg.log 2>&1 &
     sleep 3
     if pgrep -x Xorg >/dev/null; then
         echo "    Xorg running (nvidia DDX, mode=${DPAD_DISPLAY_MODE})"
@@ -964,7 +993,7 @@ if [ "${DPAD_XORG}" = "1" ] && [ -x /usr/bin/Xorg ] && [ -f /usr/lib/xorg/module
         /usr/bin/Xorg "${DISPLAY_NUM}" -config /etc/X11/xorg.conf -noreset -novtswitch \
             -sharevts +extension RANDR +extension RENDER +extension GLX +extension XVideo \
             +extension DOUBLE-BUFFER +extension DAMAGE +extension COMPOSITE +extension XTEST \
-            -dpms -s off -nolisten tcp -ac -iglx -verbose vt7 >/tmp/xorg.log 2>&1 &
+            -dpms -s off -nolisten tcp -ac -verbose vt7 >/tmp/xorg.log 2>&1 &
         sleep 3
         if pgrep -x Xorg >/dev/null; then
             echo "    Xorg running (nvidia DDX, NULL-mode fallback)"
@@ -984,6 +1013,10 @@ fi
 if [ -z "$X_SERVER" ]; then
     echo "[*] Starting Xvfb on ${DISPLAY_NUM} (software framebuffer — debug/fallback)..."
     export DPAD_XORG=0
+    # Restore Mesa's libglx.so for Xvfb if the nvidia path hid it (Xvfb needs
+    # Mesa's GLX for software rendering).
+    MESAGLX="/usr/lib/xorg/modules/extensions/libglx.so"
+    [ -e "${MESAGLX}.mesa-hidden" ] && [ ! -e "$MESAGLX" ] && mv "${MESAGLX}.mesa-hidden" "$MESAGLX" 2>/dev/null || true
     # Force Mesa EGL if the vendor file exists (avoids NVIDIA EGL GBM segfault on a virtual framebuffer)
     if [ -f /usr/share/glvnd/egl_vendor.d/50_mesa.json ]; then
         export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
@@ -1014,7 +1047,7 @@ if [ "${X_SERVER}" = "Xorg" ]; then
     VGL_RENDERER="$(as_user "DISPLAY=${DISPLAY_NUM} glxinfo -B 2>/dev/null | grep -m1 'OpenGL renderer string'" || echo 'glxinfo failed')"
     echo "[*] OpenGL renderer (Xorg+nvidia DDX): ${VGL_RENDERER}"
     case "${VGL_RENDERER}" in
-        *llvmpipe*|*"glxinfo failed"*) echo "    WARNING: Xorg is rendering on software (llvmpipe) — the nvidia DDX did not bind the GPU. Check /tmp/xorg.log and that NVIDIA_DRIVER_CAPABILITIES=all + a GPU is assigned." ;;
+        *llvmpipe*|*zink*|*swrast*|*"glxinfo failed"*) echo "    WARNING: Xorg is NOT rendering on the nvidia GPU (got '${VGL_RENDERER}'). On cuda_max_good>=13.3 hosts this is the Mesa/zink GLX-vendor-takes-screen-0 bug — check /tmp/xorg.log for 'Another vendor is already registered for screen 0'. Selkies' ximagesrc can't capture a zink screen -> no stream." ;;
     esac
 else
     if command -v vglrun >/dev/null 2>&1; then
@@ -1717,7 +1750,7 @@ echo "=========================================="
 while true; do
     sleep 30
     if [ "${X_SERVER}" = "Xorg" ]; then
-        pgrep -x Xorg >/dev/null || { echo "WARNING: Xorg died, restarting"; rm -f /tmp/.X${DISPLAY_NUM#:}-lock /tmp/.X11-unix/X${DISPLAY_NUM#:}; /usr/bin/Xorg "${DISPLAY_NUM}" -config /etc/X11/xorg.conf -noreset -novtswitch -sharevts +extension RANDR +extension RENDER +extension GLX +extension XVideo +extension DAMAGE +extension COMPOSITE +extension XTEST -dpms -s off -nolisten tcp -ac -iglx -verbose vt7 >/tmp/xorg.log 2>&1 & }
+        pgrep -x Xorg >/dev/null || { echo "WARNING: Xorg died, restarting"; rm -f /tmp/.X${DISPLAY_NUM#:}-lock /tmp/.X11-unix/X${DISPLAY_NUM#:}; /usr/bin/Xorg "${DISPLAY_NUM}" -config /etc/X11/xorg.conf -noreset -novtswitch -sharevts +extension RANDR +extension RENDER +extension GLX +extension XVideo +extension DAMAGE +extension COMPOSITE +extension XTEST -dpms -s off -nolisten tcp -ac -verbose vt7 >/tmp/xorg.log 2>&1 & }
     else
         pgrep -x Xvfb >/dev/null || { echo "WARNING: Xvfb died, restarting"; Xvfb "${DISPLAY_NUM}" -screen 0 "${SCREEN_RES}" -dpi 96 +extension GLX +extension RANDR +extension RENDER -ac -noreset -shmem & }
     fi

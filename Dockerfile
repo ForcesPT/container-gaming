@@ -112,6 +112,24 @@ RUN dpkg --add-architecture i386 && \
       glib-networking libgudev-1.0-0 libgcrypt20 libjack-jackd2-0 \
       alsa-utils x264 x265 aom-tools libopenh264-dev \
       htop nano tmux \
+    # Bake the GLVND-neutral libglx.so (from xserver-xorg-core) into the nvidia
+    # private ModulePath. libglx-mesa0 installs its self-registering Mesa libglx.so
+    # over xserver-xorg-core's, and on 610.x nvidia ships only libglxserver_nvidia.so
+    # (no standalone libglx.so), so without this the loaded libglx.so is Mesa's,
+    # which self-registers its swrast/DRISWRAST GLX vendor for screen 0 BEFORE
+    # nvidia's libglxserver_nvidia.so -> "Another vendor already registered for
+    # screen 0" -> GL falls back to Mesa/zink -> ximagesrc can't capture -> no
+    # stream (the cuda_max_good>=13.3 Blackwell bug). The xorg.conf lists the
+    # nvidia ModulePath first, so Xorg loads this neutral dispatcher instead of
+    # Mesa's; it loads only nvidia's vendor module -> nvidia wins screen 0.
+    && mkdir -p /usr/lib/xorg/modules/nvidia/extensions \
+    && apt-get download xserver-xorg-core \
+    && dpkg-deb -x xserver-xorg-core_*.deb /tmp/xsoc \
+    && if [ -f /tmp/xsoc/usr/lib/xorg/modules/extensions/libglx.so ]; then \
+         cp /tmp/xsoc/usr/lib/xorg/modules/extensions/libglx.so /usr/lib/xorg/modules/nvidia/extensions/libglx.so \
+         && echo "Baked GLVND libglx.so into nvidia ModulePath"; \
+       else echo "xserver-xorg-core .deb has no libglx.so — GLVND dispatcher not available"; fi \
+    && rm -rf /tmp/xsoc xserver-xorg-core_*.deb \
     && rm -rf /var/lib/apt/lists/*
 
 # --- 2. Create the desktop user (uid 1001) ---
