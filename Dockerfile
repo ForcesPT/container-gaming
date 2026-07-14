@@ -312,7 +312,17 @@ RUN set -e; \
 COPY scripts/heroic-launch /opt/dpadcloud/heroic-launch
 RUN sed -i 's/\r$//' /opt/dpadcloud/heroic-launch && chmod +x /opt/dpadcloud/heroic-launch
 
-EXPOSE 16100/tcp
+# --- SSH server (B1: dpadplay VPS reverse-proxy tunnel) ---
+# The dpadplay VPS autossh-tunnels to localhost:16100 (Selkies) through the
+# Vast-mapped port 22, so the stream URL can be play-<id>.dpadplay.com instead
+# of trycloudflare.com. Media/input stay direct via coturn — this carries ONLY
+# the signaling WebSocket. Pubkey-only; the key is injected at runtime via
+# DPAD_ORCHESTRATOR_PUBKEY (see entrypoint.sh). Backward-compatible: cloudflared
+# still runs as a fallback until the orchestrator switches to DPAD_TUNNEL=ssh.
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-server \
+    && mkdir -p /run/sshd && rm -rf /var/lib/apt/lists/*
+
+EXPOSE 16100/tcp 22/tcp
 # 3478 (coturn TURN) is opt-in via -p 3478:3478 at launch (not EXPOSE'd — see
 # the ports comment in the base stage). No 8080/47989/47990/41641 (mws/Sunshine/
 # Tailscale removed).

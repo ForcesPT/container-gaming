@@ -838,6 +838,47 @@ mkdir -p "${XDG_RUNTIME_DIR}" /tmp/.X11-unix /tmp/.ICE-unix
 chmod 1777 "${XDG_RUNTIME_DIR}" /tmp/.X11-unix /tmp/.ICE-unix
 find "${XDG_RUNTIME_DIR}" ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
 
+# --- SSH server (B1: dpadplay VPS reverse-proxy tunnel) ---
+# Vast maps 22 -> VAST_TCP_PORT_22; the dpadplay VPS autossh-tunnels
+# localhost:16100 (Selkies signaling) through this port. Pubkey-only, the key
+# injected via DPAD_ORCHESTRATOR_PUBKEY. Media/input stay direct via coturn —
+# this carries only the signaling WebSocket. Starts early so the VPS can
+# connect as soon as the container boots (eager tunnel = no cold-start on Play).
+if command -v sshd >/dev/null 2>&1; then
+    mkdir -p /run/sshd
+    [ ! -e /etc/ssh/ssh_host_ed25519_key ] && ssh-keygen -A >/dev/null 2>&1 || true
+    # Authorize the orchestrator pubkey for the dpad user (idempotent).
+    if [ -n "${DPAD_ORCHESTRATOR_PUBKEY:-}" ]; then
+        install -d -m 700 "${USER_HOME}/.ssh"
+        grep -qxF "${DPAD_ORCHESTRATOR_PUBKEY}" "${USER_HOME}/.ssh/authorized_keys" 2>/dev/null \
+            || echo "${DPAD_ORCHESTRATOR_PUBKEY}" >> "${USER_HOME}/.ssh/authorized_keys"
+        chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}/.ssh"
+        chmod 600 "${USER_HOME}/.ssh/authorized_keys" 2>/dev/null || true
+    fi
+    # Hardened config: pubkey only, no passwords, no root, only the dpad user.
+    if [ ! -f /etc/ssh/sshd_config.d/dpad.conf ]; then
+        mkdir -p /etc/ssh/sshd_config.d
+        cat > /etc/ssh/sshd_config.d/dpad.conf <<EOF
+Port 22
+ListenAddress 0.0.0.0
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+AllowUsers ${USER_NAME}
+EOF
+    fi
+    if /usr/sbin/sshd -t 2>/tmp/sshd-configtest.log; then
+        /usr/sbin/sshd >/tmp/sshd.log 2>&1 \
+            && echo "[*] SSH server on :22 (pubkey only, user=${USER_NAME}) — dpadplay VPS reverse-proxy tunnel" \
+            || echo "    WARNING: sshd failed to start (see /tmp/sshd.log)"
+    else
+        echo "    WARNING: sshd config test failed (see /tmp/sshd-configtest.log); sshd not started"
+    fi
+else
+    echo "[*] sshd not installed — VPS reverse-proxy tunnel disabled (cloudflared remains)"
+fi
+
 # --- D-Bus (system + session) ---
 echo "[*] Starting D-Bus..."
 mkdir -p /run/dbus "${XDG_RUNTIME_DIR}/dbus"
