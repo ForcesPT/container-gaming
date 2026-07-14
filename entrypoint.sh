@@ -872,6 +872,14 @@ EOF
         /usr/sbin/sshd >/tmp/sshd.log 2>&1 \
             && echo "[*] SSH server on :22 (pubkey only, user=${USER_NAME}) — dpadplay VPS reverse-proxy tunnel" \
             || echo "    WARNING: sshd failed to start (see /tmp/sshd.log)"
+        # Print the externally-reachable SSH endpoint (Vast maps 22 ->
+        # VAST_TCP_PORT_22 on PUBLIC_IPADDR). The dpadplay orchestrator greps
+        # this line from the boot log to point stream-bridge's autossh at it
+        # (the Vast SSH proxy ssh_host/ssh_port isn't populated for
+        # runtype=args instances). Vast guarantees the 22 map is reachable.
+        if [ -n "${PUBLIC_IP:-}" ] && [ -n "${VAST_TCP_PORT_22:-}" ]; then
+            echo "[*] DPAD_SSH_ENDPOINT=${PUBLIC_IP}:${VAST_TCP_PORT_22}"
+        fi
     else
         echo "    WARNING: sshd config test failed (see /tmp/sshd-configtest.log); sshd not started"
     fi
