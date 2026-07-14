@@ -1,5 +1,14 @@
 # DpadCloud Container Gaming — Project State & Continuation Guide
 
+> **UPDATE 2026-07-14 — HEROIC sshd + B1 self-hosted stream (dpadplay VPS reverse-proxy). New env: `DPAD_TUNNEL`, `DPAD_ORCHESTRATOR_PUBKEY`, `DPAD_SSH_ENDPOINT`.**
+>
+> The `:dpad-heroic` image now runs `sshd` (pubkey-only, `AllowUsers=dpad`, port 22) so the **dpadplay control plane** (the `dpadplay/cloud` repo) can reverse-proxy the Selkies signaling over an SSH tunnel instead of cloudflared — the stream URL becomes `https://play-<id>.dpadplay.com` (no `trycloudflare.com`). Three additions in `entrypoint.sh` + the `vast-docker` Dockerfile stage:
+> - **sshd** starts early (before D-Bus). The orchestrator public key is injected via the `DPAD_ORCHESTRATOR_PUBKEY` env (idempotent append to `~dpad/.ssh/authorized_keys`); host keys generated on first boot; `sshd -t` config-tested before start.
+> - **`DPAD_SSH_ENDPOINT=<PUBLIC_IPADDR>:<VAST_TCP_PORT_22>`** is printed to the boot log after sshd starts — the orchestrator greps it (Vast doesn't populate `ssh_host`/`ssh_port` for `runtype=args` instances, so the container reports its own; Vast guarantees the 22 map is reachable).
+> - **`DPAD_TUNNEL=ssh`** gates cloudflared OFF (both the DFP/Heroic + gamescope blocks skip it — no wasted `trycloudflare.com` tunnel, no 8–10s sleep). cloudflared remains the default (unset `DPAD_TUNNEL`) as a fallback.
+>
+> Gameplay latency is unchanged — the WebRTC media + input datachannel still go direct browser↔Vast via coturn; only the signaling WebSocket routes through the dpadplay VPS (Caddy → `stream-bridge` → autossh → container:16100). The dpadplay side (`apps/stream-bridge` + Caddy on-demand TLS + worker B1 mode) lives in the `dpadplay/cloud` repo — see `dpadplay/cloud/docs/STATUS.md` §16. Backward-compatible: a container with none of these env vars behaves exactly as before (sshd starts but authorizes nothing; cloudflared runs).
+
 > **UPDATE 2026-07-12 — RTX 50 ON THE HEROIC DOCKER PATH + GLX-vendor fix for cuda_max_good>=13.3. New image `:dpad-heroic-rtx50`.**
 >
 > **New image.** `docker build --target vast-docker --build-arg CUDA_VERSION=12.8.1 --build-arg CUDA_PKG=12-8 -t forcespt/dpadcloud-gaming:dpad-heroic-rtx50 .` — the Heroic (Vast Docker) RTX 50 / Blackwell variant (the existing `-rtx50` was VM-only). The dpadplay cloud orchestrator selects it per-offer via `compute_cap>=1200` (`heroicImageForOffer()` in `packages/providers`); RTX 50 cards are now in the cloud `GPU_TIERS`.
