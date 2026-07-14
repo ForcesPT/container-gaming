@@ -444,13 +444,17 @@ start_gamescope_stream() {
         break
     done
 
-    cloudflared tunnel --no-autoupdate --url http://localhost:16100 >/tmp/cloudflared-selkies.log 2>&1 &
-    sleep 10
-    url="$(grep -oE 'https://[a-z0-9.-]+trycloudflare.com' /tmp/cloudflared-selkies.log 2>/dev/null | head -1)"
-    if [ -n "$url" ]; then
-        echo "    ▶ gamescope browser stream: ${url}  (login ${SELKIES_USER} / ${SELKIES_PASS})"
+    if [ "${DPAD_TUNNEL:-cloudflared}" = "ssh" ]; then
+        echo "    ▶ gamescope stream: dpadplay VPS reverse-proxy (DPAD_TUNNEL=ssh) — Selkies on 127.0.0.1:16100"
     else
-        echo "    Selkies tunnel URL not captured (see /tmp/cloudflared-selkies.log)"
+        cloudflared tunnel --no-autoupdate --url http://localhost:16100 >/tmp/cloudflared-selkies.log 2>&1 &
+        sleep 10
+        url="$(grep -oE 'https://[a-z0-9.-]+trycloudflare.com' /tmp/cloudflared-selkies.log 2>/dev/null | head -1)"
+        if [ -n "$url" ]; then
+            echo "    ▶ gamescope browser stream: ${url}  (login ${SELKIES_USER} / ${SELKIES_PASS})"
+        else
+            echo "    Selkies tunnel URL not captured (see /tmp/cloudflared-selkies.log)"
+        fi
     fi
 }
 
@@ -1693,7 +1697,9 @@ start_quick_tunnel() {
   grep -oE 'https://[a-z0-9.-]+trycloudflare\.com' "$logfile" 2>/dev/null | head -1
 }
 SELKIES_URL=""
-if [ -n "${CLOUDFLARED_TUNNEL_TOKEN:-}" ]; then
+if [ "${DPAD_TUNNEL:-cloudflared}" = "ssh" ]; then
+    echo "[*] DPAD_TUNNEL=ssh — skipping cloudflared (the dpadplay VPS reverse-proxies via SSH). Selkies stays on 127.0.0.1:16100."
+elif [ -n "${CLOUDFLARED_TUNNEL_TOKEN:-}" ]; then
     echo "[*] Starting cloudflared named tunnel (-> Selkies :16100)..."
     cloudflared tunnel --no-autoupdate run --token "${CLOUDFLARED_TUNNEL_TOKEN}" >/tmp/cloudflared.log 2>&1 &
     SELKIES_URL="${CLOUDFLARED_HOSTNAME:-https://<your-tunnel-hostname>}"
