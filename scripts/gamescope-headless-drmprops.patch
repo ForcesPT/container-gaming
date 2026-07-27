@@ -1,45 +1,94 @@
-Subject: [dpadplay] gamescope headless: relax hasPrimary + /dev/dri render-node fallback
+Subject: [dpadplay] gamescope headless + PipeWire black-frame fix (drmProps + PR #2094)
+
+gamescope 3.16.19 (the 3v1n0 PPA build) has two image-side bugs that block the
+dpadplay `:dpad-SteamOS` headless streaming path. This single patch fixes both.
+It is applied in the `gamescope-builder` Dockerfile stage and the 4 patched
+binaries (gamescope/gamescopereaper/gamescopestream/gamescopectl) are COPY'd
+into the vast-vm image over the deb's /usr/games/ binaries.
+
+== Fix 1 (drmProps / headless backend crash) ==
 
 gamescope 3.16.19's CVulkanDevice::createDevice() queries VkPhysicalDeviceDrmPropertiesEXT
 via vkGetPhysicalDeviceProperties2 and aborts the headless backend when drmProps.hasPrimary
 is false ("physical device has no primary node") or drmProps.hasRender is false
 ("physical device has no render node").
 
-On some driver/device/container combos (reproduced: UpCloud Helsinki NVIDIA L4, driver
-580.173.02, CDI-injected /dev/dri, gamescope-WSI layer loaded) gamescope's query returns
-drmProps entirely zeroed -- hasPrimary=false AND hasRender=false -- even though vulkaninfo
-(same ICD, same physical device, same WSI layer) reports hasPrimary=true / hasRender=true
-(primaryMinor=1 -> /dev/dri/card1, renderMinor=128 -> /dev/dri/renderD128, both present).
-The extension IS advertised (hasDrmProps=true) and the function pointer is resolved via
-vkGetInstanceProcAddr (instance is API 1.3), so the query *should* populate the struct --
-but it doesn't. This is a gamescope 3.16.19 query interop quirk, not a driver/ICD/node
-issue. (Driver 580 alone does NOT fix it; driver 595 additionally breaks the libGLX ICD
-for headless -- see UPCLOUD-L4-DEPLOY-2026-07.md blocker #1 for that separate fix.)
+On some driver/device/container combos (reproduced: UpCloud Helsinki NVIDIA L4,
+driver 580.173.02 + 595.58.03, CDI-injected /dev/dri, gamescope-WSI layer loaded)
+gamescope's query returns drmProps entirely zeroed -- hasPrimary=false AND
+hasRender=false -- even though vulkaninfo (same ICD, same physical device, same
+WSI layer) reports hasPrimary=true / hasRender=true (primaryMinor=1 ->
+/dev/dri/card1, renderMinor=128 -> /dev/dri/renderD128, both present).
+The extension IS advertised (hasDrmProps=true) and the function pointer is
+resolved via vkGetInstanceProcAddr (instance is API 1.3), so the query *should*
+populate the struct -- but it doesn't. This is a gamescope 3.16.19 query interop
+quirk, not a driver/ICD/node issue. (Driver 580 alone does NOT fix it; driver
+595 additionally breaks the libGLX ICD for headless -- that's a SEPARATE fix
+in entrypoint.sh pointing the ICD at libEGL_nvidia.so.0. See
+cloud/docs/UPCLOUD-L4-DEPLOY-2026-07.md blocker #1 + cloud/docs/DRIVER-CUDA-MATRIX.md.)
 
-The headless backend does no KMS scanout, so it genuinely does NOT need a primary DRM
-node. The render node IS needed (m_drmRendererFd -> drm syncobjs in Timeline.cpp), but
-when the query returns zeros we can fall back to scanning /dev/dri/renderD* (the CDI-
-injected nvidia render node) and open it directly.
+The headless backend does no KMS scanout, so it genuinely does NOT need a primary
+DRM node. The render node IS needed (m_drmRendererFd -> drm syncobjs in
+Timeline.cpp), but when the query returns zeros we can fall back to scanning
+/dev/dri/renderD* (the CDI-injected nvidia render node) and open it directly.
 
-This patch:
-  1. Relaxes the headless !drmProps.hasPrimary abort to a warning (continue without a
-     primary dev id -- the existing `if (drmProps.hasPrimary)` guard already handles
-     hasPrimary=false gracefully for m_drmPrimaryDevId; and vulkan_primary_dev_id() is
-     only called from DRMBackend.cpp, which the headless backend never uses).
+This part:
+  1. Relaxes the headless !drmProps.hasPrimary abort to a warning (continue
+     without a primary dev id -- the existing `if (drmProps.hasPrimary)` guard
+     already handles hasPrimary=false gracefully for m_drmPrimaryDevId; and
+     vulkan_primary_dev_id() is only called from DRMBackend.cpp, which the
+     headless backend never uses).
   2. Wraps the render-node acquisition in `if (drmProps.hasRender) {normal
-     drmGetDeviceFromDevId path} else {/dev/dri/renderD* scan fallback}` so the headless
-     backend can still obtain m_drmRendererFd when the query returns zeros.
+     drmGetDeviceFromDevId path} else {/dev/dri/renderD* scan fallback}` so the
+     headless backend can still obtain m_drmRendererFd when the query returns zeros.
 
-Apply on top of the 3v1n0 gamescope 3.16.19 source (`apt-get source gamescope` on noble
-with the 3v1n0 PPA + deb-src enabled) and rebuild with `meson setup build && ninja -C
-build`. Install build/src/{gamescope,gamescopereaper,gamescopestream,gamescopectl} over
-the deb's /usr/games/ binaries.
+Upstream alignment: this matches the intent of the open upstream PR
+ValveSoftware/gamescope #2073 ("rendervulkan: do not bail out if the driver
+doesn't implement VK_EXT_physical_device_drm"). When #2073 merges + lands in a
+3v1n0 build, this part can be dropped.
 
-A SEPARATE prerequisite: the dpad user must be able to open /dev/dri/renderD128. Some
-hosts map the nvidia render node's GID to an unexpected group (UpCloud: GID 993 =
-`polkitd` in the container, while dpad is only in video/audio/input). The entrypoint
-must ensure dpad is in the render node's owning group (or chmod the node) -- see the
-UPCLOUD-L4-DEPLOY-2026-07.md render-node permissions fix.
+== Fix 2 (PipeWire black frame + inverted R/B on NVIDIA -- gamescope #1596 / PR #2094) ==
+
+gamescope's `vulkan_acquire_screenshot_texture()` created the screenshot/PipeWire
+texture WITHOUT `bSampled`, so no sampled image view was set up for the RGB-to-NV12
+conversion shader -- the NVIDIA driver returns BLACK pixels for the PipeWire frame.
+gamescope #1596 ("black PipeWire frame during e.g. Steam Remote Play; affects both
+Intel and NVIDIA"). The dpadplay UpCloud L4 stream was UNUSABLE because gamescope's
+PipeWire node alternated a ~734 KB real frame and a ~6 KB black frame (severe
+whole-frame flicker). This is DRIVER-AGNOSTIC (reproduced on driver 580 AND 595;
+the earlier "580 menu flicker / #1964" diagnosis was wrong -- #1964 is a desktop
+DRM-embedded menu issue, not our headless streaming path).
+
+The fix is gamescope PR #2094 (cmspam, open, not in 3.16.19), split into:
+  1. `textureFlags.bSampled = true` (here: `screenshotImageFlags.bSampled = true`)
+     in `vulkan_acquire_screenshot_texture()` -- the black-PipeWire-frame fix
+     (1 line; safe on all hardware, also fixes Intel).
+  2. NVIDIA-proprietary detection: chains `VkPhysicalDeviceDriverProperties` into
+     the createDevice() drmProps query, sets `m_bIsNvidiaProprietaryDriver =
+     driverProps.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY`, and exposes
+     `isNvidiaProprietaryDriver()`.
+  3. R/B swap: in `paint_pipewire()`, use `DRM_FORMAT_XBGR2101010` as the
+     intermediate capture format on NVIDIA proprietary (sampling
+     VK_FORMAT_A2R10G10B10 on the NVIDIA proprietary driver returns R/B swapped
+     -> the RGB-to-NV12 colour matrix operates on the wrong channels). A #1596
+     follow-up confirmed the black fix alone leaves colours R/B-inverted on
+     NVIDIA; this fixes it.
+
+PR #2094 patch 2/3 touches the SAME createDevice() drmProps block Fix 1 modifies
+-> they coexist cleanly (Fix 1 relaxes the hasPrimary abort + adds the render-node
+fallback; PR #2094 adds the driverProps chain + m_bIsNvidiaProprietaryDriver line).
+
+A SEPARATE prerequisite (NOT in this patch): the dpad user must be able to open
+/dev/dri/renderD128. Some hosts map the nvidia render node's GID to an unexpected
+group (UpCloud: GID 993 = `polkitd` in the container, while dpad is only in
+video/audio/input). The entrypoint must ensure dpad is in the render node's owning
+group (or chmod the node) -- see the entrypoint render-node permissions block +
+cloud/docs/UPCLOUD-L4-DEPLOY-2026-07.md §6a.
+
+Apply on top of the 3v1n0 gamescope 3.16.19 source (`apt-get source gamescope` on
+noble with the 3v1n0 PPA + deb-src enabled) with `patch -p1` and rebuild with
+`meson setup build && ninja -C build`. Install build/src/{gamescope,gamescopereaper,
+gamescopestream,gamescopectl} over the deb's /usr/games/ binaries.
 
 --- a/src/rendervulkan.cpp
 +++ b/src/rendervulkan.cpp
@@ -51,9 +100,25 @@ UPCLOUD-L4-DEPLOY-2026-07.md render-node permissions fix.
  #include "vulkan_include.h"
  #include "Utils/Algorithm.h"
  
-@@ -473,28 +474,63 @@
+@@ -463,8 +464,12 @@
+ 	// We need to refactor some Vulkan stuff to do that though.
+ 	if ( hasDrmProps )
+ 	{
++		VkPhysicalDeviceDriverProperties driverProps = {
++			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES,
++		};
+ 		VkPhysicalDeviceDrmPropertiesEXT drmProps = {
+ 			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT,
++			.pNext = &driverProps,
+ 		};
+ 		VkPhysicalDeviceProperties2 props2 = {
+ 			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+@@ -472,29 +477,66 @@
+ 		};
  		vk.GetPhysicalDeviceProperties2( physDev(), &props2 );
  
++		m_bIsNvidiaProprietaryDriver = driverProps.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY;
++
  		if ( !GetBackend()->UsesVulkanSwapchain() && !drmProps.hasPrimary ) {
 -			vk_log.errorf( "physical device has no primary node" );
 -			return false;
@@ -61,13 +126,14 @@ UPCLOUD-L4-DEPLOY-2026-07.md render-node permissions fix.
 -		if ( !drmProps.hasRender ) {
 -			vk_log.errorf( "physical device has no render node" );
 -			return false;
+-		}
 +			// dpadplay: headless backend does no KMS scanout, so a primary DRM node
 +			// is not required. Some driver/device combos report hasPrimary=false here
 +			// even though vulkaninfo sees hasPrimary=true on the same device (a
 +			// gamescope 3.16.19 VK_EXT_physical_device_drm query quirk). Warn and
 +			// continue instead of aborting so the headless backend still comes up.
 +			vk_log.warnf( "physical device has no primary node (headless backend; continuing without one)" );
- 		}
++		}
 +		if ( drmProps.hasRender )
 +		{
 +			dev_t renderDevId = makedev( drmProps.renderMajor, drmProps.renderMinor );
@@ -134,3 +200,49 @@ UPCLOUD-L4-DEPLOY-2026-07.md render-node permissions fix.
  		}
  
  		if ( drmProps.hasPrimary ) {
+@@ -3605,6 +3647,7 @@
+ 			screenshotImageFlags.bMappable = true;
+ 			screenshotImageFlags.bTransferDst = true;
+ 			screenshotImageFlags.bStorage = true;
++			screenshotImageFlags.bSampled = true; // required for RGB-to-NV12 shader to sample this texture (gamescope #1596 / PR #2094)
+ 			if (exportable || drmFormat == DRM_FORMAT_NV12) {
+ 				screenshotImageFlags.bExportable = true;
+ 				screenshotImageFlags.bLinear = true; // TODO: support multi-planar DMA-BUF export via PipeWire
+--- a/src/rendervulkan.hpp
++++ b/src/rendervulkan.hpp
+@@ -804,6 +804,7 @@
+ 	inline bool hasDrmPrimaryDevId() {return m_bHasDrmPrimaryDevId;}
+ 	inline dev_t primaryDevId() {return m_drmPrimaryDevId;}
+ 	inline bool supportsFp16() {return m_bSupportsFp16;}
++	inline bool isNvidiaProprietaryDriver() {return m_bIsNvidiaProprietaryDriver;}
+ 
+ 	inline std::pair<void *, uint32_t> uploadBufferData(uint32_t size)
+ 	{
+@@ -867,6 +868,7 @@
+ 	bool m_bSupportsFp16 = false;
+ 	bool m_bHasDrmPrimaryDevId = false;
+ 	bool m_bSupportsModifiers = false;
++	bool m_bIsNvidiaProprietaryDriver = false;
+ 	bool m_bInitialized = false;
+ 
+ 
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -2392,8 +2392,16 @@
+ 	if ( pFocus->overrideWindow && !pFocus->focusWindow->isSteamStreamingClient )
+ 		paint_window( pFocus->overrideWindow, pFocus->focusWindow, &frameInfo, nullptr, PaintWindowFlag::NoFilter, 1.0f, pFocus->overrideWindow );
+ 
++	// On the NVIDIA proprietary driver, sampling VK_FORMAT_A2R10G10B10_UNORM_PACK32
++	// (DRM_FORMAT_XRGB2101010) storage images returns R and B swapped, causing colour
++	// inversion in the RGB-to-NV12 conversion shader. Use DRM_FORMAT_XBGR2101010
++	// (VK_FORMAT_A2B10G10R10_UNORM_PACK32) instead so components arrive in the correct
++	// order. This does not affect non-proprietary NVIDIA drivers or other vendors.
++	// (gamescope PR #2094)
++	const uint32_t uRGBCaptureFormat = g_device.isNvidiaProprietaryDriver()
++		? DRM_FORMAT_XBGR2101010 : DRM_FORMAT_XRGB2101010;
+ 	gamescope::Rc<CVulkanTexture> pRGBTexture = s_pPipewireBuffer->texture->isYcbcr()
+-		? vulkan_acquire_screenshot_texture( uWidth, uHeight, false, DRM_FORMAT_XRGB2101010 )
++		? vulkan_acquire_screenshot_texture( uWidth, uHeight, false, uRGBCaptureFormat )
+ 		: gamescope::Rc<CVulkanTexture>{ s_pPipewireBuffer->texture };
+ 
+ 	gamescope::Rc<CVulkanTexture> pYUVTexture = s_pPipewireBuffer->texture->isYcbcr() ? s_pPipewireBuffer->texture : nullptr;

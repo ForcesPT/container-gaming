@@ -56,20 +56,41 @@ RUN mkdir -p /out/x86_64 /out/i386 \
 
 # =============================================================================
 # Stage: gamescope-builder
-#   Builds a PATCHED gamescope 3.16.19 from the 3v1n0 PPA source. The patch
-#   (scripts/gamescope-headless-drmprops.patch) fixes the headless backend crash
-#   "vulkan: physical device has no primary node → Failed to create backend":
+#   Builds a PATCHED gamescope 3.16.19 from the 3v1n0 PPA source. The single
+#   patch (scripts/gamescope-headless-drmprops.patch) fixes TWO image-side bugs
+#   that block the dpadplay `:dpad-SteamOS` headless streaming path:
+#
+#   Fix 1 (drmProps / headless backend crash):
 #     - relaxes the headless !drmProps.hasPrimary abort to a warning (headless
 #       does no KMS scanout, so a primary DRM node is not required);
 #     - adds a /dev/dri/renderD* scan fallback when drmProps.hasRender is false
 #       (gamescope 3.16.19's VkPhysicalDeviceDrmPropertiesEXT query returns zeros
 #       on some driver/device/container combos even though vulkaninfo sees
 #       hasPrimary=hasRender=true on the same device).
-#   Reproduced on UpCloud Helsinki NVIDIA L4 (driver 580) — see
-#   cloud/docs/UPCLOUD-L4-DEPLOY-2026-07.md §6a. Same error class as the Metalhost
-#   probe (STEAM-PROVIDER-RESEARCH.md §5a) + gamescope #1966. Keeps the heavy
-#   build deps (meson/ninja/wlroots-dev/libeis-dev/...) out of the final image;
-#   only the 4 patched binaries are COPY'd into vast-vm.
+#     Reproduced on UpCloud Helsinki NVIDIA L4 (driver 580 AND 595). Same error
+#     class as the Metalhost probe (STEAM-PROVIDER-RESEARCH.md §5a) + gamescope
+#     #1966. Upstream alignment: ValveSoftware/gamescope PR #2073.
+#
+#   Fix 2 (PipeWire black frame + inverted R/B on NVIDIA — gamescope #1596 / PR #2094):
+#     - adds `screenshotImageFlags.bSampled = true` in
+#       vulkan_acquire_screenshot_texture() (the screenshot/PipeWire texture
+#       was created without bSampled → no sampled image view for the RGB-to-NV12
+#       shader → NVIDIA returns BLACK pixels → severe whole-frame flicker;
+#       driver-agnostic, affects Intel + NVIDIA);
+#     - chains VkPhysicalDeviceDriverProperties into createDevice() + sets
+#       m_bIsNvidiaProprietaryDriver + isNvidiaProprietaryDriver();
+#     - in paint_pipewire(), uses DRM_FORMAT_XBGR2101010 on NVIDIA proprietary
+#       (sampling A2R10G10B10 on the NVIDIA proprietary driver returns R/B
+#       swapped → the RGB-to-NV12 colour matrix inverts colours).
+#     This was the UpCloud L4 "stream UP but UNUSABLE (severe flicker)" blocker —
+#     see cloud/docs/UPCLOUD-L4-DEPLOY-2026-07.md §12 + DRIVER-CUDA-MATRIX.md §5/§6.
+#     The earlier "580 menu-flicker / #1964" diagnosis was a misdiagnosis (#1964
+#     is a desktop DRM-embedded menu issue, not our headless streaming path).
+#
+#   Fix 2's createDevice() hunk touches the SAME drmProps block Fix 1 modifies;
+#   they coexist cleanly. Keeps the heavy build deps
+#   (meson/ninja/wlroots-dev/libeis-dev/...) out of the final image; only the 4
+#   patched binaries are COPY'd into vast-vm.
 # =============================================================================
 FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS gamescope-builder
 ARG DEBIAN_FRONTEND
