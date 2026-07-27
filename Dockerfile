@@ -434,13 +434,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends zenity && rm -r
 #    gamescopereaper. PipeWire + wireplumber must run before gamescope. The
 #    pipewiresrc zero-copy Selkies capture path (patch below) needs gstreamer1.0-
 #    pipewire; gstreamer1.0-x provides ximagesink for the :2-bridge fallback.
+#    libpixman-1-0 is explicitly installed from the PPA (0.46.4) because the
+#    gamescope-builder stage's apt-get build-dep pulls libpixman-1-dev 0.46.4
+#    from the same PPA, and gamescope 3.16.25's wlroots 0.19 calls
+#    pixman_region32_empty which only 0.46.4+ exports — noble's stock 0.42.2
+#    exports zero pixman_region32_* symbols, so without this the 3.16.25
+#    gamescope binary crashes at startup with 'undefined symbol:
+#    pixman_region32_empty'.
 RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common && \
     add-apt-repository -y ppa:3v1n0/gamescope && \
     apt-get update && apt-get install -y --no-install-recommends \
         gamescope pipewire pipewire-audio pipewire-pulse pipewire-audio-client-libraries \
         wireplumber libeis-dev gstreamer1.0-pipewire \
         gstreamer1.0-tools gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-        gstreamer1.0-x gstreamer1.0-plugins-base pulseaudio-utils && \
+        gstreamer1.0-x gstreamer1.0-plugins-base pulseaudio-utils \
+        libpixman-1-0 && \
     for b in gamescope gamescopereaper gamescopestream gamescopectl; do \
         [ -e /usr/games/$b ] && ln -sf /usr/games/$b /usr/bin/$b; \
     done && \
