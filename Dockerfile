@@ -104,7 +104,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get build-dep -y gamescope \
     && rm -rf /var/lib/apt/lists/*
 COPY scripts/gamescope-headless-drmprops.patch /tmp/gamescope-headless-drmprops.patch
-RUN git clone --depth 1 --branch 3.16.25 https://github.com/ValveSoftware/gamescope.git /tmp/gamescope \
+# --recurse-submodules: 3.16.25 added src/reshade (and uses wlroots/libliftoff/vkroots/
+# libdisplay-info/openvr/SPIRV-Headers) as git SUBMODULES, not meson wraps
+# (reshade has no .wrap). The 3v1n0 apt-get source tarball vendored them; a bare
+# git clone leaves the dirs empty -> meson 'Include dir reshade/source does not
+# exist'. --shallow-submodules keeps the submodule clones depth-1 (faster).
+RUN git clone --depth 1 --branch 3.16.25 --recurse-submodules --shallow-submodules https://github.com/ValveSoftware/gamescope.git /tmp/gamescope \
     && cd /tmp/gamescope \
     && patch -p1 < /tmp/gamescope-headless-drmprops.patch \
     && meson setup build \
