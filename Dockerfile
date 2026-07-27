@@ -55,6 +55,42 @@ RUN mkdir -p /out/x86_64 /out/i386 \
     && gcc -shared -fPIC -O2 -o /out/x86_64/libnvenc_fix.so /tmp/nvenc_fix.c -ldl
 
 # =============================================================================
+# Stage: gamescope-builder
+#   Builds a PATCHED gamescope 3.16.19 from the 3v1n0 PPA source. The patch
+#   (scripts/gamescope-headless-drmprops.patch) fixes the headless backend crash
+#   "vulkan: physical device has no primary node → Failed to create backend":
+#     - relaxes the headless !drmProps.hasPrimary abort to a warning (headless
+#       does no KMS scanout, so a primary DRM node is not required);
+#     - adds a /dev/dri/renderD* scan fallback when drmProps.hasRender is false
+#       (gamescope 3.16.19's VkPhysicalDeviceDrmPropertiesEXT query returns zeros
+#       on some driver/device/container combos even though vulkaninfo sees
+#       hasPrimary=hasRender=true on the same device).
+#   Reproduced on UpCloud Helsinki NVIDIA L4 (driver 580) — see
+#   cloud/docs/UPCLOUD-L4-DEPLOY-2026-07.md §6a. Same error class as the Metalhost
+#   probe (STEAM-PROVIDER-RESEARCH.md §5a) + gamescope #1966. Keeps the heavy
+#   build deps (meson/ninja/wlroots-dev/libeis-dev/...) out of the final image;
+#   only the 4 patched binaries are COPY'd into vast-vm.
+# =============================================================================
+FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS gamescope-builder
+ARG DEBIAN_FRONTEND
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common ca-certificates dpkg-dev \
+        meson ninja-build build-essential pkg-config cmake glslang-tools python3-jinja2 \
+    && add-apt-repository -y ppa:3v1n0/gamescope \
+    && sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/3v1n0-*.sources \
+    && apt-get update \
+    && cd /tmp && apt-get source gamescope \
+    && apt-get build-dep -y gamescope \
+    && rm -rf /var/lib/apt/lists/*
+COPY scripts/gamescope-headless-drmprops.patch /tmp/gamescope-headless-drmprops.patch
+RUN cd /tmp/gamescope-3.16.19 \
+    && patch -p1 < /tmp/gamescope-headless-drmprops.patch \
+    && meson setup build \
+    && ninja -C build \
+    && mkdir -p /out \
+    && cp build/src/gamescope build/src/gamescopereaper build/src/gamescopestream build/src/gamescopectl /out/
+
+# =============================================================================
 # Stage: base — shared by both final images
 #   Selkies-GStreamer + coturn + cloudflared + NVENC fix + display/audio/Mesa/
 #   X/Python + the dpad user. No launcher, no desktop — those are per-target.
@@ -383,6 +419,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     done && \
     (command -v gamescope && gamescope --version 2>&1 | head -1) && \
     rm -rf /var/lib/apt/lists/*
+
+# --- Patched gamescope binaries from gamescope-builder (headless hasPrimary /
+#    render-node fix — see gamescope-headless-drmprops.patch). Overrides the
+#    deb's /usr/games/ binaries; the /usr/bin symlinks above stay valid. ---
+COPY --from=gamescope-builder /out/gamescope /out/gamescopereaper /out/gamescopestream /out/gamescopectl /tmp/gs-patched/
+RUN cp -f /tmp/gs-patched/gamescope       /usr/games/gamescope \
+    && cp -f /tmp/gs-patched/gamescopereaper /usr/games/gamescopereaper \
+    && cp -f /tmp/gs-patched/gamescopestream /usr/games/gamescopestream \
+    && cp -f /tmp/gs-patched/gamescopectl  /usr/games/gamescopectl \
+    && chmod 755 /usr/games/gamescope /usr/games/gamescopereaper /usr/games/gamescopestream /usr/games/gamescopectl \
+    && rm -rf /tmp/gs-patched
 
 # --- Stage 2 zero-copy: patch Selkies' build_video_pipeline to capture
 #    gamescope's PipeWire node directly (pipewiresrc -> cudaupload -> cudaconvert

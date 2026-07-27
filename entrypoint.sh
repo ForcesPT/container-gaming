@@ -781,6 +781,59 @@ else
     echo "    install-display-drivers not present — skipping (graphics libs rely on toolkit injection)"
 fi
 
+# --- Vulkan ICD: use libEGL_nvidia.so.0 in headless/no-X11 envs (driver 595+) ---
+# NVIDIA's 595 driver (Vulkan 1.4) libGLX_nvidia.so.0 Vulkan ICD fails to init
+# without an X display server — the loader reports "Could not get 'vkCreateInstance'
+# via 'vk_icdGetInstanceProcAddr'" and vkCreateInstance returns NULL (driver init
+# failed). NVIDIA's own installed-components docs state libEGL_nvidia.so.0 should be
+# used as the Vulkan ICD "in environments where X11 client libraries are not
+# available" — and the gamescope --backend headless path has no X display server.
+# The .run installer's nvidia_icd.json points at libGLX_nvidia.so.0; rewrite it to
+# libEGL_nvidia.so.0 (idempotent; both libs export the full Vulkan ICD entry points).
+if [ -f /etc/vulkan/icd.d/nvidia_icd.json ] && [ -x /usr/bin/sed ]; then
+    if sed -i 's#"library_path"[[:space:]]*:[[:space:]]*"libGLX_nvidia.so.0"#"library_path" : "libEGL_nvidia.so.0"#' /etc/vulkan/icd.d/nvidia_icd.json 2>/dev/null; then
+        echo "    Vulkan ICD: pinned to libEGL_nvidia.so.0 (headless/no-X11 fix for driver 595+)"
+    fi
+fi
+
+# --- Render-node permissions: ensure ${USER_NAME} can open /dev/dri/renderD* ---
+# gamescope's headless backend opens the DRM render node (m_drmRendererFd, used
+# for drm syncobjs in Timeline.cpp). Both the normal drmGetDeviceFromDevId path
+# AND the dpadplay /dev/dri fallback (gamescope-headless-drmprops.patch) open() it
+# O_RDWR as ${USER_NAME}. Most hosts put the nvidia render node in group `render`
+# or `video` (and ${USER_NAME} is in both), but some hosts map it to an unexpected
+# GID — e.g. UpCloud Helsinki maps /dev/dri/renderD128 to GID 993, which in the
+# container's /etc/group is `polkitd` (NOT `render`=994 or `video`=44), so
+# ${USER_NAME} gets EACCES -> gamescope "failed to open DRM render node:
+# Permission denied" -> Failed to create backend. Detect the owning GID of the
+# first /dev/dri/renderD* node and, if ${USER_NAME} isn't already in it, add
+# ${USER_NAME} to that group (by name if the GID has a group entry, else create
+# a group for that GID). Takes effect for the new dpad session that
+# start_gamescope_session opens via su; idempotent. See
+# cloud/docs/UPCLOUD-L4-DEPLOY-2026-07.md §6a.
+if [ -e /dev/dri ] && command -v stat >/dev/null 2>&1 && command -v usermod >/dev/null 2>&1; then
+    RNODE=""
+    for n in /dev/dri/renderD*; do [ -e "$n" ] && RNODE="$n" && break; done
+    if [ -n "$RNODE" ]; then
+        RGID="$(stat -c %g "$RNODE" 2>/dev/null || true)"
+        if [ -n "$RGID" ] && ! id -G "$USER_NAME" 2>/dev/null | tr ' ' '\n' | grep -qx "$RGID"; then
+            RGRP="$(getent group "$RGID" | cut -d: -f1)"
+            if [ -n "$RGRP" ]; then
+                usermod -aG "$RGRP" "$USER_NAME" 2>/dev/null \
+                    && echo "[*] Render node $RNODE is group $RGRP (gid $RGID); added $USER_NAME to it" \
+                    || echo "    WARNING: could not add $USER_NAME to group $RGRP (gid $RGID); gamescope may fail to open $RNODE"
+            else
+                # No /etc/group entry for that GID — create one and add the user.
+                RGNAME="render-gid-${RGID}"
+                groupadd -g "$RGID" "$RGNAME" 2>/dev/null || true
+                usermod -aG "$RGNAME" "$USER_NAME" 2>/dev/null \
+                    && echo "[*] Render node $RNODE is gid $RGID (no group entry); created $RGNAME + added $USER_NAME" \
+                    || echo "    WARNING: could not add $USER_NAME to numeric gid $RGID; gamescope may fail to open $RNODE"
+            fi
+        fi
+    fi
+fi
+
 # --- CUDA Configuration (ported from vastai/base-image 05-configure-cuda.sh) ---
 # Clean stale cuda ldconfig entries, try forward-compat (datacenter GPUs),
 # fall back to minor-version compat (12.1 <= host Max CUDA, guaranteed by filter).

@@ -1,0 +1,136 @@
+Subject: [dpadplay] gamescope headless: relax hasPrimary + /dev/dri render-node fallback
+
+gamescope 3.16.19's CVulkanDevice::createDevice() queries VkPhysicalDeviceDrmPropertiesEXT
+via vkGetPhysicalDeviceProperties2 and aborts the headless backend when drmProps.hasPrimary
+is false ("physical device has no primary node") or drmProps.hasRender is false
+("physical device has no render node").
+
+On some driver/device/container combos (reproduced: UpCloud Helsinki NVIDIA L4, driver
+580.173.02, CDI-injected /dev/dri, gamescope-WSI layer loaded) gamescope's query returns
+drmProps entirely zeroed -- hasPrimary=false AND hasRender=false -- even though vulkaninfo
+(same ICD, same physical device, same WSI layer) reports hasPrimary=true / hasRender=true
+(primaryMinor=1 -> /dev/dri/card1, renderMinor=128 -> /dev/dri/renderD128, both present).
+The extension IS advertised (hasDrmProps=true) and the function pointer is resolved via
+vkGetInstanceProcAddr (instance is API 1.3), so the query *should* populate the struct --
+but it doesn't. This is a gamescope 3.16.19 query interop quirk, not a driver/ICD/node
+issue. (Driver 580 alone does NOT fix it; driver 595 additionally breaks the libGLX ICD
+for headless -- see UPCLOUD-L4-DEPLOY-2026-07.md blocker #1 for that separate fix.)
+
+The headless backend does no KMS scanout, so it genuinely does NOT need a primary DRM
+node. The render node IS needed (m_drmRendererFd -> drm syncobjs in Timeline.cpp), but
+when the query returns zeros we can fall back to scanning /dev/dri/renderD* (the CDI-
+injected nvidia render node) and open it directly.
+
+This patch:
+  1. Relaxes the headless !drmProps.hasPrimary abort to a warning (continue without a
+     primary dev id -- the existing `if (drmProps.hasPrimary)` guard already handles
+     hasPrimary=false gracefully for m_drmPrimaryDevId; and vulkan_primary_dev_id() is
+     only called from DRMBackend.cpp, which the headless backend never uses).
+  2. Wraps the render-node acquisition in `if (drmProps.hasRender) {normal
+     drmGetDeviceFromDevId path} else {/dev/dri/renderD* scan fallback}` so the headless
+     backend can still obtain m_drmRendererFd when the query returns zeros.
+
+Apply on top of the 3v1n0 gamescope 3.16.19 source (`apt-get source gamescope` on noble
+with the 3v1n0 PPA + deb-src enabled) and rebuild with `meson setup build && ninja -C
+build`. Install build/src/{gamescope,gamescopereaper,gamescopestream,gamescopectl} over
+the deb's /usr/games/ binaries.
+
+A SEPARATE prerequisite: the dpad user must be able to open /dev/dri/renderD128. Some
+hosts map the nvidia render node's GID to an unexpected group (UpCloud: GID 993 =
+`polkitd` in the container, while dpad is only in video/audio/input). The entrypoint
+must ensure dpad is in the render node's owning group (or chmod the node) -- see the
+UPCLOUD-L4-DEPLOY-2026-07.md render-node permissions fix.
+
+--- a/src/rendervulkan.cpp
++++ b/src/rendervulkan.cpp
+@@ -11,6 +11,7 @@
+ #include <bitset>
+ #include <thread>
+ #include <dlfcn.h>
++#include <dirent.h>
+ #include "vulkan_include.h"
+ #include "Utils/Algorithm.h"
+ 
+@@ -473,28 +474,63 @@
+ 		vk.GetPhysicalDeviceProperties2( physDev(), &props2 );
+ 
+ 		if ( !GetBackend()->UsesVulkanSwapchain() && !drmProps.hasPrimary ) {
+-			vk_log.errorf( "physical device has no primary node" );
+-			return false;
+-		}
+-		if ( !drmProps.hasRender ) {
+-			vk_log.errorf( "physical device has no render node" );
+-			return false;
++			// dpadplay: headless backend does no KMS scanout, so a primary DRM node
++			// is not required. Some driver/device combos report hasPrimary=false here
++			// even though vulkaninfo sees hasPrimary=true on the same device (a
++			// gamescope 3.16.19 VK_EXT_physical_device_drm query quirk). Warn and
++			// continue instead of aborting so the headless backend still comes up.
++			vk_log.warnf( "physical device has no primary node (headless backend; continuing without one)" );
+ 		}
++		if ( drmProps.hasRender )
++		{
++			dev_t renderDevId = makedev( drmProps.renderMajor, drmProps.renderMinor );
++			drmDevice *drmDev = nullptr;
++			if (drmGetDeviceFromDevId(renderDevId, 0, &drmDev) != 0) {
++				vk_log.errorf( "drmGetDeviceFromDevId() failed" );
++				return false;
++			}
++			assert(drmDev->available_nodes & (1 << DRM_NODE_RENDER));
++			const char *drmRenderName = drmDev->nodes[DRM_NODE_RENDER];
+ 
+-		dev_t renderDevId = makedev( drmProps.renderMajor, drmProps.renderMinor );
+-		drmDevice *drmDev = nullptr;
+-		if (drmGetDeviceFromDevId(renderDevId, 0, &drmDev) != 0) {
+-			vk_log.errorf( "drmGetDeviceFromDevId() failed" );
+-			return false;
++			m_drmRendererFd = open( drmRenderName, O_RDWR | O_CLOEXEC );
++			drmFreeDevice(&drmDev);
++			if ( m_drmRendererFd < 0 ) {
++				vk_log.errorf_errno( "failed to open DRM render node" );
++				return false;
++			}
+ 		}
+-		assert(drmDev->available_nodes & (1 << DRM_NODE_RENDER));
+-		const char *drmRenderName = drmDev->nodes[DRM_NODE_RENDER];
+-
+-		m_drmRendererFd = open( drmRenderName, O_RDWR | O_CLOEXEC );
+-		drmFreeDevice(&drmDev);
+-		if ( m_drmRendererFd < 0 ) {
+-			vk_log.errorf_errno( "failed to open DRM render node" );
+-			return false;
++		else
++		{
++			// dpadplay fallback: gamescope 3.16.19's drmProps query returns zeros on
++			// some driver/device combos (vulkaninfo sees hasRender=true on the same
++			// device). The render node IS present in /dev/dri/renderD* (CDI-injected),
++			// so scan and open it directly so the headless backend can proceed
++			// (m_drmRendererFd is needed for drm syncobjs).
++			vk_log.warnf( "physical device has no render node (query false); falling back to /dev/dri scan" );
++			DIR *dir = opendir( "/dev/dri" );
++			if ( !dir ) {
++				vk_log.errorf_errno( "failed to open /dev/dri for render-node fallback" );
++				return false;
++			}
++			char renderPath[64] = {0};
++			struct dirent *ent;
++			while ( ( ent = readdir( dir ) ) != nullptr ) {
++				if ( strncmp( ent->d_name, "renderD", 7 ) == 0 ) {
++					snprintf( renderPath, sizeof(renderPath), "/dev/dri/%s", ent->d_name );
++					break;
++				}
++			}
++			closedir( dir );
++			if ( renderPath[0] == '\0' ) {
++				vk_log.errorf( "no /dev/dri/renderD* node found for fallback" );
++				return false;
++			}
++			vk_log.infof( "render-node fallback: opening %s", renderPath );
++			m_drmRendererFd = open( renderPath, O_RDWR | O_CLOEXEC );
++			if ( m_drmRendererFd < 0 ) {
++				vk_log.errorf_errno( "failed to open DRM render node (fallback)" );
++				return false;
++			}
+ 		}
+ 
+ 		if ( drmProps.hasPrimary ) {
