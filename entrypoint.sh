@@ -411,7 +411,7 @@ start_gamescope_stream() {
     [ "$video_src" = "pipewiresrc" ] && selkies_dpy="${in_dpy:-:0}"
 
     # Selkies launch command (reused by the NVENC-register retry below).
-    local selkies_cmd="export DISPLAY=${selkies_dpy} DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=${in_dpy} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
+    local selkies_cmd="export DISPLAY=${selkies_dpy} DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=${in_dpy} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
     # Launch Selkies, then verify the encoder registered. On multi-GPU hosts
     # (NVIDIA driver 570+) the FIRST nvh264enc open on a non-zero GPU minor can
     # fail at plugin-register time (gstnvenc.c NvEncOpenEncodeSessionEx 'error
@@ -440,7 +440,7 @@ start_gamescope_stream() {
             echo "    WARNING: nvh264enc failed to register after ${max_attempts} attempts (see /tmp/selkies.log) — video may be broken; set DPAD_GAMESCOPE_ENCODER=x264enc for software fallback"
             tail -8 /tmp/selkies.log 2>/dev/null | sed 's/^/      /'
         fi
-        echo "    Selkies running on 127.0.0.1:16100 (gamescope bridge, encoder=${enc})$([ "${attempt}" -gt 1 ] && echo " — encoder registered on attempt ${attempt}/${max_attempts}")"
+        echo "    Selkies running on ${DPAD_SELKIES_BIND:-127.0.0.1}:16100 (gamescope bridge, encoder=${enc}, audio_fec=${DPAD_AUDIO_PACKETLOSS:-0}%, video_fec=${DPAD_VIDEO_PACKETLOSS:-0}%)$([ "${attempt}" -gt 1 ] && echo " — encoder registered on attempt ${attempt}/${max_attempts}")"
         break
     done
 
@@ -1729,12 +1729,12 @@ EOF
 fi
 
 if [ -n "$SELKIES_RTC_CONFIG" ]; then
-    as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=${PIPEWIRE_LATENCY} GST_DEBUG=${GST_DEBUG} LD_PRELOAD='${LD_PRELOAD}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${SELKIES_ENC} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --rtc_config_json='${SELKIES_RTC_CONFIG}' --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
+    as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=${PIPEWIRE_LATENCY} GST_DEBUG=${GST_DEBUG} LD_PRELOAD='${LD_PRELOAD}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=16100 --enable_https=false --encoder=${SELKIES_ENC} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --rtc_config_json='${SELKIES_RTC_CONFIG}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
 else
-    as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=${PIPEWIRE_LATENCY} GST_DEBUG=${GST_DEBUG} LD_PRELOAD='${LD_PRELOAD}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=127.0.0.1 --port=16100 --enable_https=false --encoder=${SELKIES_ENC} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --turn_host='${PUBLIC_IP:-127.0.0.1}' --turn_port=${TURN_PORT_EXT} --turn_protocol=${SELKIES_TURN_PROTOCOL} --turn_username='${TURN_USER}' --turn_password='${TURN_PASS}' --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
+    as_user "export DISPLAY=${DISPLAY_NUM} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=${PIPEWIRE_LATENCY} GST_DEBUG=${GST_DEBUG} LD_PRELOAD='${LD_PRELOAD}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=16100 --enable_https=false --encoder=${SELKIES_ENC} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --turn_host='${PUBLIC_IP:-127.0.0.1}' --turn_port=${TURN_PORT_EXT} --turn_protocol=${SELKIES_TURN_PROTOCOL} --turn_username='${TURN_USER}' --turn_password='${TURN_PASS}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --web_root=${SELKIES_WEB_ROOT}" >/tmp/selkies.log 2>&1 &
 fi
 sleep 4
-pgrep -f "selkies-gstreamer" >/dev/null && echo "    Selkies running on 127.0.0.1:16100 (encoder=${SELKIES_ENC})" || { echo "    WARNING: selkies failed (see /tmp/selkies.log)"; tail -n 30 /tmp/selkies.log; }
+pgrep -f "selkies-gstreamer" >/dev/null && echo "    Selkies running on ${DPAD_SELKIES_BIND:-127.0.0.1}:16100 (encoder=${SELKIES_ENC}, audio_fec=${DPAD_AUDIO_PACKETLOSS:-0}%, video_fec=${DPAD_VIDEO_PACKETLOSS:-0}%)" || { echo "    WARNING: selkies failed (see /tmp/selkies.log)"; tail -n 30 /tmp/selkies.log; }
 
 # (mws + mws-autopair removed — Selkies is the only browser stream.)
 
