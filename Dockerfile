@@ -56,55 +56,56 @@ RUN mkdir -p /out/x86_64 /out/i386 \
 
 # =============================================================================
 # Stage: gamescope-builder
-#   Builds a PATCHED gamescope 3.16.19 from the 3v1n0 PPA source. The single
-#   patch (scripts/gamescope-headless-drmprops.patch) fixes TWO image-side bugs
-#   that block the dpadplay `:dpad-SteamOS` headless streaming path:
+#   Builds a PATCHED gamescope from the UPSTREAM 3.16.25 release tag (the 3v1n0
+#   PPA only ships 3.16.19; upstream is at 3.16.25 — 6 point releases newer, the
+#   bet being a newer gamescope may have fixed the PipeWire black-frame / `out of
+#   buffers` race that made the UpCloud L4 stream UNUSABLE; see
+#   cloud/docs/UPCLOUD-L4-DEPLOY-2026-07.md §13). meson fetches the wrapped
+#   subprojects (glm/stb/wlroots/vkroots/libdisplay-info/libliftoff) itself.
 #
-#   Fix 1 (drmProps / headless backend crash):
+#   The single patch (scripts/gamescope-headless-drmprops.patch) is now Fix-1-ONLY
+#   (rebased for 3.16.25):
 #     - relaxes the headless !drmProps.hasPrimary abort to a warning (headless
 #       does no KMS scanout, so a primary DRM node is not required);
 #     - adds a /dev/dri/renderD* scan fallback when drmProps.hasRender is false
-#       (gamescope 3.16.19's VkPhysicalDeviceDrmPropertiesEXT query returns zeros
-#       on some driver/device/container combos even though vulkaninfo sees
+#       (gamescope's VkPhysicalDeviceDrmPropertiesEXT query returns zeros on some
+#       driver/device/container combos even though vulkaninfo sees
 #       hasPrimary=hasRender=true on the same device).
 #     Reproduced on UpCloud Helsinki NVIDIA L4 (driver 580 AND 595). Same error
 #     class as the Metalhost probe (STEAM-PROVIDER-RESEARCH.md §5a) + gamescope
-#     #1966. Upstream alignment: ValveSoftware/gamescope PR #2073.
+#     #1966. Upstream PR #2073 (merged 2026-04-28) does NOT fix our case — it only
+#     added the `if (!hasDrmProps)` (lavapipe) branch; the `!hasPrimary`/`!hasRender`
+#     aborts inside the `else` block are UNCHANGED in 3.16.25, so this patch is
+#     still required.
 #
-#   Fix 2 (PipeWire black frame + inverted R/B on NVIDIA — gamescope #1596 / PR #2094):
-#     - adds `screenshotImageFlags.bSampled = true` in
-#       vulkan_acquire_screenshot_texture() (the screenshot/PipeWire texture
-#       was created without bSampled → no sampled image view for the RGB-to-NV12
-#       shader → NVIDIA returns BLACK pixels → severe whole-frame flicker;
-#       driver-agnostic, affects Intel + NVIDIA);
-#     - chains VkPhysicalDeviceDriverProperties into createDevice() + sets
-#       m_bIsNvidiaProprietaryDriver + isNvidiaProprietaryDriver();
-#     - in paint_pipewire(), uses DRM_FORMAT_XBGR2101010 on NVIDIA proprietary
-#       (sampling A2R10G10B10 on the NVIDIA proprietary driver returns R/B
-#       swapped → the RGB-to-NV12 colour matrix inverts colours).
-#     This was the UpCloud L4 "stream UP but UNUSABLE (severe flicker)" blocker —
-#     see cloud/docs/UPCLOUD-L4-DEPLOY-2026-07.md §12 + DRIVER-CUDA-MATRIX.md §5/§6.
-#     The earlier "580 menu-flicker / #1964" diagnosis was a misdiagnosis (#1964
-#     is a desktop DRM-embedded menu issue, not our headless streaming path).
+#   DROPPED vs the old 3.16.19 patch: Fix 2 (gamescope PR #2094 —
+#     `screenshotImageFlags.bSampled = true` + the NVIDIA R/B swap). It was the §12
+#     diagnosis for the black-frame flicker, but was REBUILT + HUMAN-TESTED on the
+#     UpCloud L4 and did NOT fix the flicker (§13): our Selkies `pipewiresrc` path
+#     negotiates BGRx (RGB), NOT NV12, so gamescope's `paint_pipewire()`
+#     `isYcbcr()` is false and the screenshot-texture path where PR #2094 lives
+#     NEVER EXECUTES — it was dead code on our path. Removed to keep the patch
+#     focused. (If a future capture path switches to NV12, re-add PR #2094.)
 #
-#   Fix 2's createDevice() hunk touches the SAME drmProps block Fix 1 modifies;
-#   they coexist cleanly. Keeps the heavy build deps
-#   (meson/ninja/wlroots-dev/libeis-dev/...) out of the final image; only the 4
+#   Build deps come from the 3v1n0 PPA's `apt-get build-dep gamescope` (still
+#   deb-src-enabled) — a proven superset of 3.16.25's system-dep needs; the
+#   version-sensitive subprojects (wlroots/libliftoff/etc.) are fetched by meson
+#   as wraps. Keeps the heavy build deps out of the final image; only the 4
 #   patched binaries are COPY'd into vast-vm.
 # =============================================================================
 FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS gamescope-builder
 ARG DEBIAN_FRONTEND
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        software-properties-common ca-certificates dpkg-dev \
+        software-properties-common ca-certificates dpkg-dev git \
         meson ninja-build build-essential pkg-config cmake glslang-tools python3-jinja2 \
     && add-apt-repository -y ppa:3v1n0/gamescope \
     && sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/3v1n0-*.sources \
     && apt-get update \
-    && cd /tmp && apt-get source gamescope \
     && apt-get build-dep -y gamescope \
     && rm -rf /var/lib/apt/lists/*
 COPY scripts/gamescope-headless-drmprops.patch /tmp/gamescope-headless-drmprops.patch
-RUN cd /tmp/gamescope-3.16.19 \
+RUN git clone --depth 1 --branch 3.16.25 https://github.com/ValveSoftware/gamescope.git /tmp/gamescope \
+    && cd /tmp/gamescope \
     && patch -p1 < /tmp/gamescope-headless-drmprops.patch \
     && meson setup build \
     && ninja -C build \
