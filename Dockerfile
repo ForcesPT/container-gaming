@@ -112,7 +112,7 @@ COPY scripts/gamescope-headless-drmprops.patch /tmp/gamescope-headless-drmprops.
 RUN git clone --depth 1 --branch 3.16.25 --recurse-submodules --shallow-submodules https://github.com/ValveSoftware/gamescope.git /tmp/gamescope \
     && cd /tmp/gamescope \
     && patch -p1 < /tmp/gamescope-headless-drmprops.patch \
-    && meson setup build \
+    && meson setup build -Denable_tests=false \
     && ninja -C build \
     && mkdir -p /out \
     && cp build/src/gamescope build/src/gamescopereaper build/src/gamescopestream build/src/gamescopectl /out/
