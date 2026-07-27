@@ -1,5 +1,53 @@
 # DpadCloud Container Gaming — Project State & Continuation Guide
 
+> **UPDATE 2026-07-27 — gamescope 3.16.25 upgrade + UpCloud L4 flicker RESOLVED (595 → 580).**
+>
+> **gamescope 3.16.25.** The `gamescope-builder` Dockerfile stage now builds from the
+> **upstream 3.16.25 release tag** (git clone `--depth 1 --branch 3.16.25
+> --recurse-submodules --shallow-submodules`) instead of the 3v1n0 PPA's 3.16.19
+> (`apt-get source gamescope`). 3.16.25 added `src/reshade` as a git submodule
+> (no `.wrap`), so `--recurse-submodules` is required (a bare clone leaves it
+> empty → `meson 'Include dir reshade/source does not exist'`). Build also needs
+> `-Denable_tests=false` (skip the `catch2-with-main` test dep) and the `vast-vm`
+> stage must install **`libpixman-1-0` 0.46.4 from the 3v1n0 PPA** — gamescope
+> 3.16.25's wlroots 0.19 calls `pixman_region32_empty`, which only libpixman 0.46.4+
+> exports; noble's stock 0.42.2 exports zero `pixman_region32_*` symbols, so
+> without it the 3.16.25 gamescope binary crashes at startup with `undefined
+> symbol: pixman_region32_empty`. The patch
+> (`scripts/gamescope-headless-drmprops.patch`) is rebased for 3.16.25 and is now
+> **Fix-1-only** — the PR #2094 `bSampled` + NVIDIA R/B swap code was **dropped**
+> (dead code on our BGRx `pipewiresrc` path: `paint_pipewire()` `isYcbcr()`=false so
+> the screenshot-texture path never runs; the PR #2094 rebuild changed nothing).
+> Upstream PR #2073 (merged 2026-04-28) does NOT replace our Fix 1 — it only added
+> the `!hasDrmProps` (lavapipe) branch; the `!hasPrimary`/`!hasRender` aborts are
+> unchanged in 3.16.25, so our drmProps headless patch is still required.
+> Commits `fea6db1`..`b0da04c` on `ForcesPT/container-gaming` main.
+>
+> **UpCloud L4 flicker RESOLVED — 595-specific, use R580 LTS.** The severe
+> whole-frame black/real flicker that made the UpCloud Helsinki L4 stream unusable
+> is **driver-595-specific**. A same-box A/B (driver 595.58.03 → 580.173.02,
+> identical gamescope 3.16.25 image, identical flags) proved: **580 = only the mild
+> pre-existing Steam-menu flicker (gamescope #1964, acceptable — same as the Vast
+> RTX 3060/580 baseline); 595 = severe whole-frame flicker (unusable).** The L4
+> oversubscription pool **must run R580 LTS** — the UpCloud AI/ML Ubuntu template
+> ships 595.58.03, so `apt remove nvidia-driver-pinning-595.58.03 && apt install
+> nvidia-driver-580-open` (580.173.02) + reboot is a **required deploy step**. The
+> image boots on both 580 and 595 (the EGL-ICD entrypoint patch is a no-op on 580;
+> the drmProps + render-node fixes fire on both); the flicker is a **host-driver
+> runtime bug** (595's PipeWire compositing on NVIDIA-headless produces the severe
+> black frames), fixed by the host downgrade, not the image. The 3.16.25 upgrade
+> did NOT fix the flicker (the buffer-race isn't version-fixed upstream) but is
+> still kept. See `cloud/docs/UPCLOUD-L4-DEPLOY-2026-07.md` §13.9 +
+> `cloud/docs/DRIVER-CUDA-MATRIX.md` §5/§6 for the full A/B + the corrected
+> diagnosis (the prior "#1596 / PR #2094" and "driver-agnostic" conclusions were
+> both wrong).
+>
+> **PENDING (owner):** `docker push forcespt/dpadcloud-gaming:dpad-SteamOS-L4`
+> (push the 3.16.25 build so the public Docker Hub tag is no longer the old
+> flickering 3.16.19 image — the box is not logged in to Docker Hub); then
+> re-enable the `dpadcloud-bootstrap` systemd oneshot on the L4 box (it was
+> disabled to stop it `docker pull`-ing the old image on boot).
+
 > **UPDATE 2026-07-14 — HEROIC sshd + B1 self-hosted stream (dpadplay VPS reverse-proxy). New env: `DPAD_TUNNEL`, `DPAD_ORCHESTRATOR_PUBKEY`, `DPAD_SSH_ENDPOINT`.**
 >
 > The `:dpad-heroic` image now runs `sshd` (pubkey-only, `AllowUsers=dpad`, port 22) so the **dpadplay control plane** (the `dpadplay/cloud` repo) can reverse-proxy the Selkies signaling over an SSH tunnel instead of cloudflared — the stream URL becomes `https://play-<id>.dpadplay.com` (no `trycloudflare.com`). Three additions in `entrypoint.sh` + the `vast-docker` Dockerfile stage:
