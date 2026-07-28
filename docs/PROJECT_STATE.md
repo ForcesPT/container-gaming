@@ -1,5 +1,17 @@
 # DpadCloud Container Gaming — Project State & Continuation Guide
 
+> **UPDATE 2026-07-27 (evening) — direct-IP Selkies bind + built-in Opus/ULP_RED FEC env knobs (UpCloud stream model).**
+>
+> **The stream stack already had the quality levers — they were just unwired.** Selkies-GStreamer 1.6.2 has built-in: (a) **Opus inband FEC** (`opusenc inband-fec`, gated on `audio_packetloss_percent`); (b) **ULP_RED video FEC** (RFC 2198 forward redundancy on the transceiver via `fec-type=ULP_RED` + `fec-percentage`, gated on `video_packetloss_percent` — the Boosteroid-style path, better than NACK for sustained loss); (c) **NACK rtx retransmission** (the `rtxSsrc` flow is active by default — confirmed in `chrome://webrtc-internals`). No patchers needed — just pass the two `--*_packetloss_percent` flags at launch.
+>
+> **`entrypoint.sh` (commit `d55d6ee`) wires them through env** on all 3 Selkies launch sites (gamescope `selkies_cmd` + the 2 DFP paths): `--addr=${DPAD_SELKIES_BIND:-127.0.0.1}` (default `127.0.0.1` for Vast-SSH back-compat; `0.0.0.0` for UpCloud/direct-IP so Selkies is reachable at `<public-ip>:16100` direct) + `--audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0}` + `--video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0}`. The `fec_video_bitrate = video_bitrate / (1 + %/100)` auto-trim (`gstwebrtc_app.py` line 109) makes room for the redundancy. Defaults are 0/`127.0.0.1` → existing Vast launches unchanged.
+>
+> **pixelflux migration is NOT the path for gamescope headless.** pixelflux's X11 backend captures via XShm on `DISPLAY` (black on gamescope's rootless Xwayland `:0` — no root pixmap); its Wayland backend is its own Smithay compositor (needs DRM master → kills N-on-N oversubscription). Neither captures gamescope's PipeWire node. **Keep GStreamer `pipewiresrc`** (the only frame source for headless); the FEC/transport improvements happen above it. The linuxserver/pixelflux stack works for them because they run Steam in a Smithay session *as the compositor* (DRM master, single-user) — the opposite of our N-on-N model.
+>
+> **Verified live on UpCloud Helsinki L4** (`212.147.250.160`, driver 580.173.02, `:dpad-SteamOS-L4-streamtest` image): `Selkies running on 0.0.0.0:16100 (audio_fec=10%, video_fec=10%)`, `curl http://<ip>:16100 → 401` direct, coturn UDP 3478 reachable, `chrome://webrtc-internals` shows `rtxSsrc` (NACK rtx active) + `D3D11VideoDecoder` (HW decode) + `dtlsState=connected`. Latency 86ms from Portugal = 65ms RTT + ~20ms pipeline. Control-plane side (stream-bridge `direct` mode + worker `DPAD_TUNNEL_MODE=direct`) landed in `ForcesPT/dpadplay@214cade`.
+>
+> **PENDING (owner):** `docker push forcespt/dpadcloud-gaming:dpad-SteamOS-L4` (the public tag is still the stale 3.16.19 flickering image; the UpCloud box has a local `:dpad-SteamOS-L4-streamtest` = the `d55d6ee` state — retag + push, or rebuild locally from `d55d6ee`; the box isn't logged in to Docker Hub).
+
 > **UPDATE 2026-07-27 — gamescope 3.16.25 upgrade + UpCloud L4 flicker RESOLVED (595 → 580).**
 >
 > **gamescope 3.16.25.** The `gamescope-builder` Dockerfile stage now builds from the
