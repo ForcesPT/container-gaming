@@ -255,6 +255,47 @@ ensure_image() {
 }
 
 # -----------------------------------------------------------------------------
+# Phase 4b (v2 warm-VM): start the NVIDIA MPS daemon for GPU oversubscription.
+# MPS lets N containers share one GPU's SMs concurrently (the v2 tier slice —
+# 3:1 Casual, 2:1 Standard, …). The daemon runs as root on the host; per-session
+# containers join it via CUDA_MPS_PIPE_DIRECTORY (dpad-launch-session sets that
+# env on each container). Best-effort: 1:1 (single container) works without MPS,
+# so a failure here only warns (the first warm-pool test is 1:1 anyway).
+# -----------------------------------------------------------------------------
+ensure_mps() {
+    export CUDA_MPS_PIPE_DIRECTORY="${CUDA_MPS_PIPE_DIRECTORY:-/tmp/nvidia-mps}"
+    export CUDA_MPS_LOG_DIRECTORY="${CUDA_MPS_LOG_DIRECTORY:-/tmp/nvidia-mps-log}"
+    mkdir -p "$CUDA_MPS_PIPE_DIRECTORY" "$CUDA_MPS_LOG_DIRECTORY"
+    if ! command -v nvidia-cuda-mps-control >/dev/null 2>&1; then
+        log "MPS: nvidia-cuda-mps-control not found — skipping (1:1 still works; install nvidia-cuda-toolkit for oversubscription)"
+        return 0
+    fi
+    if pgrep -x nvidia-cuda-mps-control >/dev/null 2>&1; then
+        log "MPS daemon already running"
+        return 0
+    fi
+    # Persistence mode first (MPS wants it).
+    nvidia-smi -pm 1 >/dev/null 2>&1 || true
+    if nvidia-cuda-mps-control -d 2>/dev/null; then
+        log "MPS daemon started (pipe $CUDA_MPS_PIPE_DIRECTORY) — oversubscription ready"
+    else
+        log "MPS: nvidia-cuda-mps-control -d failed — continuing (1:1 still works)"
+    fi
+}
+
+# v2 warm-VM mode: DPAD_WARM_VM=1 (default) leaves the VM WARM after host prep
+# (Docker + image + MPS ready) with 0 session containers — a session is a fresh
+# container launched by dpad-launch-session with the user's volume (you can't
+# bind-mount a volume into a running container). DPAD_WARM_VM=0 keeps the v1
+# 1:1 flow (run N containers at boot + report Selkies URLs) for back-compat.
+DPAD_WARM_VM="${DPAD_WARM_VM:-1}"
+
+# v2 VM-ready marker: touched once host prep + image + MPS are done (warm-VM
+# mode). The dpadplay bootstrap worker polls for this file instead of the old
+# docker-ps-count heuristic (a warm VM has 0 running session containers).
+VM_READY_FILE="/opt/dpadcloud/vm-ready"
+
+# -----------------------------------------------------------------------------
 # Phase 4: run one container per GPU (multi-tenant)
 # -----------------------------------------------------------------------------
 count_gpus() {
@@ -524,12 +565,25 @@ report_all_urls() {
 # The full bootstrap (phases 1-5), with the one reboot in phase 1
 # -----------------------------------------------------------------------------
 bootstrap() {
-    log "=== DpadCloud VM bootstrap starting (multi-tenant: 1 user/GPU) ==="
+    log "=== DpadCloud VM bootstrap starting (warm-VM mode=${DPAD_WARM_VM}) ==="
     systemctl start docker 2>/dev/null || true
     ensure_modeset            # may reboot once; resumes here after
     ensure_nct                || return 1
     ensure_userns
     ensure_image              || return 1
+    if [ "${DPAD_WARM_VM}" = "1" ]; then
+        # v2 warm-VM: host prep + image + MPS, then emit the VM-ready marker and
+        # STOP — no pre-launched session containers (a session = a fresh
+        # container with the user's volume, launched by dpad-launch-session).
+        ensure_mps
+        mkdir -p /opt/dpadcloud
+        echo "ready $(date -Is)" > "$VM_READY_FILE"
+        log "DPAD_VM_READY — warm pool VM ready (Docker + image + MPS); 0 session containers"
+        echo "DPAD_VM_READY"
+        log "=== DpadCloud VM bootstrap complete (warm) ==="
+        return 0
+    fi
+    # v1 back-compat: run one container per GPU + report Selkies URLs.
     run_all_containers        || return 1
     report_all_urls           || return 1
     log "=== DpadCloud VM bootstrap complete ==="
@@ -560,7 +614,7 @@ install_self() {
 
     cat > "/etc/systemd/system/${SERVICE_NAME}" <<UNIT
 [Unit]
-Description=DpadCloud VM bootstrap (modeset -> nct -> pull -> N containers)
+Description=DpadCloud VM bootstrap (modeset -> nct -> pull -> MPS -> warm-VM ready)
 After=network-online.target docker.service
 Wants=network-online.target
 ConditionPathExists=/usr/bin/docker

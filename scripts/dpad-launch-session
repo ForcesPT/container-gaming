@@ -124,6 +124,8 @@ launch() {
         "${res[@]}" \
         -p "${port}:${port}/udp" \
         -v "${mnt}:/mnt/dpad-library" \
+        -v "/tmp/nvidia-mps:/tmp/nvidia-mps" \
+        -e CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps \
         -e DPAD_GAMESCOPE=1 \
         -e DPAD_SLOT="$slot" \
         -e DPAD_COTURN_PORT="$port" \
