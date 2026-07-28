@@ -36,6 +36,7 @@
 set -uo pipefail
 
 TURN_BASE_PORT=3478
+SELKIES_BASE_PORT=16100
 IMAGE_DEFAULT="forcespt/dpadcloud-gaming:dpad-SteamOS"
 MOUNT_ROOT="/mnt/dpad-vol"
 LABEL_PREFIX="dpadvol"
@@ -99,6 +100,7 @@ launch() {
     local slot="$1" volumeId="$2" device="$3" pass="$4" image="${5:-$IMAGE_DEFAULT}"
     local name="${CONTAINER_PREFIX}-${slot}"
     local port=$(( TURN_BASE_PORT + slot ))
+    local selkies_port=$(( SELKIES_BASE_PORT + slot ))
 
     # Stop+remove a stale container at this slot (a re-launch after a crash).
     if docker ps -a --format '{{.Names}}' | grep -qx "$name"; then
@@ -123,6 +125,7 @@ launch() {
         --shm-size=2g --ulimit nofile=1048576:1048576 \
         "${res[@]}" \
         -p "${port}:${port}/udp" \
+        -p "${selkies_port}:16100" \
         -v "${mnt}:/mnt/dpad-library" \
         -e DPAD_VOLUME_MOUNT=/mnt/dpad-library \
         -v "/tmp/nvidia-mps:/tmp/nvidia-mps" \
@@ -137,7 +140,7 @@ launch() {
         -e SELKIES_BASIC_AUTH_USER=dpad \
         -e "SELKIES_BASIC_AUTH_PASSWORD=${pass}" \
         "$image" || { err "docker run $name failed"; return 1; }
-    log "container $name launched (coturn ${port}/udp, login dpad/${pass:0:4}…)"
+    log "container $name launched (coturn ${port}/udp, selkies ${selkies_port}->16100, login dpad/${pass:0:4}…)"
 
     # Wait for the DPAD_READY marker (entrypoint emits it once Selkies is up).
     local deadline=$(( $(date +%s) + 360 ))   # 6 min (container boot ~50s + Steam)
