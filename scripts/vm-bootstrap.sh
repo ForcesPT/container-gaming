@@ -97,6 +97,51 @@ err()  { echo "[dpadcloud-bootstrap][ERROR] $*" >&2; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # -----------------------------------------------------------------------------
+# Phase 0: NVIDIA driver = R580 LTS  (REQUIRED on the L4 oversubscription pool.
+# The UpCloud AI/ML Ubuntu template ships driver 595.58.03, which produces
+# SEVERE whole-frame flicker on the L4 headless stream — a same-box A/B proved
+# 595 = unusable, 580 = only the mild pre-existing Steam-menu flicker (gamescope
+# #1964, acceptable). See cloud/docs/DRIVER-CUDA-MATRIX.md §3/§5 +
+# UPCLOUD-L4-DEPLOY-2026-07.md §13.9. Only 595 is downgraded; 580 is left alone,
+# other versions are warned-but-left (don't break a working host). Idempotent —
+# after the reboot this sees 580 and returns. The systemd service resumes after.)
+# -----------------------------------------------------------------------------
+ensure_driver_580() {
+    local drv
+    drv="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | tr -d '[:space:]')"
+    log "NVIDIA driver = ${drv:-?} (need 580.x on the L4 pool)"
+    [ -z "$drv" ] && { log "no driver detected — skipping driver pin (template has none?)"; return 0; }
+    case "$drv" in
+        580.*) log "driver already 580 LTS — good"; return 0 ;;
+        595.*) : ;;  # the known-bad flicker driver — downgrade below
+        *)    log "WARNING: driver $drv is not 580 or 595 — leaving it (only 595 is auto-downgraded)"; return 0 ;;
+    esac
+
+    log "driver is 595 (severe L4 flicker) — downgrading to nvidia-driver-580-open + reboot"
+    apt-get update >/dev/null 2>&1 || true
+    # Remove the version-pinning package(s) so apt is free to install 580.
+    local pin
+    pin="$(dpkg -l 2>/dev/null | awk '/^ii.*nvidia-driver-pinning/{print $2}' | paste -sd ' ')"
+    if [ -n "$pin" ]; then
+        log "removing pinning package(s): $pin"
+        DEBIAN_FRONTEND=noninteractive apt-get remove -y $pin >/dev/null 2>&1 || true
+    fi
+    # Install R580 LTS (open kernel modules). apt swaps the dkms metapackage.
+    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-driver-580-open >/tmp/dpad-driver-580.log 2>&1; then
+        err "nvidia-driver-580-open install failed (see /tmp/dpad-driver-580.log)"
+        tail -20 /tmp/dpad-driver-580.log >&2 || true
+        return 1
+    fi
+    # Set modeset=Y persistently so it's active right after the reboot (580 does
+    # NOT enable modeset by default, unlike 595 — and gamescope headless needs it).
+    echo 'options nvidia_drm modeset=Y' > /etc/modprobe.d/nvidia-drm-modeset.conf
+    update-initramfs -u >/dev/null 2>&1 || true
+    log "driver downgrade 595 -> 580 applied — rebooting ONCE to load the new driver"
+    log "(the dpadcloud-bootstrap service will continue automatically after reboot)"
+    sync; sleep 3; reboot; exit 0
+}
+
+# -----------------------------------------------------------------------------
 # Phase 1: nvidia_drm.modeset = Y  (REQUIRED for gamescope --backend headless
 # on NVIDIA — without it vkCreateDevice fails (-7) / 'Failed to create backend' —
 # AND for the DFP Xorg / DRM-master path. Steam UI needs KMS either way.)
@@ -567,6 +612,7 @@ report_all_urls() {
 bootstrap() {
     log "=== DpadCloud VM bootstrap starting (warm-VM mode=${DPAD_WARM_VM}) ==="
     systemctl start docker 2>/dev/null || true
+    ensure_driver_580         # may reboot once (595->580); resumes here after
     ensure_modeset            # may reboot once; resumes here after
     ensure_nct                || return 1
     ensure_userns
