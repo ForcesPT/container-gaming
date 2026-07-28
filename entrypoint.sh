@@ -441,6 +441,11 @@ start_gamescope_stream() {
             tail -8 /tmp/selkies.log 2>/dev/null | sed 's/^/      /'
         fi
         echo "    Selkies running on ${DPAD_SELKIES_BIND:-127.0.0.1}:16100 (gamescope bridge, encoder=${enc}, audio_fec=${DPAD_AUDIO_PACKETLOSS:-0}%, video_fec=${DPAD_VIDEO_PACKETLOSS:-0}%)$([ "${attempt}" -gt 1 ] && echo " — encoder registered on attempt ${attempt}/${max_attempts}")"
+        # v2 readiness marker (docs/V2-PLAN.md §6/§15 Gap 3): a single
+        # parseable line the warm-pool bootstrap worker greps from `docker logs`
+        # instead of the docker-ps-count heuristic. Fires ONLY once Selkies is
+        # actually streaming (not just the container being up).
+        echo "DPAD_READY slot=${DPAD_SLOT:-0} bind=${DPAD_SELKIES_BIND:-127.0.0.1}:16100 encoder=${enc}"
         break
     done
 
@@ -539,6 +544,64 @@ setup_nvenc_fix() {
     fi
 }
 
+# -----------------------------------------------------------------------------
+# Per-user persistent library volume (docs/cloud/docs/V2-PLAN.md §5).
+#
+# A v2 session bind-mounts the user's UpCloud block-storage volume (mounted on
+# the VM host at /mnt/dpad-vol/<volId>, labelled dpadvol-<uuid8>) into the
+# container at DPAD_VOLUME_MOUNT (default /mnt/dpad-library). The Steam CLIENT
+# binary stays in the image (fast-boot); only the LIBRARY subpaths — installed
+# games (steamapps/), login tokens + config (config/), saves (userdata/), and
+# Proton GE (compatibilitytools.d/) — are symlinked from the volume, so a game
+# downloads ONCE and persists across sessions. The volume is region-locked
+# (UpCloud storages attach only within their zone); changing regions is a rare
+# paid migration. A tier switch within the region reuses the same volume.
+#
+# Idempotent + safe with no volume (DPAD_VOLUME_MOUNT unset → no-op, back-compat
+# for the ephemeral/Vast-era runs). On the FIRST launch the volume is empty;
+# Steam starts fresh, logs in, installs games to the volume. Every launch after,
+# the volume holds the library + login → Steam sees them. If the image shipped
+# any content under those subpaths (it doesn't — only the client binary), it's
+# migrated into the volume once before symlinking.
+setup_user_volume() {
+    local vol="${DPAD_VOLUME_MOUNT:-}"
+    [ -z "$vol" ] && return 0
+    if [ ! -d "$vol" ]; then
+        echo "[*] WARNING: DPAD_VOLUME_MOUNT=$vol is not a directory — running with NO persistent library (ephemeral)."
+        return 0
+    fi
+    echo "[*] User library volume: $vol (persistent steamapps/config/userdata)"
+    # The volume is a fresh ext4 (root-owned on the host). The container runs
+    # Steam as dpad (uid 1001) — make the volume writable by dpad. This chown
+    # runs as root (entrypoint, before dropping to dpad) + propagates to the host
+    # mount (bind mount shares ownership).
+    chown -R "${USER_NAME}:${USER_NAME}" "$vol" 2>/dev/null || true
+
+    local si="${USER_HOME}/.steam/debian-installation"
+    mkdir -p "$si" 2>/dev/null
+    as_user "mkdir -p '$vol/steamapps' '$vol/config' '$vol/userdata' '$vol/compatibilitytools.d' 2>/dev/null || true"
+
+    local sub
+    for sub in steamapps config userdata compatibilitytools.d; do
+        local dst="$si/$sub"
+        local src="$vol/$sub"
+        # Already linked to this volume subpath? Skip (idempotent re-launch).
+        if [ -L "$dst" ] && [ "$(readlink -f "$dst" 2>/dev/null)" = "$(readlink -f "$src" 2>/dev/null)" ]; then
+            continue
+        fi
+        # If the image-baked subpath is a real dir WITH content, migrate it into
+        # the volume once (so a pre-seeded image's library isn't lost). Empty
+        # dirs are just removed.
+        if [ -d "$dst" ] && [ ! -L "$dst" ] && [ -n "$(find "$dst" -mindepth 1 -maxdepth 1 2>/dev/null | head -1)" ]; then
+            echo "    migrating image $sub/ -> volume (one-time)"
+            as_user "cp -a '$dst/.' '$src/' 2>/dev/null || true"
+        fi
+        rm -rf "$dst"
+        as_user "ln -s '$src' '$dst'"
+    done
+    echo "    library subpaths linked to volume: steamapps config userdata compatibilitytools.d"
+}
+
 start_gamescope_session() {
     echo "[*] DPAD_GAMESCOPE mode: gamescope --backend headless + Steam (no DRM master)"
     # gamescope headless does NOT composite the X cursor into its PipeWire output,
@@ -554,6 +617,12 @@ start_gamescope_session() {
     [ -z "$GS_W" ] && GS_W=1920
     [ -z "$GS_H" ] && GS_H=1080
     STEAM_ARGS="${DPAD_STEAM_ARGS:--gamepadui}"
+
+    # Bind the user's persistent library volume (if mounted) BEFORE bootstrapping
+    # Steam — the library subpaths (steamapps/config/userdata) must point at the
+    # volume so games + the login persist across sessions (V2-PLAN §5). No-op
+    # when DPAD_VOLUME_MOUNT is unset (ephemeral/back-compat).
+    setup_user_volume
 
     # Bootstrap the Steam full client on Xvfb BEFORE entering gamescope. Steam's
     # first-run GL updater UI can't create its font texture on gamescope headless
