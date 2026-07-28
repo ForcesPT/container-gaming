@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# =============================================================================
+# DpadCloud v2 — per-session container launcher (warm-VM model)
+# =============================================================================
+# Runs ON the warm-pool VM host (SSH'd by the dpadplay worker on session start).
+# The v2 warm pool is a BOOTED VM (Docker ready, image pulled, MPS daemon up) —
+# NOT pre-launched containers (you can't bind-mount a volume into a running
+# container). This script launches a FRESH per-session container with the user's
+# persistent library volume mounted, waits for the DPAD_READY marker, and
+# returns. On session end, dpad-stop-session (below) stops+removes the container;
+# the VM stays warm for the next session.
+#
+# The volume: the dpadplay control plane (UpCloud adapter) hotplug-attaches the
+# user's block-storage storage to this running VM (virtio), then SSHes this
+# script. UpCloud presents a RAW UNFORMATTED block device (/dev/vdX); this script
+# mkfs's it on first attach (label dpadvol-<uuid8>), then mounts it by label
+# (blkid -L — device-letter-agnostic). Data persists across detach/reattach
+# (validated live). See container-gaming/entrypoint.sh setup_user_volume() for
+# the in-container library-subpath symlinks.
+#
+# Usage (from the worker over SSH):
+#   dpad-launch-session <slotIndex> <volumeId> <device> <selkiesPassword> [image]
+#     slotIndex      0-based slot on the VM (coturn port = 3478 + slotIndex;
+#                   container name = dpad-slot-<slotIndex>)
+#     volumeId       the UpCloud storage UUID (used for the fs label + mount dir)
+#     device         the UpCloud device address returned by attach, e.g. virtio:1
+#                   (mapped to /dev/vd<letter>; virtio:0=vda is the OS disk)
+#     selkiesPassword  the per-session Selkies browser password
+#     image          optional image tag (default: forcespt/dpadcloud-gaming:dpad-SteamOS)
+#
+# Env (read from /etc/environment or the SSH env):
+#   DPAD_SLOT_CPUS, DPAD_SLOT_MEM_MB   per-slot CPU/RAM quota (oversubscription)
+#   DPAD_SELKIES_BIND                 Selkies bind (0.0.0.0 for direct-IP v2)
+#   DPAD_GAMESCOPE                    1 (the SteamOS path)
+# =============================================================================
+set -uo pipefail
+
+TURN_BASE_PORT=3478
+IMAGE_DEFAULT="forcespt/dpadcloud-gaming:dpad-SteamOS"
+MOUNT_ROOT="/mnt/dpad-vol"
+LABEL_PREFIX="dpadvol"
+CONTAINER_PREFIX="dpad-slot"
+
+log() { echo "[dpad-launch] $*"; }
+err() { echo "[dpad-launch] ERROR: $*" >&2; }
+
+# Map an UpCloud virtio device address (virtio:N) -> /dev/vd<letter> (virtio:0=vda).
+# UpCloud attaches the OS disk first (vda); user volumes attach as vdb, vdc, ...
+# in attach order, so the mapping is deterministic.
+dev_for_address() {
+    local addr="$1"
+    case "$addr" in
+        virtio:*) printf '/dev/vd%s' "$(awk -F: '{printf "%c", 97+$2}' <<<"$addr")" ;;
+        /dev/*)   printf '%s' "$addr" ;;   # already a path (future providers)
+        *)        return 1 ;;
+    esac
+}
+
+# Find or format+mount the volume for a storage UUID. Returns the host mount path
+# on stdout (for the docker -v bind). Idempotent: if already mounted (a re-launch
+# after a container died), reuse it.
+mount_volume() {
+    local volumeId="$1" device="$2"
+    local uuid8="${volumeId%%-*}"            # first 8 hex chars of the UUID
+    local label="${LABEL_PREFIX}-${uuid8}"
+    local mnt="${MOUNT_ROOT}/${volumeId}"
+    local dev
+    dev="$(dev_for_address "$device")" || { err "can't map device '$device'"; return 1; }
+    [ -b "$dev" ] || { err "device $dev does not exist (attach not complete?)"; return 1; }
+
+    # Already mounted? Reuse (re-launch after a container crash).
+    if findmnt -rn -T "$mnt" >/dev/null 2>&1; then
+        echo "$mnt"; return 0
+    fi
+
+    # If the device already has our label (formatted on a previous attach),
+    # mount by label. Otherwise (first attach, raw unformatted) mkfs it.
+    local found
+    found="$(blkid -L "$label" 2>/dev/null || true)"
+    if [ -n "$found" ] && [ "$found" = "$dev" ]; then
+        log "volume already formatted ($label on $dev) — mounting"
+    elif [ -n "$(blkid "$dev" 2>/dev/null)" ]; then
+        # Formatted but not our label — refuse (don't clobber an unknown fs).
+        err "$dev is formatted but not labelled $label (got: $(blkid -o export "$dev" 2>/dev/null | grep LABEL)); refusing to mkfs"
+        return 1
+    else
+        log "first attach — mkfs.ext4 -L $label $dev"
+        mkfs.ext4 -q -F -L "$label" "$dev" || { err "mkfs failed on $dev"; return 1; }
+    fi
+
+    mkdir -p "$mnt"
+    mount -L "$label" "$mnt" || { err "mount failed"; return 1; }
+    # The container runs Steam as uid 1001 (dpad) — make the volume writable.
+    chown -R 1001:1001 "$mnt" 2>/dev/null || true
+    echo "$mnt"
+}
+
+launch() {
+    local slot="$1" volumeId="$2" device="$3" pass="$4" image="${5:-$IMAGE_DEFAULT}"
+    local name="${CONTAINER_PREFIX}-${slot}"
+    local port=$(( TURN_BASE_PORT + slot ))
+
+    # Stop+remove a stale container at this slot (a re-launch after a crash).
+    if docker ps -a --format '{{.Names}}' | grep -qx "$name"; then
+        log "removing stale container $name"
+        docker rm -f "$name" >/dev/null
+    fi
+
+    local mnt
+    mnt="$(mount_volume "$volumeId" "$device")" || return 1
+    log "volume mounted at $mnt -> /mnt/dpad-library in container"
+
+    # Per-slot resource quota (oversubscription). Defaults: no quota if unset
+    # (the VM plan's CPU/RAM is shared; set DPAD_SLOT_CPUS/DPAD_SLOT_MEM_MB to
+    # hard-partition). Mirrors vm-bootstrap's compute_session_resources.
+    local -a res=()
+    [ "${DPAD_SLOT_CPUS:-0}" -gt 0 ] 2>/dev/null && res+=( --cpus="${DPAD_SLOT_CPUS}" )
+    [ "${DPAD_SLOT_MEM_MB:-0}" -gt 0 ] 2>/dev/null && res+=( --memory="${DPAD_SLOT_MEM_MB}m" --memory-swap="${DPAD_SLOT_MEM_MB}m" )
+
+    docker run -d --name "$name" \
+        --runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=0 \
+        --cap-add SYS_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+        --shm-size=2g --ulimit nofile=1048576:1048576 \
+        "${res[@]}" \
+        -p "${port}:${port}/udp" \
+        -v "${mnt}:/mnt/dpad-library" \
+        -e DPAD_GAMESCOPE=1 \
+        -e DPAD_SLOT="$slot" \
+        -e DPAD_COTURN_PORT="$port" \
+        -e DPAD_SELKIES_BIND="${DPAD_SELKIES_BIND:-0.0.0.0}" \
+        -e DPAD_TURN_PUBLIC_IP="${PUBLIC_IPADDR:-}" \
+        -e DPAD_TURN_UDP_EXTERNAL_PORT="$port" \
+        -e SELKIES_BASIC_AUTH_USER=dpad \
+        -e "SELKIES_BASIC_AUTH_PASSWORD=${pass}" \
+        "$image" || { err "docker run $name failed"; return 1; }
+    log "container $name launched (coturn ${port}/udp, login dpad/${pass:0:4}…)"
+
+    # Wait for the DPAD_READY marker (entrypoint emits it once Selkies is up).
+    local deadline=$(( $(date +%s) + 360 ))   # 6 min (container boot ~50s + Steam)
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        if docker logs "$name" 2>&1 | grep -q '^DPAD_READY '; then
+            log "READY: $(docker logs "$name" 2>&1 | grep '^DPAD_READY ' | tail -1)"
+            return 0
+        fi
+        # Container died before ready?
+        if ! docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null | grep -q true; then
+            err "container $name exited before DPAD_READY — last logs:"
+            docker logs --tail 20 "$name" 2>&1 | sed 's/^/      /' >&2
+            return 1
+        fi
+        sleep 4
+    done
+    err "timed out waiting for DPAD_READY — last logs:"
+    docker logs --tail 30 "$name" 2>&1 | sed 's/^/      /' >&2
+    return 1
+}
+
+# -----------------------------------------------------------------------------
+# dpad-stop-session — tear down a session container (called on session end /
+# idle-reap). Detaches the volume mount? NO — leave it mounted (a quick re-launch
+# reuses it); the dpadplay control plane hotplug-DETACHES the volume via the
+# adapter after this returns. The VM stays warm.
+# -----------------------------------------------------------------------------
+stop() {
+    local slot="$1"
+    local name="${CONTAINER_PREFIX}-${slot}"
+    if docker ps -a --format '{{.Names}}' | grep -qx "$name"; then
+        log "stopping+removing $name"
+        docker rm -f "$name" >/dev/null 2>&1 || true
+    else
+        log "no container $name to stop"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Dispatch: the worker invokes this as either a launch or a stop.
+#   dpad-launch-session launch   <slot> <volumeId> <device> <pass> [image]
+#   dpad-launch-session stop      <slot>
+# -----------------------------------------------------------------------------
+case "${1:-}" in
+    launch) shift; launch "$@" ;;
+    stop)    shift; stop "$@" ;;
+    *) echo "Usage: $0 {launch <slot> <volumeId> <device> <pass> [image] | stop <slot>}" >&2; exit 2 ;;
+esac
