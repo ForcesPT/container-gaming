@@ -41,7 +41,7 @@ MOUNT_ROOT="/mnt/dpad-vol"
 LABEL_PREFIX="dpadvol"
 CONTAINER_PREFIX="dpad-slot"
 
-log() { echo "[dpad-launch] $*"; }
+log() { echo "[dpad-launch] $*" >&2; }
 err() { echo "[dpad-launch] ERROR: $*" >&2; }
 
 # Map an UpCloud virtio device address (virtio:N) -> /dev/vd<letter> (virtio:0=vda).
