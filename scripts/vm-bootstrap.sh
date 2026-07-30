@@ -286,13 +286,16 @@ ensure_docker_xfs_quota() {
         rm -rf /var/lib/docker.pre-xfs
     fi
 
-    systemctl start docker || { err "docker failed to start on the XFS store"; return 1; }
+    # Docker 29+ defaults to the containerd image store (overlayfs snapshotter),
+    # which does NOT support --storage-opt size (project quotas) — it silently
+    # ignores the option (no cap, no error). Disable it so Docker uses the legacy
+    # overlay2 graphdriver, which enforces --storage-opt size on XFS pquota.
+    # Merge into the existing daemon.json (ensure_nct wrote the nvidia runtime).
+    if ! python3 -c 'import json,os; p="/etc/docker/daemon.json"; d=json.load(open(p)) if os.path.exists(p) else {}; d.setdefault("features",{})["containerd-snapshotter"]=False; json.dump(d,open(p,"w"),indent=2)' 2>/tmp/dpad-daemon-merge.log; then
+        err "failed to disable containerd-snapshotter in daemon.json (see /tmp/dpad-daemon-merge.log)"; return 1
+    fi
+    systemctl start docker || { err "docker failed to start on the XFS store (legacy overlay2)"; return 1; }
     docker pull alpine >/dev/null 2>&1 || true
-    # Restart docker once on the XFS — overlay2's project-quota detection may
-    # need a fresh daemon start after the mount (the first start right after the
-    # mount can miss it).
-    systemctl restart docker || { err "docker restart on XFS failed"; return 1; }
-    sleep 2
     # Cap test: a 256 MB-capped container MUST reject a 300 MB write. XFS pquota
     # enforces DIRECTLY (verified: xfs_quota limit -p stops dd at the limit), but
     # Docker's overlay2 must APPLY it to the container's upper dir. Rich
