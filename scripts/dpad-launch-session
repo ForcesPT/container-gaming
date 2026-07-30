@@ -23,10 +23,13 @@
 #     slotIndex      0-based slot on the VM (coturn port = 3478 + slotIndex;
 #                   container name = dpad-slot-<slotIndex>)
 #     volumeId       the provider storage UUID (used for the fs label + mount dir),
-#                   OR the literal `none` for an EPHEMERAL / no-library session
-#                   (no volume attached; games live in the container overlay and
-#                   are gone when the container is removed — re-download each
-#                   launch). See the ephemeral branch in launch().
+#                   OR the literal `none` for an EPHEMERAL / no-library session:
+#                   no provider volume is attached; instead a per-slot loopback
+#                   scratch (sparse ext4, capped — default 200 GB via
+#                   DPAD_EPHEMERAL_DISK_GB) is created on the VM boot disk,
+#                   bound as /mnt/dpad-library, and removed on stop (games are
+#                   gone when the session ends — re-download each launch).
+#                   See the ephemeral branch in launch().
 #     device         the provider device address returned by attach, e.g. virtio:1
 #                   (mapped to /dev/vd<letter>; virtio:0=vda is the OS disk).
 #                   IGNORED when volumeId == none.
@@ -155,16 +158,36 @@ launch() {
     # overlay, gone on container removal — re-download each launch).
     local -a vol_args=()
     if is_ephemeral "$volumeId"; then
-        log "ephemeral slot $slot — no persistent library (games re-download each launch)"
-        # Optional hard cap on the ephemeral container's rootfs. Only applied when
-        # DPAD_EPHEMERAL_DISK_GB is set (a vm-bootstrap/ops decision after the VM's
-        # storage driver is confirmed to support per-container quotas — XFS pquota
-        # or ext4 prjquota; default ext4 does NOT, so this is dormant by default).
-        local eq="${DPAD_EPHEMERAL_DISK_GB:-0}"
-        if [ "$eq" -gt 0 ] 2>/dev/null ]; then
-            vol_args+=( --storage-opt "size=${eq}g" )
-            log "  ephemeral disk quota: ${eq} GB (--storage-opt size=${eq}g)"
+        log "ephemeral slot $slot — capped scratch (games re-download each launch, gone on end)"
+        # Per-slot loopback scratch: a sparse ext4 image on the VM boot disk,
+        # loop-mounted + bound into the container as /mnt/dpad-library (reuses the
+        # persistent library code path — setup_user_volume symlinks steamapps/
+        # config/userdata/compatibilitytools.d there). Hard cap = the image size;
+        # sparse, so it only consumes boot-disk space as written. Default 200 GB
+        # per slot (the boot disk is sized 120 + 200*slotsTotal so N slots fit).
+        # On stop the loop file is unmounted + removed (ephemeral = gone). No
+        # provider storage API needed (works on all providers, incl.
+        # MassedCompute), and no Docker quota-driver requirement — `--storage-opt
+        # size` needs XFS pquota / ext4 prjquota which the default ext4 root does
+        # NOT enforce (silently accepted, no cap). DPAD_EPHEMERAL_DISK_GB (GB)
+        # overrides the per-slot cap.
+        local cap_gb="${DPAD_EPHEMERAL_DISK_GB:-200}"
+        local img="/opt/dpad-scratch/slot${slot}.img"
+        local smnt="/mnt/dpad-scratch/slot${slot}"
+        mkdir -p /opt/dpad-scratch "$smnt"
+        if [ ! -f "$img" ]; then
+            log "  creating ${cap_gb} GB scratch for slot $slot (sparse ext4)"
+            truncate -s "${cap_gb}G" "$img"
+            mkfs.ext4 -q -F "$img" || { err "mkfs failed on $img"; return 1; }
         fi
+        # Idempotent: reuse an existing loop mount (a re-launch after a container
+        # crash) rather than double-mounting.
+        if ! findmnt -rn -T "$smnt" >/dev/null 2>&1; then
+            mount -o loop "$img" "$smnt" || { err "loop mount failed for $img"; return 1; }
+        fi
+        chown -R 1001:1001 "$smnt" 2>/dev/null || true
+        log "  scratch mounted at $smnt -> /mnt/dpad-library in container (${cap_gb} GB cap)"
+        vol_args+=( -v "${smnt}:/mnt/dpad-library" -e DPAD_VOLUME_MOUNT=/mnt/dpad-library )
     else
         local mnt
         mnt="$(mount_volume "$volumeId" "$device")" || return 1
@@ -229,6 +252,17 @@ stop() {
     else
         log "no container $name to stop"
     fi
+    # Ephemeral scratch cleanup: unmount + remove the per-slot loopback image so
+    # the next session on this slot starts fresh (ephemeral = games gone on end).
+    # Persistent slots have no loop file here (their library is on a provider
+    # volume, detached by the control plane after this returns) — rm is a no-op.
+    local img="/opt/dpad-scratch/slot${slot}.img"
+    local smnt="/mnt/dpad-scratch/slot${slot}"
+    if findmnt -rn -T "$smnt" >/dev/null 2>&1; then
+        umount "$smnt" 2>/dev/null || true
+    fi
+    rmdir "$smnt" 2>/dev/null || true
+    rm -f "$img" 2>/dev/null || true
 }
 
 # -----------------------------------------------------------------------------
