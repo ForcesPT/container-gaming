@@ -142,6 +142,48 @@ ensure_driver_580() {
 }
 
 # -----------------------------------------------------------------------------
+# Phase 0a: disable unattended-upgrades / apt auto-upgrades (CRITICAL for live
+# sessions). Ubuntu's apt-daily-upgrade.timer runs unattended-upgrades, which
+# upgrades packages — incl. the KERNEL + libc6 + openssh — and needrestart then
+# issues `systemctl daemon-reexec` + restarts containerd/docker/nvidia-*, which
+# KILLS every running game container mid-session (observed live 2026-07-30:
+# dpad-slot-0 died exit 137 ~2 min after DPAD_READY; a new kernel was also staged,
+# which would shift the NVIDIA driver on the next reboot). On a gaming VM we own
+# the driver + kernel image; apt must NEVER touch them under a live session.
+# Idempotent + safe to run first (needs nothing else set up).
+# -----------------------------------------------------------------------------
+ensure_no_auto_updates() {
+    log "disabling unattended-upgrades / apt auto-upgrades (protects live sessions)"
+    # Stop + mask the apt periodic upgrade timers/services so they can't fire.
+    systemctl disable --now apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+    systemctl mask apt-daily-upgrade.service apt-daily-upgrade.timer \
+        unattended-upgrades.service 2>/dev/null || true
+    # The apt periodic flags are the source of truth for unattended-upgrades.
+    cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
+// DpadCloud: no automatic package lists/installs on gaming VMs (would restart
+// services / shift the kernel + NVIDIA driver under live sessions).
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Unattended-Upgrade "0";
+APT::Periodic::Download-Upgradeable-Packages "0";
+APT::Periodic::AutocleanInterval "0";
+EOF
+    # needrestart (pulled in by unattended-upgrades) is the actual trigger of
+    # the daemon-reexec service-restart cascade. Tell it to LIST services that
+    # need a restart but NOT to restart them ('l' = list-only). Manual `apt`
+    # calls are unaffected; only the automatic churn is suppressed.
+    if dpkg-query -W -f='${Status}' needrestart >/dev/null 2>&1; then
+        mkdir -p /etc/needrestart/conf.d
+        cat > /etc/needrestart/conf.d/99-dpad.conf <<'EOF'
+# DpadCloud: never auto-restart services (would kill live game containers).
+$nrconf{restart} = 'l';
+EOF
+        log "needrestart set to restart-mode=list (no auto-restart)"
+    fi
+    log "unattended-upgrades / apt auto-upgrades disabled"
+    return 0
+}
+
+# -----------------------------------------------------------------------------
 # Phase 1: nvidia_drm.modeset = Y  (REQUIRED for gamescope --backend headless
 # on NVIDIA — without it vkCreateDevice fails (-7) / 'Failed to create backend' —
 # AND for the DFP Xorg / DRM-master path. Steam UI needs KMS either way.)
@@ -223,9 +265,15 @@ ensure_nct() {
 # XFS). The fstab entry re-mounts it at every boot; a docker.service drop-in
 # (RequiresMountsFor) orders Docker strictly after the mount.
 ensure_docker_xfs_quota() {
-    # Already on XFS pquota? (idempotent — true after a reboot re-run.)
-    if mountpoint -q /var/lib/docker 2>/dev/null \
-       && findmnt -no OPTIONS /var/lib/docker 2>/dev/null | grep -qw pquota; then
+    local img="/var/lib/dpad-docker-xfs.img"
+    # Already on XFS pquota? (idempotent — true after a reboot re-run.) Also
+    # short-circuit when the XFS img + fstab entry already exist (the setup is
+    # done) even if a transient findmnt/mountpoint race during a daemon-reexec
+    # makes the first check miss — re-running would `systemctl stop docker` and
+    # KILL live session containers on an already-correct host.
+    if { mountpoint -q /var/lib/docker 2>/dev/null \
+         && findmnt -no OPTIONS /var/lib/docker 2>/dev/null | grep -qw pquota; } \
+       || { [ -f "$img" ] && grep -q "^[^#].* /var/lib/docker " /etc/fstab 2>/dev/null; }; then
         log "Docker storage already on XFS pquota (/var/lib/docker) — good"
         return 0
     fi
@@ -240,12 +288,11 @@ ensure_docker_xfs_quota() {
     # for the OS + Docker binaries + XFS metadata; the rest is the Docker store
     # (the image + N capped container writable layers). Sparse, so it only
     # consumes boot-disk space as Docker writes.
-    local root_gb xfs_gb img
+    local root_gb xfs_gb
     root_gb=$(df --output=size / | awk 'NR==2{print int($1/1024/1024)}')
     [ "${root_gb:-0}" -lt 120 ] 2>/dev/null \
         && { err "boot disk too small for XFS Docker store (${root_gb:-?} GB)"; return 1; }
     xfs_gb=$(( root_gb - 60 ))
-    img="/var/lib/dpad-docker-xfs.img"
     log "setting up Docker storage on XFS pquota: ${img} (${xfs_gb} GB on the boot disk)"
 
     systemctl stop docker 2>/dev/null || true
@@ -275,8 +322,10 @@ ensure_docker_xfs_quota() {
     fi
     # Order Docker strictly after the mount (fstab mounts are local-fs, before
     # Docker, but be explicit so a race can't start Docker on the bare dir).
+    # RequiresMountsFor is a [Unit] directive (NOT [Service] — systemd ignores
+    # it there with 'Unknown key name'). Orders Docker strictly after the mount.
     mkdir -p /etc/systemd/system/docker.service.d
-    printf '[Service]\nRequiresMountsFor=/var/lib/docker\n' \
+    printf '[Unit]\nRequiresMountsFor=/var/lib/docker\n' \
         > /etc/systemd/system/docker.service.d/dpad-xfs.conf
     systemctl daemon-reload
 
@@ -298,28 +347,31 @@ ensure_docker_xfs_quota() {
     docker pull alpine >/dev/null 2>&1 || true
     # Cap test: a 256 MB-capped container MUST reject a 300 MB write. XFS pquota
     # enforces DIRECTLY (verified: xfs_quota limit -p stops dd at the limit), but
-    # Docker's overlay2 must APPLY it to the container's upper dir. Rich
-    # diagnostics + DIAGNOSTIC MODE (continue uncapped) so the VM reaches ready +
-    # the quota can be debugged live over SSH. TODO: flip 'return 0' back to
-    # 'return 1' once the overlay2-quota cause is fixed + the cap enforces.
+    # Docker's overlay2 must APPLY it to the container's upper dir. FATAL: an
+    # uncapped ephemeral VM must never ship (a user could fill the host disk).
     log "verifying --storage-opt size enforces (256m cap vs 300M write)…"
+    # Capture dd's FULL output — dd prints 'No space left on device' BEFORE its
+    # summary line, so piping through `tail -N` drops the error and the grep
+    # misses it (a working cap then falsely reported UNCAPPED — observed live
+    # 2026-07-30). NOT piping through tail means `dd_rc=$?` inside the container
+    # is dd's REAL exit code (ENOSPC => 1), not tail's.
     local probe
     probe=$(docker run --rm --storage-opt size=256m alpine \
-        sh -c 'df -m / | tail -1; echo --- dd ---; dd if=/dev/zero of=/captest bs=1M count=300 2>&1 | tail -3; echo dd_rc=$?' 2>&1)
+        sh -c 'df -m / | tail -1; echo --- dd ---; dd if=/dev/zero of=/captest bs=1M count=300 2>&1; echo dd_rc=$?' 2>&1)
     log "CAP-PROBE: ${probe}"
     if printf '%s\n' "$probe" | grep -q 'No space left on device'; then
         log "Docker storage on XFS pquota OK — --storage-opt size enforces (per-container rootfs cap)"
         return 0
     fi
-    err "XFS pquota mounted but --storage-opt size NOT enforced — VM UNCAPPED (diagnostic mode)"
+    err "XFS pquota mounted but --storage-opt size NOT enforced — VM UNCAPPED (FATAL)"
     err "  findmnt: $(findmnt -no SOURCE,FSTYPE,OPTIONS /var/lib/docker 2>/dev/null)"
     err "  xfs_info: $(xfs_info /var/lib/docker 2>&1 | tr '\n' ' ' | grep -oiE 'reflink=[0-9]|projid32bit=[0-9]|ftype=[0-9]' | tr '\n' ' ')"
     err "  xfs_quota: $(xfs_quota -x -c state /var/lib/docker 2>&1 | grep -iE 'project|quota' | tr '\n' ' ' | cut -c1-200)"
     err "  docker info: $(docker info 2>/dev/null | grep -iE 'storage driver|backing|d_type|quota|docker root' | tr '\n' ' ')"
     err "  daemon.json: $(cat /etc/docker/daemon.json 2>/dev/null | tr '\n' ' ')"
     err "  docker journal: $(journalctl -u docker --no-pager -n 6 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
-    log "XFS quota not enforced — continuing UNCAPPED for live diagnosis (TODO: re-enable fatal + fix)"
-    return 0
+    err "ephemeral sessions cannot ship uncapped — refusing to mark the VM ready"
+    return 1
 }
 
 # Phase 2b: enable unprivileged user namespaces on the VM host
@@ -729,6 +781,7 @@ report_all_urls() {
 # -----------------------------------------------------------------------------
 bootstrap() {
     log "=== DpadCloud VM bootstrap starting (warm-VM mode=${DPAD_WARM_VM}) ==="
+    ensure_no_auto_updates   # FIRST: stop apt from killing the session mid-boot
     systemctl start docker 2>/dev/null || true
     ensure_driver_580         # may reboot once (595->580); resumes here after
     ensure_modeset            # may reboot once; resumes here after
