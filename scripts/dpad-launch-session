@@ -19,19 +19,42 @@
 # the in-container library-subpath symlinks.
 #
 # Usage (from the worker over SSH):
-#   dpad-launch-session <slotIndex> <volumeId> <device> <selkiesPassword> [image]
+#   dpad-launch-session launch <slot> <volumeId> <device> <selkiesPassword> [image]
 #     slotIndex      0-based slot on the VM (coturn port = 3478 + slotIndex;
 #                   container name = dpad-slot-<slotIndex>)
-#     volumeId       the UpCloud storage UUID (used for the fs label + mount dir)
-#     device         the UpCloud device address returned by attach, e.g. virtio:1
-#                   (mapped to /dev/vd<letter>; virtio:0=vda is the OS disk)
+#     volumeId       the provider storage UUID (used for the fs label + mount dir),
+#                   OR the literal `none` for an EPHEMERAL / no-library session
+#                   (no volume attached; games live in the container overlay and
+#                   are gone when the container is removed — re-download each
+#                   launch). See the ephemeral branch in launch().
+#     device         the provider device address returned by attach, e.g. virtio:1
+#                   (mapped to /dev/vd<letter>; virtio:0=vda is the OS disk).
+#                   IGNORED when volumeId == none.
 #     selkiesPassword  the per-session Selkies browser password
 #     image          optional image tag (default: forcespt/dpadcloud-gaming:dpad-SteamOS)
+#
+#   dpad-launch-session stop <slot>   tear down a session container (session end /
+#                                     idle-reap). For a persistent slot the control
+#                                     plane hotplug-detaches the volume after this
+#                                     returns; for an ephemeral slot the container
+#                                     removal frees the overlay (nothing to detach).
 #
 # Env (read from /etc/environment or the SSH env):
 #   DPAD_SLOT_CPUS, DPAD_SLOT_MEM_MB   per-slot CPU/RAM quota (oversubscription)
 #   DPAD_SELKIES_BIND                 Selkies bind (0.0.0.0 for direct-IP v2)
 #   DPAD_GAMESCOPE                    1 (the SteamOS path)
+#   DPAD_EPHEMERAL_DISK_GB            (optional) hard cap on an ephemeral slot's
+#                                    container rootfs via `--storage-opt size=`.
+#                                    Only applied when the backing Docker storage
+#                                    driver supports per-container quotas (XFS
+#                                    with pquota, or ext4 mounted with prjquota).
+#                                    Default unset = no cap (the VM's instance disk
+#                                    is shared across the N slots; one ephemeral
+#                                    user could fill it — the 10-min idle
+#                                    teardown bounds the risk). Only set it once the
+#                                    VM is known to support it (a vm-bootstrap ops
+#                                    decision); if set + the driver rejects it,
+#                                    docker run fails.
 # =============================================================================
 set -uo pipefail
 
@@ -96,6 +119,15 @@ mount_volume() {
     echo "$mnt"
 }
 
+# Detect the ephemeral sentinel. The worker passes volumeId == 'none' (or '-')
+# for a no-library session; device is ignored in that case. Case-insensitive.
+is_ephemeral() {
+    case "${1:-}" in
+        none|NONE|None|-) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 launch() {
     local slot="$1" volumeId="$2" device="$3" pass="$4" image="${5:-$IMAGE_DEFAULT}"
     local name="${CONTAINER_PREFIX}-${slot}"
@@ -108,10 +140,6 @@ launch() {
         docker rm -f "$name" >/dev/null
     fi
 
-    local mnt
-    mnt="$(mount_volume "$volumeId" "$device")" || return 1
-    log "volume mounted at $mnt -> /mnt/dpad-library in container"
-
     # Per-slot resource quota (oversubscription). Defaults: no quota if unset
     # (the VM plan's CPU/RAM is shared; set DPAD_SLOT_CPUS/DPAD_SLOT_MEM_MB to
     # hard-partition). Mirrors vm-bootstrap's compute_session_resources.
@@ -119,15 +147,39 @@ launch() {
     [ "${DPAD_SLOT_CPUS:-0}" -gt 0 ] 2>/dev/null && res+=( --cpus="${DPAD_SLOT_CPUS}" )
     [ "${DPAD_SLOT_MEM_MB:-0}" -gt 0 ] 2>/dev/null && res+=( --memory="${DPAD_SLOT_MEM_MB}m" --memory-swap="${DPAD_SLOT_MEM_MB}m" )
 
+    # Volume bind (persistent) vs ephemeral. A persistent slot mounts the user's
+    # provider block storage at /mnt/dpad-library (DPAD_VOLUME_MOUNT → the
+    # entrypoint's setup_user_volume symlinks the library subpaths there). An
+    # ephemeral slot skips the bind + the env → setup_user_volume no-ops → Steam
+    # runs against the image's own filesystem (games live in the container
+    # overlay, gone on container removal — re-download each launch).
+    local -a vol_args=()
+    if is_ephemeral "$volumeId"; then
+        log "ephemeral slot $slot — no persistent library (games re-download each launch)"
+        # Optional hard cap on the ephemeral container's rootfs. Only applied when
+        # DPAD_EPHEMERAL_DISK_GB is set (a vm-bootstrap/ops decision after the VM's
+        # storage driver is confirmed to support per-container quotas — XFS pquota
+        # or ext4 prjquota; default ext4 does NOT, so this is dormant by default).
+        local eq="${DPAD_EPHEMERAL_DISK_GB:-0}"
+        if [ "$eq" -gt 0 ] 2>/dev/null ]; then
+            vol_args+=( --storage-opt "size=${eq}g" )
+            log "  ephemeral disk quota: ${eq} GB (--storage-opt size=${eq}g)"
+        fi
+    else
+        local mnt
+        mnt="$(mount_volume "$volumeId" "$device")" || return 1
+        log "volume mounted at $mnt -> /mnt/dpad-library in container"
+        vol_args+=( -v "${mnt}:/mnt/dpad-library" -e DPAD_VOLUME_MOUNT=/mnt/dpad-library )
+    fi
+
     docker run -d --name "$name" \
         --runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=0 \
         --cap-add SYS_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
         --shm-size=2g --ulimit nofile=1048576:1048576 \
         "${res[@]}" \
+        "${vol_args[@]}" \
         -p "${port}:${port}/udp" \
         -p "${selkies_port}:16100" \
-        -v "${mnt}:/mnt/dpad-library" \
-        -e DPAD_VOLUME_MOUNT=/mnt/dpad-library \
         -v "/tmp/nvidia-mps:/tmp/nvidia-mps" \
         -e CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps \
         -e DPAD_GAMESCOPE=1 \
@@ -187,5 +239,5 @@ stop() {
 case "${1:-}" in
     launch) shift; launch "$@" ;;
     stop)    shift; stop "$@" ;;
-    *) echo "Usage: $0 {launch <slot> <volumeId> <device> <pass> [image] | stop <slot>}" >&2; exit 2 ;;
+    *) echo "Usage: $0 {launch <slot> <volumeId|none> <device|none> <pass> [image] | stop <slot>}" >&2; exit 2 ;;
 esac
