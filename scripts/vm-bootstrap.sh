@@ -467,6 +467,21 @@ ensure_image() {
     fi
     echo "${img_tag}" > "$TAG_FILE"
     log "image ready: ${img_tag}"
+
+    # Fetch the repo entrypoint.sh to the host so dpad-launch-session can
+    # bind-mount it over the image's baked entrypoint — lets entrypoint hotfixes
+    # go live WITHOUT an image rebuild + Docker Hub push (an owner step that's
+    # currently blocked). Best-effort: if the fetch fails, launches fall back to
+    # the image's baked entrypoint.
+    mkdir -p /opt/dpadcloud
+    if curl -fsSL https://raw.githubusercontent.com/ForcesPT/container-gaming/main/entrypoint.sh \
+        -o /opt/dpadcloud/entrypoint.sh 2>/dev/null; then
+        chmod +x /opt/dpadcloud/entrypoint.sh 2>/dev/null || true
+        log "entrypoint.sh fetched to /opt/dpadcloud (bind-mountable hotfix path)"
+    else
+        rm -f /opt/dpadcloud/entrypoint.sh 2>/dev/null || true
+        log "entrypoint.sh fetch failed — launches will use the image's baked entrypoint"
+    fi
 }
 
 # -----------------------------------------------------------------------------

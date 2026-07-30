@@ -180,12 +180,21 @@ launch() {
         vol_args+=( -v "${mnt}:/mnt/dpad-library" -e DPAD_VOLUME_MOUNT=/mnt/dpad-library )
     fi
 
+    # Bind-mount the host's fetched entrypoint.sh over the image's baked one
+    # (vm-bootstrap fetches it to /opt/dpadcloud/entrypoint.sh). Lets entrypoint
+    # hotfixes go live WITHOUT an image rebuild + Docker Hub push. Falls back to
+    # the image's baked entrypoint if the host file isn't present.
+    local entry_mount=()
+    [ -f /opt/dpadcloud/entrypoint.sh ] \
+        && entry_mount+=( -v /opt/dpadcloud/entrypoint.sh:/opt/dpadcloud/entrypoint.sh:ro )
+
     docker run -d --name "$name" \
         --runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=0 \
         --cap-add SYS_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
         --shm-size=2g --ulimit nofile=1048576:1048576 \
         "${res[@]}" \
         "${vol_args[@]}" \
+        "${entry_mount[@]}" \
         -p "${port}:${port}/udp" \
         -p "${selkies_port}:16100" \
         -v "/tmp/nvidia-mps:/tmp/nvidia-mps" \

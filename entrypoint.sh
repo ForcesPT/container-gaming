@@ -937,10 +937,20 @@ configure_cuda() {
     [ -z "$CUDA_REAL" ] && CUDA_REAL="/usr/local/cuda"
     local CUDA_VER_LABEL; CUDA_VER_LABEL="$(basename "$CUDA_REAL" | sed 's/^cuda-//')"
 
-    # Try forward-compat (datacenter GPUs only; consumer GPUs will fail cuInit test)
+    # Try forward-compat (datacenter GPUs only; consumer GPUs will fail cuInit
+    # test). Forward-compat is only useful when the IMAGE's CUDA is NEWER than
+    # the host driver's max CUDA (it lets a newer userspace run on an older
+    # driver). When image CUDA <= host max (the common case here: 12.5 <= 13.0)
+    # SKIP the cuInit test entirely — it can HANG under NVIDIA MPS
+    # (skb_wait_for_more_packet on the MPS control socket; observed live
+    # 2026-07-30: the 2nd oversub session's boot stalled 7+ min here, exceeding
+    # the launch deadline). Guard the test with a `timeout` too so a hung cuInit
+    # can never wedge the boot (the fallback path uses the image's own CUDA libs,
+    # which work when image CUDA <= host max).
     local COMPAT_DIR="${CUDA_REAL}/compat"
-    if [ -d "$COMPAT_DIR" ] && compgen -G "$COMPAT_DIR/libcuda.so.*" >/dev/null 2>&1; then
-        if LD_LIBRARY_PATH="$COMPAT_DIR" python3 -c "import ctypes,sys; sys.exit(0 if ctypes.CDLL('libcuda.so.1').cuInit(0)==0 else 1)" 2>/dev/null; then
+    if [ -d "$COMPAT_DIR" ] && compgen -G "$COMPAT_DIR/libcuda.so.*" >/dev/null 2>&1 \
+       && dpkg --compare-versions "$CUDA_VER_LABEL" gt "$MAX_CUDA" 2>/dev/null; then
+        if timeout 20 env LD_LIBRARY_PATH="$COMPAT_DIR" python3 -c "import ctypes,sys; sys.exit(0 if ctypes.CDLL('libcuda.so.1').cuInit(0)==0 else 1)" 2>/dev/null; then
             echo "$COMPAT_DIR" > /etc/ld.so.conf.d/0-compat-cuda.conf
             ldconfig
             echo "    CUDA forward compatibility enabled (datacenter GPU) — Max CUDA: ${MAX_CUDA}"
