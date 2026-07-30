@@ -223,10 +223,10 @@ ensure_nct() {
 # XFS). The fstab entry re-mounts it at every boot; a docker.service drop-in
 # (RequiresMountsFor) orders Docker strictly after the mount.
 ensure_docker_xfs_quota() {
-    # Already on XFS prjquota? (idempotent — true after a reboot re-run.)
+    # Already on XFS pquota? (idempotent — true after a reboot re-run.)
     if mountpoint -q /var/lib/docker 2>/dev/null \
-       && findmnt -no OPTIONS /var/lib/docker 2>/dev/null | grep -qw prjquota; then
-        log "Docker storage already on XFS prjquota (/var/lib/docker) — good"
+       && findmnt -no OPTIONS /var/lib/docker 2>/dev/null | grep -qw pquota; then
+        log "Docker storage already on XFS pquota (/var/lib/docker) — good"
         return 0
     fi
     command -v mkfs.xfs >/dev/null 2>&1 || {
@@ -246,7 +246,7 @@ ensure_docker_xfs_quota() {
         && { err "boot disk too small for XFS Docker store (${root_gb:-?} GB)"; return 1; }
     xfs_gb=$(( root_gb - 60 ))
     img="/var/lib/dpad-docker-xfs.img"
-    log "setting up Docker storage on XFS prjquota: ${img} (${xfs_gb} GB on the boot disk)"
+    log "setting up Docker storage on XFS pquota: ${img} (${xfs_gb} GB on the boot disk)"
 
     systemctl stop docker 2>/dev/null || true
     # Preserve any existing Docker state (usually just an init scaffold — the
@@ -258,14 +258,17 @@ ensure_docker_xfs_quota() {
 
     if [ ! -f "$img" ]; then
         truncate -s "${xfs_gb}G" "$img" || { err "truncate $img failed"; return 1; }
-        mkfs.xfs -q "$img" || { err "mkfs.xfs $img failed"; return 1; }
+        # reflink=0: XFS reflink (CoW) can conflict with project-quota enforcement
+        # on some kernels — disable it so pquota caps reliably.
+        mkfs.xfs -m reflink=0 -q "$img" || { err "mkfs.xfs $img failed"; return 1; }
     fi
 
-    # Mount now (loop,prjquota) + persist via fstab (re-mounts at every boot).
-    mount -t xfs -o loop,prjquota "$img" /var/lib/docker \
+    # Mount now (loop,pquota — the canonical XFS project-quota option) + persist
+    # via fstab (re-mounts at every boot).
+    mount -t xfs -o loop,pquota "$img" /var/lib/docker \
         || { err "XFS loop mount of $img failed"; return 1; }
     if ! grep -q "^[^#]*[[:space:]]/var/lib/docker[[:space:]]" /etc/fstab 2>/dev/null; then
-        echo "${img} /var/lib/docker xfs loop,prjquota,defaults 0 0" >> /etc/fstab
+        echo "${img} /var/lib/docker xfs loop,pquota,defaults 0 0" >> /etc/fstab
     fi
     # Order Docker strictly after the mount (fstab mounts are local-fs, before
     # Docker, but be explicit so a race can't start Docker on the bare dir).
@@ -281,16 +284,26 @@ ensure_docker_xfs_quota() {
     fi
 
     systemctl start docker || { err "docker failed to start on the XFS store"; return 1; }
-    # Verify --storage-opt size actually enforces now: writing past a 256 MB cap
-    # MUST fail. On a plain ext4 root it would succeed (no cap) — fail loud so a
-    # broken quota setup never ships an uncapped ephemeral VM.
-    if docker run --rm --storage-opt size=256m alpine \
-        sh -c 'dd if=/dev/zero of=/captest bs=1M count=300 2>/dev/null && echo CAP_BYPASSED' \
-        2>/dev/null | grep -q CAP_BYPASSED; then
-        err "XFS prjquota mounted but --storage-opt size still NOT enforced — capping will not work"
+    # Verify --storage-opt size actually enforces now: a 256 MB-capped container
+    # MUST reject a 300 MB write. On a plain ext4 root (or a mis-mounted XFS) it
+    # succeeds (no cap) — fail loud so a broken quota setup never ships an
+    # uncapped ephemeral VM. Rich diagnostics on failure so the cause is visible
+    # in the journal (then debug live on the still-warming VM).
+    log "verifying --storage-opt size enforces (256m cap vs 300M write)…"
+    local vout
+    vout=$(docker run --rm --storage-opt size=256m alpine \
+        sh -c 'df -m / | tail -1; dd if=/dev/zero of=/captest bs=1M count=300 2>&1 | tail -2; echo dd_exit=$?' 2>&1)
+    log "verify-probe output: ${vout}" 2>/dev/null || true
+    if printf '%s\n' "$vout" | grep -q CAP_BYPASSED 2>/dev/null \
+       || ! printf '%s\n' "$vout" | grep -q 'No space left on device'; then
+        err "XFS pquota mounted but --storage-opt size NOT enforced — capping will not work"
+        err "  findmnt: $(findmnt -no SOURCE,FSTYPE,OPTIONS /var/lib/docker 2>/dev/null)"
+        err "  xfs_quota state: $(xfs_quota -x -c state /var/lib/docker 2>&1 | tr '\n' ' ' | cut -c1-200)"
+        err "  storage driver: $(docker info 2>/dev/null | grep -E 'Storage Driver|Backing Filesystem' | tr '\n' ' ')"
+        err "  probe: ${vout}"
         return 1
     fi
-    log "Docker storage on XFS prjquota OK — --storage-opt size now enforces (per-container rootfs cap)"
+    log "Docker storage on XFS pquota OK — --storage-opt size now enforces (per-container rootfs cap)"
 }
 
 # Phase 2b: enable unprivileged user namespaces on the VM host
