@@ -76,6 +76,12 @@ reverts to the `:2` bridge fallback.
 - **Stream quality:** Selkies `nvh264enc` (hardware) on all tested drivers
   (580/595/610). Built-in Opus inband FEC + ULP_RED video FEC + NACK rtx
   (gated on `DPAD_AUDIO_PACKETLOSS` / `DPAD_VIDEO_PACKETLOSS`).
+- **MPS oversubscription (N-on-1) — 2:1 validated live 2026-07-30 (UpCloud L4):**
+  two Casual sessions on one L4 via the host MPS daemon — 2nd session reused the
+  ready VM's slot 1 (no boot), both containers `DPAD_READY`, both `gamescope`
+  processes on the GPU via `nvidia-cuda-mps-server`, each with its own 200 GB
+  ephemeral cap, Steam Storage showed 200 GB on both. (3:1 + active-gameplay
+  frame-time still open — see `cloud/docs/STATUS.md` §8.)
 
 ## 4. The baked-in fixes (don't re-discover)
 
@@ -91,6 +97,8 @@ reverts to the `:2` bridge fallback.
 | **Cursor: `--enable_cursors=true` + pointer-lock gate** | entrypoint + `patch_gst_web_cursors.sh` | gamescope headless doesn't composite the X cursor → the XFIXES CSS overlay is the only visible cursor; the web client's auto pointer-lock hides it. Fix: `--enable_cursors=true` (safe after the `dpad_input_patch.py` xfixes crash fix) + a `window.DPAD_POINTER_LOCK` gate in `/opt/gst-web/input.js` (default false → absolute mouse). FPS relative mouse: browser console `window.DPAD_POINTER_LOCK = true` + click. |
 | **`unattended-upgrades` disabled (protects live sessions)** | `vm-bootstrap.sh` `ensure_no_auto_updates()` (runs FIRST) | Ubuntu's `apt-daily-upgrade.timer` ran `unattended-upgrades` mid-session, upgrading the kernel + libc6 + openssh; `needrestart` then issued `systemctl daemon-reexec` + restarted containerd/docker → every game container died exit 137 ~2 min after `DPAD_READY` (observed live 2026-07-30). Masks the apt timers + zeros `APT::Periodic::*` + sets `needrestart` to restart-mode=list (no auto-restart). |
 | **CAP-PROBE corrected + FATAL verify** | `vm-bootstrap.sh` `ensure_docker_xfs_quota()` | The old `dd ... \| tail -3` dropped the `No space left on device` line (dd prints it BEFORE its summary) + `$?` was `tail`'s → a working cap falsely reported "NOT enforced." Now captures dd's full output + real exit; the verify is FATAL (`return 1`) so an uncapped ephemeral VM never ships. Also the docker drop-in `RequiresMountsFor` moved to `[Unit]` (was wrongly `[Service]`, ignored) + idempotency hardened (img + fstab entry) vs the daemon-reexec `findmnt` race. |
+| **oversub cuInit forward-compat skip** | `entrypoint.sh` `configure_cuda()` | The forward-compat `cuInit(0)` test (loads the image's OLD compat `libcuda.so.555` against the newer 580 driver) **deadlocks under a 2nd concurrent MPS client** (`skb_wait_for_more_packet` on the MPS control socket) → the 2nd oversub session's boot stalled 7+ min, exceeding the launch deadline. Forward-compat is only needed when the IMAGE's CUDA is NEWER than the host max CUDA; now the test runs only then (`dpkg --compare-versions`) + is `timeout 20`-guarded. For our images (12.5/12.8 ≤ host 13.0) it's skipped → always the fast fallback path (slot-0 proved the fallback works). |
+| **entrypoint bind-mount hotfix path** | `dpad-launch-session` + `vm-bootstrap.sh` `ensure_image()` | `dpad-launch-session` bind-mounts the host's `/opt/dpadcloud/entrypoint.sh` over the image's baked entrypoint (if present); `vm-bootstrap` fetches it fresh from repo `main` at bootstrap. Lets entrypoint hotfixes go live **WITHOUT an image rebuild + Docker Hub push** (the owner step that's blocked) — validated live (the cuInit fix shipped this way on the 2nd oversub session). Falls back to the baked entrypoint if the fetch/host file is absent. |
 
 ## 5. Known limitations (accepted, don't chase)
 
