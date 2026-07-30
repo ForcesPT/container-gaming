@@ -204,6 +204,95 @@ ensure_nct() {
 }
 
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Phase 2c: Docker storage on XFS with project quotas (per-container --storage-opt size)
+# -----------------------------------------------------------------------------
+# Ephemeral ("no storage") sessions cap each container's rootfs at 200 GB via
+# `docker run --storage-opt size=200g`. That ONLY enforces when Docker's backing
+# filesystem supports project quotas — the default ext4 root does NOT (the
+# option is silently accepted but NO cap is applied). So we move /var/lib/docker
+# onto an XFS file (loopback, ON THE VM's OWN BOOT DISK — no extra provider
+# storage needed, so it works on ephemeral-disk providers like MassedCompute)
+# formatted + mounted with `prjquota`. Then --storage-opt size enforces AND
+# `df /` inside a capped container reports the quota — Steam's storage UI shows
+# ~200 GB, and a user physically can't write past it.
+#
+# Idempotent: a re-run (e.g. after the driver-downgrade reboot) no-ops once
+# /var/lib/docker is on XFS prjquota. Runs AFTER ensure_nct (Docker installed +
+# runtime configured) and BEFORE ensure_image (so the image is pulled INTO the
+# XFS). The fstab entry re-mounts it at every boot; a docker.service drop-in
+# (RequiresMountsFor) orders Docker strictly after the mount.
+ensure_docker_xfs_quota() {
+    # Already on XFS prjquota? (idempotent — true after a reboot re-run.)
+    if mountpoint -q /var/lib/docker 2>/dev/null \
+       && findmnt -no OPTIONS /var/lib/docker 2>/dev/null | grep -qw prjquota; then
+        log "Docker storage already on XFS prjquota (/var/lib/docker) — good"
+        return 0
+    fi
+    command -v mkfs.xfs >/dev/null 2>&1 || {
+        log "installing xfsprogs (mkfs.xfs)"
+        apt-get update >/dev/null 2>&1 || true
+        DEBIAN_FRONTEND=noninteractive apt-get install -y xfsprogs >/tmp/dpad-xfsprogs.log 2>&1 \
+            || { err "xfsprogs install failed (see /tmp/dpad-xfsprogs.log)"; return 1; }
+    }
+
+    # XFS file on the VM's own boot disk (the root fs). Leave a 60 GB headroom
+    # for the OS + Docker binaries + XFS metadata; the rest is the Docker store
+    # (the image + N capped container writable layers). Sparse, so it only
+    # consumes boot-disk space as Docker writes.
+    local root_gb xfs_gb img
+    root_gb=$(df --output=size / | awk 'NR==2{print int($1/1024/1024)}')
+    [ "${root_gb:-0}" -lt 120 ] 2>/dev/null \
+        && { err "boot disk too small for XFS Docker store (${root_gb:-?} GB)"; return 1; }
+    xfs_gb=$(( root_gb - 60 ))
+    img="/var/lib/dpad-docker-xfs.img"
+    log "setting up Docker storage on XFS prjquota: ${img} (${xfs_gb} GB on the boot disk)"
+
+    systemctl stop docker 2>/dev/null || true
+    # Preserve any existing Docker state (usually just an init scaffold — the
+    # image is pulled AFTER this, so /var/lib/docker is typically empty here).
+    if [ -d /var/lib/docker ] && [ ! -m /var/lib/docker ]; then
+        mv /var/lib/docker /var/lib/docker.pre-xfs
+    fi
+    mkdir -p /var/lib/docker
+
+    if [ ! -f "$img" ]; then
+        truncate -s "${xfs_gb}G" "$img" || { err "truncate $img failed"; return 1; }
+        mkfs.xfs -q "$img" || { err "mkfs.xfs $img failed"; return 1; }
+    fi
+
+    # Mount now (loop,prjquota) + persist via fstab (re-mounts at every boot).
+    mount -t xfs -o loop,prjquota "$img" /var/lib/docker \
+        || { err "XFS loop mount of $img failed"; return 1; }
+    if ! grep -q "^[^#]*[[:space:]]/var/lib/docker[[:space:]]" /etc/fstab 2>/dev/null; then
+        echo "${img} /var/lib/docker xfs loop,prjquota,defaults 0 0" >> /etc/fstab
+    fi
+    # Order Docker strictly after the mount (fstab mounts are local-fs, before
+    # Docker, but be explicit so a race can't start Docker on the bare dir).
+    mkdir -p /etc/systemd/system/docker.service.d
+    printf '[Service]\nRequiresMountsFor=/var/lib/docker\n' \
+        > /etc/systemd/system/docker.service.d/dpad-xfs.conf
+    systemctl daemon-reload
+
+    # Restore any pre-existing Docker state into the XFS.
+    if [ -d /var/lib/docker.pre-xfs ]; then
+        cp -a /var/lib/docker.pre-xfs/. /var/lib/docker/ 2>/dev/null || true
+        rm -rf /var/lib/docker.pre-xfs
+    fi
+
+    systemctl start docker || { err "docker failed to start on the XFS store"; return 1; }
+    # Verify --storage-opt size actually enforces now: writing past a 256 MB cap
+    # MUST fail. On a plain ext4 root it would succeed (no cap) — fail loud so a
+    # broken quota setup never ships an uncapped ephemeral VM.
+    if docker run --rm --storage-opt size=256m alpine \
+        sh -c 'dd if=/dev/zero of=/captest bs=1M count=300 2>/dev/null && echo CAP_BYPASSED' \
+        2>/dev/null | grep -q CAP_BYPASSED; then
+        err "XFS prjquota mounted but --storage-opt size still NOT enforced — capping will not work"
+        return 1
+    fi
+    log "Docker storage on XFS prjquota OK — --storage-opt size now enforces (per-container rootfs cap)"
+}
+
 # Phase 2b: enable unprivileged user namespaces on the VM host
 # -----------------------------------------------------------------------------
 # Steam (and pressure-vessel/Flatpak) running as the non-root dpad user needs
@@ -615,6 +704,7 @@ bootstrap() {
     ensure_driver_580         # may reboot once (595->580); resumes here after
     ensure_modeset            # may reboot once; resumes here after
     ensure_nct                || return 1
+    ensure_docker_xfs_quota   || return 1
     ensure_userns
     ensure_image              || return 1
     if [ "${DPAD_WARM_VM}" = "1" ]; then

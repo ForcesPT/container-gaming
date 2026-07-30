@@ -24,12 +24,13 @@
 #                   container name = dpad-slot-<slotIndex>)
 #     volumeId       the provider storage UUID (used for the fs label + mount dir),
 #                   OR the literal `none` for an EPHEMERAL / no-library session:
-#                   no provider volume is attached; instead a per-slot loopback
-#                   scratch (sparse ext4, capped — default 200 GB via
-#                   DPAD_EPHEMERAL_DISK_GB) is created on the VM boot disk,
-#                   bound as /mnt/dpad-library, and removed on stop (games are
-#                   gone when the session ends — re-download each launch).
-#                   See the ephemeral branch in launch().
+#                   no provider volume; the container rootfs is capped at 200 GB
+#                   via `--storage-opt size` (default, DPAD_EPHEMERAL_DISK_GB
+#                   overrides). REQUIRES the VM's Docker backing fs to support
+#                   project quotas — vm-bootstrap sets up /var/lib/docker on an
+#                   XFS-prjquota loopback (on the VM's own boot disk). Games live
+#                   in the capped container overlay, gone on container removal
+#                   (re-download each launch). See the ephemeral branch in launch().
 #     device         the provider device address returned by attach, e.g. virtio:1
 #                   (mapped to /dev/vd<letter>; virtio:0=vda is the OS disk).
 #                   IGNORED when volumeId == none.
@@ -153,44 +154,25 @@ launch() {
     # Volume bind (persistent) vs ephemeral. A persistent slot mounts the user's
     # provider block storage at /mnt/dpad-library (DPAD_VOLUME_MOUNT → the
     # entrypoint's setup_user_volume symlinks the library subpaths there). An
-    # ephemeral slot skips the bind + the env → setup_user_volume no-ops → Steam
-    # runs against the image's own filesystem (games live in the container
-    # overlay, gone on container removal — re-download each launch).
+    # ephemeral slot caps the CONTAINER ROOTFS at 200 GB via `--storage-opt size`
+    # (no volume bind): Steam's storage UI shows ~200 GB and a user can't write
+    # past it. Games live in the capped container overlay, gone on container
+    # removal (re-download each launch). REQUIRES the VM's Docker backing fs to
+    # support project quotas — vm-bootstrap's ensure_docker_xfs_quota sets up
+    # /var/lib/docker on an XFS-prjquota loopback (on the VM's own boot disk) so
+    # this enforces on every provider, incl. ephemeral-disk ones (MassedCompute).
     local -a vol_args=()
     if is_ephemeral "$volumeId"; then
-        log "ephemeral slot $slot — capped scratch (games re-download each launch, gone on end)"
-        # Per-slot loopback scratch: a sparse ext4 image on the VM boot disk,
-        # loop-mounted + bound into the container as /mnt/dpad-library (reuses the
-        # persistent library code path — setup_user_volume symlinks steamapps/
-        # config/userdata/compatibilitytools.d there). Hard cap = the image size;
-        # sparse, so it only consumes boot-disk space as written. Default 200 GB
-        # per slot (the boot disk is sized 120 + 200*slotsTotal so N slots fit).
-        # On stop the loop file is unmounted + removed (ephemeral = gone). No
-        # provider storage API needed (works on all providers, incl.
-        # MassedCompute), and no Docker quota-driver requirement — `--storage-opt
-        # size` needs XFS pquota / ext4 prjquota which the default ext4 root does
-        # NOT enforce (silently accepted, no cap). DPAD_EPHEMERAL_DISK_GB (GB)
-        # overrides the per-slot cap.
+        log "ephemeral slot $slot — capped container rootfs (games re-download each launch, gone on end)"
+        # Per-container rootfs cap via --storage-opt size (default 200 GB;
+        # DPAD_EPHEMERAL_DISK_GB overrides, in GB). On a plain ext4 root this is
+        # silently accepted but NOT enforced — the VM MUST have run
+        # vm-bootstrap's ensure_docker_xfs_quota (XFS prjquota), else the cap
+        # won't apply. vm-bootstrap verifies enforcement at bootstrap time, so
+        # reaching here means it's safe.
         local cap_gb="${DPAD_EPHEMERAL_DISK_GB:-200}"
-        local img="/opt/dpad-scratch/slot${slot}.img"
-        local smnt="/mnt/dpad-scratch/slot${slot}"
-        mkdir -p /opt/dpad-scratch "$smnt"
-        if [ ! -f "$img" ]; then
-            log "  creating ${cap_gb} GB scratch for slot $slot (sparse ext4)"
-            truncate -s "${cap_gb}G" "$img"
-            mkfs.ext4 -q -F "$img" || { err "mkfs failed on $img"; return 1; }
-        fi
-        # Idempotent: reuse an existing loop mount (a re-launch after a container
-        # crash) rather than double-mounting. NOTE: `findmnt -T` is WRONG here — it
-        # returns success for any path that sits under a mount (every dir is under
-        # the root fs), so it would always skip the mount. Use `mountpoint -q` to
-        # test whether $smnt is ITSELF a mount point.
-        if ! mountpoint -q "$smnt"; then
-            mount -o loop "$img" "$smnt" || { err "loop mount failed for $img"; return 1; }
-        fi
-        chown -R 1001:1001 "$smnt" 2>/dev/null || true
-        log "  scratch mounted at $smnt -> /mnt/dpad-library in container (${cap_gb} GB cap)"
-        vol_args+=( -v "${smnt}:/mnt/dpad-library" -e DPAD_VOLUME_MOUNT=/mnt/dpad-library )
+        vol_args+=( --storage-opt "size=${cap_gb}g" )
+        log "  ephemeral rootfs cap: ${cap_gb} GB (--storage-opt size=${cap_gb}g)"
     else
         local mnt
         mnt="$(mount_volume "$volumeId" "$device")" || return 1
@@ -255,17 +237,10 @@ stop() {
     else
         log "no container $name to stop"
     fi
-    # Ephemeral scratch cleanup: unmount + remove the per-slot loopback image so
-    # the next session on this slot starts fresh (ephemeral = games gone on end).
-    # Persistent slots have no loop file here (their library is on a provider
-    # volume, detached by the control plane after this returns) — rm is a no-op.
-    local img="/opt/dpad-scratch/slot${slot}.img"
-    local smnt="/mnt/dpad-scratch/slot${slot}"
-    if mountpoint -q "$smnt"; then
-        umount "$smnt" 2>/dev/null || true
-    fi
-    rmdir "$smnt" 2>/dev/null || true
-    rm -f "$img" 2>/dev/null || true
+    # Ephemeral cap is --storage-opt size on the container rootfs — nothing to
+    # unmount/delete here (the container removal frees its capped overlay layer).
+    # Persistent slots: the control plane hotplug-detaches the provider volume
+    # after this returns.
 }
 
 # -----------------------------------------------------------------------------
