@@ -260,7 +260,10 @@ ensure_docker_xfs_quota() {
         truncate -s "${xfs_gb}G" "$img" || { err "truncate $img failed"; return 1; }
         # reflink=0: XFS reflink (CoW) can conflict with project-quota enforcement
         # on some kernels — disable it so pquota caps reliably.
-        mkfs.xfs -m reflink=0 -q "$img" || { err "mkfs.xfs $img failed"; return 1; }
+        # ftype=1: overlay2 REQUIRES d_type support (ftype=1) — Docker's project-
+        # quota detection + the overlay2 driver both need it. With reflink=0 mkfs
+        # can default ftype=0, which breaks overlay2/quota, so set it explicitly.
+        mkfs.xfs -m reflink=0 -n ftype=1 -q "$img" || { err "mkfs.xfs $img failed"; return 1; }
     fi
 
     # Mount now (loop,pquota — the canonical XFS project-quota option) + persist
@@ -307,9 +310,9 @@ ensure_docker_xfs_quota() {
     fi
     err "XFS pquota mounted but --storage-opt size NOT enforced — VM UNCAPPED (diagnostic mode)"
     err "  findmnt: $(findmnt -no SOURCE,FSTYPE,OPTIONS /var/lib/docker 2>/dev/null)"
-    err "  xfs_info: $(xfs_info /var/lib/docker 2>&1 | tr '\n' ' ' | grep -oiE 'reflink=[0-9]|projid32bit=[0-9]' | tr '\n' ' ')"
+    err "  xfs_info: $(xfs_info /var/lib/docker 2>&1 | tr '\n' ' ' | grep -oiE 'reflink=[0-9]|projid32bit=[0-9]|ftype=[0-9]' | tr '\n' ' ')"
     err "  xfs_quota: $(xfs_quota -x -c state /var/lib/docker 2>&1 | grep -iE 'project|quota' | tr '\n' ' ' | cut -c1-200)"
-    err "  docker info: $(docker info 2>/dev/null | grep -iE 'storage driver|backing|quota|docker root' | tr '\n' ' ')"
+    err "  docker info: $(docker info 2>/dev/null | grep -iE 'storage driver|backing|d_type|quota|docker root' | tr '\n' ' ')"
     err "  daemon.json: $(cat /etc/docker/daemon.json 2>/dev/null | tr '\n' ' ')"
     err "  docker journal: $(journalctl -u docker --no-pager -n 6 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
     log "XFS quota not enforced — continuing UNCAPPED for live diagnosis (TODO: re-enable fatal + fix)"
