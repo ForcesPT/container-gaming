@@ -181,8 +181,11 @@ launch() {
             mkfs.ext4 -q -F "$img" || { err "mkfs failed on $img"; return 1; }
         fi
         # Idempotent: reuse an existing loop mount (a re-launch after a container
-        # crash) rather than double-mounting.
-        if ! findmnt -rn -T "$smnt" >/dev/null 2>&1; then
+        # crash) rather than double-mounting. NOTE: `findmnt -T` is WRONG here — it
+        # returns success for any path that sits under a mount (every dir is under
+        # the root fs), so it would always skip the mount. Use `mountpoint -q` to
+        # test whether $smnt is ITSELF a mount point.
+        if ! mountpoint -q "$smnt"; then
             mount -o loop "$img" "$smnt" || { err "loop mount failed for $img"; return 1; }
         fi
         chown -R 1001:1001 "$smnt" 2>/dev/null || true
@@ -258,7 +261,7 @@ stop() {
     # volume, detached by the control plane after this returns) — rm is a no-op.
     local img="/opt/dpad-scratch/slot${slot}.img"
     local smnt="/mnt/dpad-scratch/slot${slot}"
-    if findmnt -rn -T "$smnt" >/dev/null 2>&1; then
+    if mountpoint -q "$smnt"; then
         umount "$smnt" 2>/dev/null || true
     fi
     rmdir "$smnt" 2>/dev/null || true
