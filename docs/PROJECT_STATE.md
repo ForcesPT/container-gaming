@@ -89,6 +89,8 @@ reverts to the `:2` bridge fallback.
 | **Gamepad 6-layer chain** | Dockerfile + `entrypoint.sh` `start_gamescope_session` | (1) interposer wired into the gamescope path; (2) `SDL_JOYSTICK_LINUX_CLASSIC=1` + `SDL_JOYSTICK_DEVICE=/dev/input/js0`; (3) root watcher mknods `/dev/input/jsN` on socket appear; (4) `SDL_JOYSTICK_DISABLE_UDEV=1` (ENUMERATION_FALLBACK hotplug); (5) `JSIOCGNAME` returns name length (source patch); (6) **both x86_64 AND i386 `.so` rebuilt** (`gcc-multilib`/`libc6-dev-i386`, fail loud — Steam's main binary is 32-bit). |
 | **Targeted chown (no blanket `chown -R`)** | `entrypoint.sh` | A blanket `chown -R dpad:dpad /home/dpad` copy-ups all ~33k pre-baked files on overlayfs (no `metacopy`) → ~119s wasted. Use `find <dir> ! \( -user dpad -group dpad \) -exec chown dpad:dpad {} +` (skips already-owned). Cold boot 172s → 50s. **Never reintroduce `chown -R` over a large pre-baked dir.** |
 | **Cursor: `--enable_cursors=true` + pointer-lock gate** | entrypoint + `patch_gst_web_cursors.sh` | gamescope headless doesn't composite the X cursor → the XFIXES CSS overlay is the only visible cursor; the web client's auto pointer-lock hides it. Fix: `--enable_cursors=true` (safe after the `dpad_input_patch.py` xfixes crash fix) + a `window.DPAD_POINTER_LOCK` gate in `/opt/gst-web/input.js` (default false → absolute mouse). FPS relative mouse: browser console `window.DPAD_POINTER_LOCK = true` + click. |
+| **`unattended-upgrades` disabled (protects live sessions)** | `vm-bootstrap.sh` `ensure_no_auto_updates()` (runs FIRST) | Ubuntu's `apt-daily-upgrade.timer` ran `unattended-upgrades` mid-session, upgrading the kernel + libc6 + openssh; `needrestart` then issued `systemctl daemon-reexec` + restarted containerd/docker → every game container died exit 137 ~2 min after `DPAD_READY` (observed live 2026-07-30). Masks the apt timers + zeros `APT::Periodic::*` + sets `needrestart` to restart-mode=list (no auto-restart). |
+| **CAP-PROBE corrected + FATAL verify** | `vm-bootstrap.sh` `ensure_docker_xfs_quota()` | The old `dd ... \| tail -3` dropped the `No space left on device` line (dd prints it BEFORE its summary) + `$?` was `tail`'s → a working cap falsely reported "NOT enforced." Now captures dd's full output + real exit; the verify is FATAL (`return 1`) so an uncapped ephemeral VM never ships. Also the docker drop-in `RequiresMountsFor` moved to `[Unit]` (was wrongly `[Service]`, ignored) + idempotency hardened (img + fstab entry) vs the daemon-reexec `findmnt` race. |
 
 ## 5. Known limitations (accepted, don't chase)
 
@@ -110,12 +112,14 @@ reverts to the `:2` bridge fallback.
 
 ## 6. Open image-side items
 
-1. **`vm-bootstrap` driver 595 → 580 auto-downgrade** (REQUIRED for UpCloud L4
-   + MassedCompute L40S flicker-free streams). The warm-VM prep must detect a
-   non-580 driver → `apt remove nvidia-driver-pinning-595* && apt install
-   nvidia-driver-580-open` + reboot (the systemd oneshot already resumes after
-   a reboot). The UpCloud AI/ML template + MassedCompute image 184 ship 595 →
-   severe whole-frame flicker (see `cloud/docs/DEPLOY-RUNBOOK.md`).
+1. **`vm-bootstrap` driver 595 → 580 auto-downgrade — DONE + validated live
+   2026-07-30.** `ensure_driver_580` detected `595.58.03` on a fresh UpCloud
+   AI/ML template → removed the pinning package → installed
+   `nvidia-driver-580-open` → rebooted → the oneshot resumed with
+   `580.173.02` (`nvidia-smi` confirmed). The full downgrade+reboot+resume path
+   ran on a real v2 launch. (Was: REQUIRED for UpCloud L4 + MassedCompute L40S
+   flicker-free streams — the AI/ML template + image 184 ship 595 → severe
+   whole-frame flicker; see `cloud/docs/DEPLOY-RUNBOOK.md` §1.)
 2. **Push `:dpad-SteamOS-L4` to Docker Hub** (owner step — the build box isn't
    logged in). The public tag is the stale 3.16.19 image; warm-pool/`docker
    pull` gets the wrong one. After pushing, re-enable the `dpadcloud-bootstrap`
@@ -123,10 +127,16 @@ reverts to the `:2` bridge fallback.
 3. **`dpad-launch-session` ephemeral (`volumeId=none`) live validation** — the
    v2 ephemeral path (no `-v` bind, no `DPAD_VOLUME_MOUNT`). The script change
    is on `main`; validate on the first MassedCompute launch.
-4. **`--storage-opt size=<N>g` ephemeral disk cap** — plumbed (gated on
-   `DPAD_EPHEMERAL_DISK_GB`) but dormant; needs ext4 `prjquota` / XFS `pquota`
-   on the VM Docker storage driver (a vm-bootstrap ops step). Without it, N
-   ephemeral slots share the VM disk (bounded by the 10-min idle teardown).
+4. **`--storage-opt size=<N>g` ephemeral disk cap — DONE + validated live
+   2026-07-30.** `vm-bootstrap.sh` `ensure_docker_xfs_quota()` moves `/var/lib/docker`
+   onto an XFS-`pquota` loopback on the boot disk (`ftype=1` + `reflink=0`) +
+   disables the containerd image store → legacy `overlay2`, which enforces
+   `--storage-opt size`. `dpad-launch-session` caps ephemeral via
+   `--storage-opt size=$DPAD_EPHEMERAL_DISK_GB` (cloud worker writes `=200`).
+   Validated: a fresh Helsinki → Casual → no-storage container got
+   `StorageOpt=map[size:200g]`, `df /` = `200G`, and Steam → Settings → Storage
+   showed **200 GB / 198.23 GB free**. The CAP-PROBE is corrected + FATAL
+   (see §4). (Was: plumbed but dormant; needed XFS pquota on the VM Docker store.)
 5. **Steam-login persistence on the per-user volume** (the linchpin of the v2
    "your cloud PC" UX) — encrypted `config.vdf` + `loginusers.vdf` on the
    volume; the container decrypts + injects on boot → silent Steam auto-login.
