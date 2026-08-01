@@ -87,48 +87,95 @@ dev_for_address() {
 # Find or format+mount the volume for a storage UUID. Returns the host mount path
 # on stdout (for the docker -v bind). Idempotent: if already mounted (a re-launch
 # after a container died), reuse it.
+# Is /dev/<x> a candidate for a freshly-attached (raw, unlabelled) user volume?
+# Exclude: loop/cdrom/floppy/ram, the docker XFS loopback, any MOUNTED device, any
+# device already labelled dpadvol-* (another user's attached volume on an
+# oversubscribed VM), and the BOOT disk (which has partitions vda1/vda2 — a raw
+# user volume is unpartitioned).
+is_raw_volume_dev() {
+    local d="$1" base="${1#/dev/}"
+    case "$base" in loop*|sr*|fd*|ram*|zram*) return 1 ;; esac
+    [ -b "$d" ] || return 1
+    findmnt -rn -S "$d" >/dev/null 2>&1 && return 1
+    local lbl; lbl="$(blkid -o export "$d" 2>/dev/null | awk -F= '/^LABEL=/{print $2}')"
+    case "$lbl" in dpadvol-*) return 1 ;; esac
+    # boot disk has partitions (vda1/vda2); a raw user volume does not.
+    lsblk -nl -o NAME "$d" 2>/dev/null | grep -qE "^${base}p?[0-9]+$" && return 1
+    return 0
+}
+
+# Find the raw user-volume device by exclusion (the only unpartitioned,
+# unmounted, unlabelled, non-loop disk). Returns /dev/<x> on stdout.
+find_raw_volume_dev() {
+    local d
+    for d in $(lsblk -nd -o NAME 2>/dev/null); do
+        case "$d" in loop*|sr*|fd*|ram*|zram*) continue ;; esac
+        is_raw_volume_dev "/dev/$d" && { echo "/dev/$d"; return 0; }
+    done
+    return 1
+}
+
 mount_volume() {
     local volumeId="$1" device="$2"
     local uuid8="${volumeId%%-*}"            # first 8 hex chars of the UUID
     local label="${LABEL_PREFIX}-${uuid8}"
     local mnt="${MOUNT_ROOT}/${volumeId}"
-    local dev
-    dev="$(dev_for_address "$device")" || { err "can't map device '$device'"; return 1; }
-    # Hotplug attach is async — the provider API (UpCloud POST .../storage/attach)
-    # returns + the adapter confirms the device in the management-plane server
-    # view BEFORE the guest kernel enumerates /dev/vdX. Poll the guest for the
-    # block device to appear (up to 30s) before erroring; a warm-VM re-attach can
-    # take a few seconds to surface the device after attachVolume returns.
+
+    # Already mounted (re-launch after a container crash)? Reuse.
+    if findmnt -rn -T "$mnt" >/dev/null 2>&1; then
+        echo "$mnt"; return 0
+    fi
+
+    # Re-attach of an already-formatted volume: mount by LABEL — device-letter
+    # agnostic. The guest may re-attach the same volume at a different
+    # /dev/vd<letter> after a detach (the virtio slot isn't reused), so don't
+    # rely on the address->letter hint here.
+    local found
+    found="$(blkid -L "$label" 2>/dev/null || true)"
+    if [ -n "$found" ] && [ -b "$found" ]; then
+        log "volume already formatted ($label on $found) — mounting by label"
+        mkdir -p "$mnt"
+        mount -L "$label" "$mnt" || { err "mount by label failed"; return 1; }
+        chown -R 1001:1001 "$mnt" 2>/dev/null || true
+        echo "$mnt"; return 0
+    fi
+
+    # First attach (raw, unformatted): find the block device. The provider passes
+    # a virtio:N address (-> /dev/vd<letter>) as a HINT, but the letter is
+    # UNRELIABLE after a detach — the guest doesn't reuse a freed vd<letter>, so
+    # the next attach skips ahead (observed live: a volume attached as vdc while
+    # the adapter reported virtio:1=vdb, after the prior session's vdb was
+    # detached). So: prefer the hint if it is a raw volume; else find the raw
+    # volume by exclusion (not the boot disk / docker loop / mounted /
+    # dpadvol-labelled device). Poll up to 30s for the async hotplug to surface
+    # the device.
+    local hint dev
+    hint="$(dev_for_address "$device" 2>/dev/null || true)"
+    dev=""
     local _tries=0
-    while [ ! -b "$dev" ]; do
+    while [ -z "$dev" ]; do
+        if [ -n "$hint" ] && [ -b "$hint" ] && is_raw_volume_dev "$hint"; then
+            dev="$hint"
+        else
+            dev="$(find_raw_volume_dev)"
+        fi
+        if [ -n "$dev" ]; then break; fi
         _tries=$((_tries+1))
         if [ $_tries -ge 30 ]; then
-            err "device $dev did not appear after ${_tries}s (attach not complete?). Block devices present:"
-            lsblk -ndo NAME,SIZE,MOUNTPOINT 2>/dev/null | sed 's/^/    /' >&2
+            err "volume device did not appear after ${_tries}s (attach not complete? hint=$hint). Block devices present:"
+            lsblk -nd -o NAME,SIZE,MOUNTPOINT 2>/dev/null | sed 's/^/    /' >&2
             return 1
         fi
         sleep 1
     done
 
-    # Already mounted? Reuse (re-launch after a container crash).
-    if findmnt -rn -T "$mnt" >/dev/null 2>&1; then
-        echo "$mnt"; return 0
-    fi
-
-    # If the device already has our label (formatted on a previous attach),
-    # mount by label. Otherwise (first attach, raw unformatted) mkfs it.
-    local found
-    found="$(blkid -L "$label" 2>/dev/null || true)"
-    if [ -n "$found" ] && [ "$found" = "$dev" ]; then
-        log "volume already formatted ($label on $dev) — mounting"
-    elif [ -n "$(blkid "$dev" 2>/dev/null)" ]; then
-        # Formatted but not our label — refuse (don't clobber an unknown fs).
+    # Sanity: refuse to clobber a foreign filesystem.
+    if [ -n "$(blkid "$dev" 2>/dev/null)" ]; then
         err "$dev is formatted but not labelled $label (got: $(blkid -o export "$dev" 2>/dev/null | grep LABEL)); refusing to mkfs"
         return 1
-    else
-        log "first attach — mkfs.ext4 -L $label $dev"
-        mkfs.ext4 -q -F -L "$label" "$dev" || { err "mkfs failed on $dev"; return 1; }
     fi
+    log "first attach — mkfs.ext4 -L $label $dev"
+    mkfs.ext4 -q -F -L "$label" "$dev" || { err "mkfs failed on $dev"; return 1; }
 
     mkdir -p "$mnt"
     mount -L "$label" "$mnt" || { err "mount failed"; return 1; }
