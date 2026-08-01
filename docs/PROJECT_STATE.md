@@ -87,8 +87,10 @@ reverts to the `:2` bridge fallback.
   647 GB — the install root was on the uncapped rootfs). Fix: the Steam install
   root now lives ON the volume (`~/.steam/debian-installation` →
   `<vol>/steam-install`, client copied once). See §4 + `cloud/docs/STATUS.md`
-  §8 #1b. (Volume SURVIVAL across End+relaunch + Steam-login persistence still
-  open.)
+  §8 #1b. **Volume SURVIVAL + Steam auto-login validated end-to-end (twice):**
+  an installed game survived End+relaunch (download-once) + Steam Guard
+  "remember this device" persisted → silent auto-login. The whole Steam state
+  (client+games+login) lives on the volume.
 
 ## 4. The baked-in fixes (don't re-discover)
 
@@ -155,10 +157,14 @@ reverts to the `:2` bridge fallback.
    `StorageOpt=map[size:200g]`, `df /` = `200G`, and Steam → Settings → Storage
    showed **200 GB / 198.23 GB free**. The CAP-PROBE is corrected + FATAL
    (see §4). (Was: plumbed but dormant; needed XFS pquota on the VM Docker store.)
-5. **Steam-login persistence on the per-user volume** (the linchpin of the v2
-   "your cloud PC" UX) — encrypted `config.vdf` + `loginusers.vdf` on the
-   volume; the container decrypts + injects on boot → silent Steam auto-login.
-   First launch: one-time Steam login + Steam Guard. `cloud/docs/V2-PLAN.md` §5.
+5. **Steam-login persistence — DONE + validated 2026-08-01.** The linchpin of
+   the v2 "your cloud PC" UX. Achieved via the install-root-on-volume (§4): the
+   Steam login config (`config.vdf`/`loginusers.vdf` + the Steam Guard
+   "remember this device" token) lives under `<vol>/steam-install/config`, so
+   on End+relaunch Steam auto-logs-in silently (validated live: persisted across
+   two End+relaunch cycles). No separate encrypted-credential injection needed —
+   the install root on the volume carries the login state naturally. First
+   launch: one-time Steam login + Steam Guard. `cloud/docs/V2-PLAN.md` §5.
 6. **`dpad-launch-session` live validation** (v2 worker side) — the SSH launch
    + volume mount + per-slot coturn + the `DPAD_READY` readiness marker (the
    worker currently uses a `docker ps` count heuristic).
