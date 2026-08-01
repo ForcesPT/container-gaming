@@ -301,16 +301,27 @@ launch() {
 stop() {
     local slot="$1"
     local name="${CONTAINER_PREFIX}-${slot}"
+    local volmnt=""
     if docker ps -a --format '{{.Names}}' | grep -qx "$name"; then
+        # Capture the host volume mount this container bind-mounted at
+        # /mnt/dpad-library (-> /mnt/dpad-vol/<volId>) BEFORE removing it, so we
+        # can unmount it after. A leftover mount becomes STALE once the control
+        # plane detaches the volume — and the next session's mount_volume would
+        # see findmnt -T $mnt "already mounted" + reuse the stale mount (I/O
+        # errors), crashing the install-root-on-volume setup.
+        volmnt="$(docker inspect "$name" --format '{{range .Mounts}}{{if eq .Destination "/mnt/dpad-library"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)"
         log "stopping+removing $name"
         docker rm -f "$name" >/dev/null 2>&1 || true
     else
         log "no container $name to stop"
     fi
-    # Ephemeral cap is --storage-opt size on the container rootfs — nothing to
-    # unmount/delete here (the container removal frees its capped overlay layer).
-    # Persistent slots: the control plane hotplug-detaches the provider volume
-    # after this returns.
+    # Unmount the volume now that the container is gone (no longer using it).
+    # Best-effort — the volume may already be detached/unmounted. This prevents
+    # stale mounts accumulating on a warm VM across sessions.
+    if [ -n "$volmnt" ]; then
+        umount "$volmnt" 2>/dev/null || true
+        log "unmounted $volmnt"
+    fi
 }
 
 # -----------------------------------------------------------------------------
