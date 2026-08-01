@@ -549,20 +549,13 @@ setup_nvenc_fix() {
 #
 # A v2 session bind-mounts the user's UpCloud block-storage volume (mounted on
 # the VM host at /mnt/dpad-vol/<volId>, labelled dpadvol-<uuid8>) into the
-# container at DPAD_VOLUME_MOUNT (default /mnt/dpad-library). The whole Steam
-# INSTALL ROOT (~/.steam/debian-installation) is symlinked to <vol>/steam-install
-# so the Steam client + library (games, config, saves, Proton) all live ON THE
-# VOLUME. This is required because Steam FORCES its library "0" = the install
-# root + reports Settings->Storage free space as statvfs() of that path's
-# filesystem — with the install root on the rootfs it shows the uncapped rootfs
-# (~647 GB), not the volume. Putting the install root on the volume makes the
-# display, the free-space check, AND the install target all reference the volume
-# (exact). The client (~2.1 GB) is baked into the image + copied to the volume
-# ONCE (first launch); fast-boot is preserved (client present on the attached
-# volume). A game downloads ONCE and persists across sessions. The volume is
-# region-locked (UpCloud storages attach only within their zone); changing
-# regions is a rare paid migration. A tier switch within the region reuses the
-# same volume.
+# container at DPAD_VOLUME_MOUNT (default /mnt/dpad-library). The Steam CLIENT
+# binary stays in the image (fast-boot); only the LIBRARY subpaths — installed
+# games (steamapps/), login tokens + config (config/), saves (userdata/), and
+# Proton GE (compatibilitytools.d/) — are symlinked from the volume, so a game
+# downloads ONCE and persists across sessions. The volume is region-locked
+# (UpCloud storages attach only within their zone); changing regions is a rare
+# paid migration. A tier switch within the region reuses the same volume.
 #
 # Idempotent + safe with no volume (DPAD_VOLUME_MOUNT unset → no-op, back-compat
 # for the ephemeral/Vast-era runs). On the FIRST launch the volume is empty;
@@ -577,68 +570,36 @@ setup_user_volume() {
         echo "[*] WARNING: DPAD_VOLUME_MOUNT=$vol is not a directory — running with NO persistent library (ephemeral)."
         return 0
     fi
-    echo "[*] User library volume: $vol (persistent Steam install + library on the volume)"
+    echo "[*] User library volume: $vol (persistent steamapps/config/userdata)"
     # The volume is a fresh ext4 (root-owned on the host). The container runs
     # Steam as dpad (uid 1001) — make the volume writable by dpad. This chown
-    # runs as root (entrypoint, before dropping to dpad) + propagates to the
-    # host mount (bind mount shares ownership).
+    # runs as root (entrypoint, before dropping to dpad) + propagates to the host
+    # mount (bind mount shares ownership).
     chown -R "${USER_NAME}:${USER_NAME}" "$vol" 2>/dev/null || true
 
     local si="${USER_HOME}/.steam/debian-installation"
-    local target="$vol/steam-install"
+    mkdir -p "$si" 2>/dev/null
+    as_user "mkdir -p '$vol/steamapps' '$vol/config' '$vol/userdata' '$vol/compatibilitytools.d' 2>/dev/null || true"
 
-    # The Steam CLIENT must live ON THE VOLUME so Steam's library "0" (the
-    # install root) is on the volume's filesystem. Steam FORCES library "0" =
-    # the install root (it overwrites any pre-seeded "0"=volume within minutes
-    # — observed live), and Settings->Storage reports statvfs() of the library
-    # "0" path's filesystem. With the install root on the rootfs it shows the
-    # uncapped rootfs (~647 GB), not the volume. Moving the install root onto
-    # the volume makes the display, the free-space check, AND the install target
-    # all reference the volume (exact). The client (~2.1 GB) is baked into the
-    # image; copy it to the volume ONCE (first launch on this volume); every
-    # later launch reuses the volume's copy. The "fast boot" (no 3-4 min
-    # first-run Steam download) is preserved — the client is present on the
-    # attached volume. Steam auto-updates the volume's copy going forward.
-
-    # Old-layout migration: earlier builds symlinked the subpaths (steamapps/
-    # config/userdata/compatibilitytools.d) at the volume TOP level. Move them
-    # into steam-install/ so existing libraries aren't lost, before seeding.
-    if [ ! -d "$target" ]; then
-        if [ -d "$vol/steamapps" ] || [ -d "$vol/config" ]; then
-            echo "    migrating old top-level library layout -> $target/ (one-time)"
-            mkdir -p "$target"
-            for sub in steamapps config userdata compatibilitytools.d; do
-                [ -e "$vol/$sub" ] && mv "$vol/$sub" "$target/" 2>/dev/null || true
-            done
+    local sub
+    for sub in steamapps config userdata compatibilitytools.d; do
+        local dst="$si/$sub"
+        local src="$vol/$sub"
+        # Already linked to this volume subpath? Skip (idempotent re-launch).
+        if [ -L "$dst" ] && [ "$(readlink -f "$dst" 2>/dev/null)" = "$(readlink -f "$src" 2>/dev/null)" ]; then
+            continue
         fi
-    fi
-
-    # Seed the client into the volume if not already there (first launch).
-    if [ ! -x "$target/ubuntu12_64/steamwebhelper" ]; then
-        if [ -d "$si" ] && [ ! -L "$si" ] && [ -x "$si/ubuntu12_64/steamwebhelper" ]; then
-            echo "    first launch on this volume — copying Steam client (~2.1 GB) to the volume (one-time)"
-            mkdir -p "$target"
-            cp -a "$si/." "$target/" 2>/dev/null || true
-            chown -R "${USER_NAME}:${USER_NAME}" "$target" 2>/dev/null || true
-        else
-            echo "    WARNING: no baked Steam client to seed + volume has none — Steam will re-download on first boot (slow)"
+        # If the image-baked subpath is a real dir WITH content, migrate it into
+        # the volume once (so a pre-seeded image's library isn't lost). Empty
+        # dirs are just removed.
+        if [ -d "$dst" ] && [ ! -L "$dst" ] && [ -n "$(find "$dst" -mindepth 1 -maxdepth 1 2>/dev/null | head -1)" ]; then
+            echo "    migrating image $sub/ -> volume (one-time)"
+            as_user "cp -a '$dst/.' '$src/' 2>/dev/null || true"
         fi
-    fi
-
-    # Replace the install root with a symlink to the volume's steam-install.
-    # statvfs() follows the symlink -> the volume's filesystem -> Storage shows
-    # the volume's size. Steam's forced library "0" = install root now resolves
-    # to the volume. (Idempotent: re-launch re-uses the existing link.)
-    if [ -L "$si" ]; then
-        if [ "$(readlink -f "$si" 2>/dev/null)" != "$(readlink -f "$target" 2>/dev/null)" ]; then
-            rm -f "$si"; ln -s "$target" "$si"
-        fi
-    else
-        rm -rf "$si"
-        ln -s "$target" "$si"
-    fi
-    chown -h "${USER_NAME}:${USER_NAME}" "$si" 2>/dev/null || true
-    echo "    Steam install root -> $target (on the volume; Storage shows the volume)"
+        rm -rf "$dst"
+        as_user "ln -s '$src' '$dst'"
+    done
+    echo "    library subpaths linked to volume: steamapps config userdata compatibilitytools.d"
 }
 
 start_gamescope_session() {
