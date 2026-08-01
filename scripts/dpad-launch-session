@@ -121,8 +121,13 @@ mount_volume() {
     local label="${LABEL_PREFIX}-${uuid8}"
     local mnt="${MOUNT_ROOT}/${volumeId}"
 
-    # Already mounted (re-launch after a container crash)? Reuse.
-    if findmnt -rn -T "$mnt" >/dev/null 2>&1; then
+    # Already mounted (re-launch after a container crash)? Reuse. Use
+    # `mountpoint -q` (is $mnt ITSELF a mount point) — NOT `findmnt -T`, which
+    # returns the deepest ANCESTOR mountpoint (the root `/`) for a plain dir on
+    # the rootfs, falsely short-circuiting after a stop-umount left the mount dir
+    # in place (the volume then never re-mounts + the install root ends up on
+    # the rootfs).
+    if mountpoint -q "$mnt" 2>/dev/null; then
         echo "$mnt"; return 0
     fi
 
@@ -320,6 +325,9 @@ stop() {
     # stale mounts accumulating on a warm VM across sessions.
     if [ -n "$volmnt" ]; then
         umount "$volmnt" 2>/dev/null || true
+        # Remove the now-empty mount dir so the next session doesn't see a stale
+        # rootfs dir (mountpoint -q would correctly skip it, but keep it clean).
+        rmdir "$volmnt" 2>/dev/null || true
         log "unmounted $volmnt"
     fi
 }
