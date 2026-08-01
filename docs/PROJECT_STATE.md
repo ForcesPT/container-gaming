@@ -82,6 +82,13 @@ reverts to the `:2` bridge fallback.
   processes on the GPU via `nvidia-cuda-mps-server`, each with its own 200 GB
   ephemeral cap, Steam Storage showed 200 GB on both. (3:1 + active-gameplay
   frame-time still open — see `cloud/docs/STATUS.md` §8.)
+- **Persistent-volume Storage display — validated live 2026-08-01 (UpCloud L4):**
+  a 50 GB persistent volume → Steam → Settings → Storage shows **50 GB** (was
+  647 GB — the install root was on the uncapped rootfs). Fix: the Steam install
+  root now lives ON the volume (`~/.steam/debian-installation` →
+  `<vol>/steam-install`, client copied once). See §4 + `cloud/docs/STATUS.md`
+  §8 #1b. (Volume SURVIVAL across End+relaunch + Steam-login persistence still
+  open.)
 
 ## 4. The baked-in fixes (don't re-discover)
 
@@ -99,6 +106,9 @@ reverts to the `:2` bridge fallback.
 | **CAP-PROBE corrected + FATAL verify** | `vm-bootstrap.sh` `ensure_docker_xfs_quota()` | The old `dd ... \| tail -3` dropped the `No space left on device` line (dd prints it BEFORE its summary) + `$?` was `tail`'s → a working cap falsely reported "NOT enforced." Now captures dd's full output + real exit; the verify is FATAL (`return 1`) so an uncapped ephemeral VM never ships. Also the docker drop-in `RequiresMountsFor` moved to `[Unit]` (was wrongly `[Service]`, ignored) + idempotency hardened (img + fstab entry) vs the daemon-reexec `findmnt` race. |
 | **oversub cuInit forward-compat skip** | `entrypoint.sh` `configure_cuda()` | The forward-compat `cuInit(0)` test (loads the image's OLD compat `libcuda.so.555` against the newer 580 driver) **deadlocks under a 2nd concurrent MPS client** (`skb_wait_for_more_packet` on the MPS control socket) → the 2nd oversub session's boot stalled 7+ min, exceeding the launch deadline. Forward-compat is only needed when the IMAGE's CUDA is NEWER than the host max CUDA; now the test runs only then (`dpkg --compare-versions`) + is `timeout 20`-guarded. For our images (12.5/12.8 ≤ host 13.0) it's skipped → always the fast fallback path (slot-0 proved the fallback works). |
 | **entrypoint bind-mount hotfix path** | `dpad-launch-session` + `vm-bootstrap.sh` `ensure_image()` | `dpad-launch-session` bind-mounts the host's `/opt/dpadcloud/entrypoint.sh` over the image's baked entrypoint (if present); `vm-bootstrap` fetches it fresh from repo `main` at bootstrap. Lets entrypoint hotfixes go live **WITHOUT an image rebuild + Docker Hub push** (the owner step that's blocked) — validated live (the cuInit fix shipped this way on the 2nd oversub session). Falls back to the baked entrypoint if the fetch/host file is absent. |
+| **Steam install root ON the volume** (Settings→Storage shows the volume) | `entrypoint.sh` `setup_user_volume()` | Steam FORCES library "0" = the install root + reports `statvfs()` of that path's filesystem, so with the install root on the rootfs Storage showed the uncapped rootfs (~647 GB), not the 50 GB volume; pre-seeding `libraryfolders.vdf` `0`=volume does NOT stick (Steam overwrites it within ~2-3 min; on a fresh volume there's no Steam-generated `contentid` to preserve + Steam rejects contentid `0`). Fix: symlink `~/.steam/debian-installation` → `<vol>/steam-install` (copy the ~2.1 GB baked client to the volume once — fast-boot preserved; Steam auto-updates the volume's copy). Steam's forced `0`=install root now resolves to the volume → Storage shows the volume (validated live 2026-08-01: 50 GB volume → Storage shows 50 GB). Old top-level subpath layout is migrated into `steam-install/`. |
+| **Volume device found by label/exclusion (not virtio letter)** | `dpad-launch-session` `mount_volume()` | The `virtio:N`→`/dev/vd<letter>` mapping is UNRELIABLE after a detach (the guest doesn't reuse a freed letter; observed vdb→vdc→vdd). Re-attach mounts by LABEL (`blkid -L dpadvol-<uuid8>`); first-attach finds the raw device by EXCLUSION (not boot disk / docker loop / mounted / `dpadvol-*`-labelled). The `virtio:N` arg is now just a hint. |
+| **`stop` unmounts the volume** (no stale mount crash) | `dpad-launch-session` `stop()` | `stop` inspects the container's `/mnt/dpad-library` bind source before `docker rm`, then `umount`s it. The old `stop` left the host mount in place; once the control plane detached the volume it went STALE (I/O errors) + the next session's `mount_volume` reused it via `findmnt -T` → the install-root-on-volume read unreadable files → gamescope segfault (libtinfo/libpciaccess). |
 
 ## 5. Known limitations (accepted, don't chase)
 
