@@ -94,7 +94,21 @@ mount_volume() {
     local mnt="${MOUNT_ROOT}/${volumeId}"
     local dev
     dev="$(dev_for_address "$device")" || { err "can't map device '$device'"; return 1; }
-    [ -b "$dev" ] || { err "device $dev does not exist (attach not complete?)"; return 1; }
+    # Hotplug attach is async — the provider API (UpCloud POST .../storage/attach)
+    # returns + the adapter confirms the device in the management-plane server
+    # view BEFORE the guest kernel enumerates /dev/vdX. Poll the guest for the
+    # block device to appear (up to 30s) before erroring; a warm-VM re-attach can
+    # take a few seconds to surface the device after attachVolume returns.
+    local _tries=0
+    while [ ! -b "$dev" ]; do
+        _tries=$((_tries+1))
+        if [ $_tries -ge 30 ]; then
+            err "device $dev did not appear after ${_tries}s (attach not complete?). Block devices present:"
+            lsblk -ndo NAME,SIZE,MOUNTPOINT 2>/dev/null | sed 's/^/    /' >&2
+            return 1
+        fi
+        sleep 1
+    done
 
     # Already mounted? Reuse (re-launch after a container crash).
     if findmnt -rn -T "$mnt" >/dev/null 2>&1; then
