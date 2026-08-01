@@ -600,6 +600,46 @@ setup_user_volume() {
         as_user "ln -s '$src' '$dst'"
     done
     echo "    library subpaths linked to volume: steamapps config userdata compatibilitytools.d"
+
+    # Point Steam's library ROOT at the volume (not the install root on the
+    # rootfs). Steam's Settings->Storage computes free space via statvfs() of
+    # the library root path. Left at the install root it reports the UNCAPPED
+    # rootfs (~647 GB) while games actually write through the steamapps symlink
+    # to the volume — display wrong, AND a game bigger than the volume's free
+    # space would pass Steam's pre-install free-space check then ENOSPC
+    # mid-install. Setting library "0" = the volume makes the display, the
+    # free-space check, AND the install target all reference the volume. Steam
+    # honors a pre-seeded libraryfolders.vdf (validated live: it kept "0"=volume
+    # across a restart without rewriting it back to the install root, and did not
+    # re-add the install root as a second library). Write BOTH config/ (the
+    # master Steam reads on boot) and steamapps/ (the per-library copy) so no
+    # stale install-root entry remains. Idempotent: skip if "0" already points at
+    # the volume (so we never clobber Steam's installed-apps map once games are
+    # installed — Steam rescans appmanifests anyway, but we avoid needless churn).
+    local lf_cfg="$si/config/libraryfolders.vdf"
+    if ! grep -q "\"path\"[[:space:]]*\"$vol\"" "$lf_cfg" 2>/dev/null; then
+        cat > "$lf_cfg" <<LFEOF
+"libraryfolders"
+{
+	"0"
+	{
+		"path"		"$vol"
+		"label"		"Library"
+		"contentid"		"0"
+		"totalsize"		"0"
+		"update_clean_bytes_tally"		"0"
+		"time_last_update_verified"		"0"
+		"apps"
+		{
+		}
+	}
+}
+LFEOF
+        chown "${USER_NAME}:${USER_NAME}" "$lf_cfg" 2>/dev/null || true
+        cp "$lf_cfg" "$si/steamapps/libraryfolders.vdf" 2>/dev/null || true
+        chown "${USER_NAME}:${USER_NAME}" "$si/steamapps/libraryfolders.vdf" 2>/dev/null || true
+        echo "    Steam library root -> $vol (Storage shows the volume, not the rootfs)"
+    fi
 }
 
 start_gamescope_session() {
