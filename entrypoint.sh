@@ -618,6 +618,17 @@ setup_user_volume() {
     # installed — Steam rescans appmanifests anyway, but we avoid needless churn).
     local lf_cfg="$si/config/libraryfolders.vdf"
     if ! grep -q "\"path\"[[:space:]]*\"$vol\"" "$lf_cfg" 2>/dev/null; then
+        # CONTENTID: a per-library unique id (any non-zero number, NOT a path
+        # hash — see Steam community / steam-library-setup-tool). Steam REJECTS a
+        # contentid of "0" and regenerates "0" = install root (observed live: a
+        # fresh boot with contentid "0" got overwritten ~2 min in; the same vdf
+        # with a real contentid was honored for 3.5+ min). Preserve the existing
+        # contentid (the build-time Steam bootstrap bakes one into the image's
+        # config, which migration copies onto the volume) and only change the
+        # path -> volume. Fallback to a non-zero generated id if none/zero.
+        local cid
+        cid="$(sed -n 's/.*"contentid"[[:space:]]*"\([^"]*\)".*/\1/p' "$lf_cfg" 2>/dev/null | head -1)"
+        if [ -z "$cid" ] || [ "$cid" = "0" ]; then cid="$(date +%s)000000"; fi
         cat > "$lf_cfg" <<LFEOF
 "libraryfolders"
 {
@@ -625,7 +636,7 @@ setup_user_volume() {
 	{
 		"path"		"$vol"
 		"label"		"Library"
-		"contentid"		"0"
+		"contentid"		"$cid"
 		"totalsize"		"0"
 		"update_clean_bytes_tally"		"0"
 		"time_last_update_verified"		"0"
