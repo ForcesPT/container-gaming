@@ -302,26 +302,26 @@ RUN mkdir -p /etc/X11 && \
 COPY configs/ ${HOME}/.config/
 COPY configs/xorg/xorg.conf.template /opt/dpadcloud/xorg.conf.template
 COPY entrypoint.sh healthcheck.sh /opt/dpadcloud/
-# vgl-steam / proton-wined3d / vgl-test = the Xvfb+VGL debug launchers; dpad-launch
-# = the steamcmd-based headless launcher (still useful as a manual CLI for native
-# games). mws-autopair + bubbleroot are GONE (mws/Sunshine + proot removed).
-COPY scripts/vgl-steam scripts/proton-wined3d scripts/vgl-test scripts/install-display-drivers scripts/dpad-launch /opt/dpadcloud/
+# vgl-steam / proton-wined3d / vgl-test = the Xvfb+VGL debug launchers (kept as
+# manual debug fallbacks). dpad-launch (the deprecated Vast steamcmd headless
+# launcher, no Steam UI — docs/PROJECT_STATE.md §7) is NO LONGER baked in.
+# mws-autopair + bubbleroot are GONE (mws/Sunshine + proot removed).
+COPY scripts/vgl-steam scripts/proton-wined3d scripts/vgl-test scripts/install-display-drivers /opt/dpadcloud/
 # Strip CR (CRLF) — repo is edited on Windows; `#!/bin/bash\r` fails to exec.
 RUN sed -i 's/\r$//' /opt/dpadcloud/entrypoint.sh /opt/dpadcloud/healthcheck.sh \
         /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \
-        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/dpad-launch \
+        /opt/dpadcloud/install-display-drivers \
         ${HOME}/.config/sunshine/sunshine.conf 2>/dev/null || true && \
     chmod +x /opt/dpadcloud/*.sh \
         /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \
-        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/dpad-launch && \
+        /opt/dpadcloud/install-display-drivers && \
     chown -R ${USERNAME}:${USERNAME} ${HOME}/.config && \
     rm -f ${HOME}/.config/autostart/*.desktop 2>/dev/null || true
 
 # Put the user-facing launchers on the DEFAULT PATH (survives /etc/environment reset).
 RUN ln -sf /opt/dpadcloud/vgl-steam /usr/local/bin/vgl-steam && \
     ln -sf /opt/dpadcloud/vgl-test /usr/local/bin/vgl-test && \
-    ln -sf /opt/dpadcloud/proton-wined3d /usr/local/bin/proton-wined3d && \
-    ln -sf /opt/dpadcloud/dpad-launch /usr/local/bin/dpad-launch
+    ln -sf /opt/dpadcloud/proton-wined3d /usr/local/bin/proton-wined3d
 
 # =============================================================================
 # Stage: vast-docker  ->  :dpad-heroic

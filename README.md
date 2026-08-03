@@ -174,7 +174,7 @@ session token (or front with Cloudflare Access).
 | `scripts/nvenc_fix.c` | flexgrip NVENC #1249 interposer (built in `interposer-builder` → `/opt/dpadcloud/libnvenc_fix.so`) |
 | `scripts/joystick_interposer_v162.c` | Patched Selkies v1.6.2 gamepad interposer (built for x86_64 + i386) |
 | `scripts/{patch_selkies_pipewire.py, dpad_input_patch.py, patch_gst_web_cursors.sh}` | Selkies patches (pipewiresrc zero-copy / XTest input / cursor visibility) |
-| `scripts/{vgl-steam,proton-wined3d,vgl-test,install-display-drivers,dpad-launch,heroic-launch}` | Launchers + matched `.run` graphics-lib extractor |
+| `scripts/{vgl-steam,proton-wined3d,vgl-test,install-display-drivers}` | Launchers + matched `.run` graphics-lib extractor (Xvfb debug fallbacks + the display-driver installer). `dpad-launch` (deprecated Vast steamcmd headless launcher) is NO LONGER baked in — see `docs/PROJECT_STATE.md` §7 |
 | `scripts/build-bootstrap-steam.sh` | Build-time Steam client pre-bootstrap (fast-boot, `vast-vm` only) |
 | `docker-compose.yml` / `deploy.sh` / `healthcheck.sh` | Local dev helpers |
 | `docs/` | `PROJECT_STATE.md` (history), `VAST-VM-DEPLOY.md` (VM runbook), `RUNPOD.md` (RunPod) |
