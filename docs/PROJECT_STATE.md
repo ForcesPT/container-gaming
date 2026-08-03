@@ -124,7 +124,10 @@ reverts to the `:2` bridge fallback.
   always works. **A restart-on-disconnect supervisor now auto-relaunches
   `selkies-gstreamer` when it dies while gamescope is up** (`relaunch_selkies()`
   in the health loop — §6 #7) so the browser reconnects without a manual
-  refresh; implemented, pending live validation.
+  refresh; **validated live 2026-08-05** (OVH Gravelines L4: killed
+  `selkies-gstreamer` in a live container → the health loop relaunched it as a
+  fresh process, same encoder, within ~20s; gamescope untouched, browser
+  reconnects).
 - **Steam "no internet" icon + ~70s CM bounce** — Steam's CM servers bounce the
   datacenter IP. Login/install/play all work; cosmetic, not fixable from the image.
 - **NVRTC "invalid value for --gpu-architecture" on Blackwell** — the bundled
@@ -171,7 +174,7 @@ reverts to the `:2` bridge fallback.
 6. **`dpad-launch-session` live validation** (v2 worker side) — the SSH launch
    + volume mount + per-slot coturn + the `DPAD_READY` readiness marker (the
    worker currently uses a `docker ps` count heuristic).
-7. **restart-on-disconnect supervisor — IMPLEMENTED in `entrypoint.sh` (`relaunch_selkies()` + the health loop), pending live validation.** Was: optional, for 100%-consistent refresh. The health loop now relaunches `selkies-gstreamer` when it dies while gamescope+Steam are up (reusing the resolved encoder + re-reading gamescope's current Xwayland display), and kills the stale selkies on a gamescope restart. Ships via the entrypoint bind-mount hotfix (no image rebuild). **Validation:** kill `selkies-gstreamer` in a live streaming container on a GPU VM, confirm it self-recovers + the browser reconnects within ~30s.
+7. **restart-on-disconnect supervisor — IMPLEMENTED in `entrypoint.sh` (`relaunch_selkies()` + the health loop) + VALIDATED LIVE 2026-08-05.** Was: optional, for 100%-consistent refresh. The health loop now relaunches `selkies-gstreamer` when it dies while gamescope+Steam are up (reusing the resolved encoder + re-reading gamescope's current Xwayland display), and kills the stale selkies on a gamescope restart. Ships via the entrypoint bind-mount hotfix (no image rebuild). **Validation (done):** OVH Gravelines L4 — killed `selkies-gstreamer` inside a live streaming container → the health loop detected it within ~20s, `relaunch_selkies()` relaunched it as a fresh process (new PIDs, same encoder=nvh264enc), gamescope untouched, stream recovered (the browser reconnects).
 8. **(optional) NVRTC soname-11 real fix** (make CUDA 12.8 libnvrtc win).
 
 ## 7. Deprecated (Vast era — in git history only)
