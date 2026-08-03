@@ -181,6 +181,17 @@ if [ "$DPAD_PROVIDER" = "runpod" ]; then
     echo "    RunPod env: RUNPOD_PUBLIC_IP=${RUNPOD_PUBLIC_IP:-<unset>}  ${_rp_port_var}=${!_rp_port_var:-<unset>}  RUNPOD_POD_ID=${RUNPOD_POD_ID:-<unset>}"
 fi
 
+# --- Selkies restart-on-disconnect supervisor state (docs/PROJECT_STATE.md §6 #7) ---
+# start_gamescope_stream sets SELKIES_ENC / SELKIES_VIDEO_SRC once the first
+# launch resolves the working encoder + video source. relaunch_selkies()
+# (called by the health loop when selkies-gstreamer dies while gamescope is up)
+# reuses them so the stream self-heals instead of staying dead until the control
+# plane tears the slot down — the documented Selkies 1.6.2 WebRTC reconnect race
+# (a 2nd browser refresh "works"; this removes the need for the human refresh).
+SELKIES_ENC=""
+SELKIES_VIDEO_SRC=""
+SELKIES_RESTART_FAILS=0
+
 # --- Helper: wait for a unix socket ---
 wait_sock() {
   local sock="$1" name="${2:-socket}"
@@ -195,6 +206,58 @@ wait_sock() {
 }
 
 as_user() { su -s /bin/bash "${USER_NAME}" -c "$1"; }
+
+# --- Relaunch Selkies after it died (called by the gamescope-session health loop) ---
+# Re-reads gamescope's CURRENT Xwayland display (it can change across a gamescope
+# restart) and re-runs the same launch + encoder-register retry loop as
+# start_gamescope_stream, reusing the already-resolved SELKIES_ENC (no re-probe
+# of the *requested* encoder — keep the working one). coturn + /tmp/rtc_config.json
+# + PipeWire all persist, so only the selkies-gstreamer process is relaunched; the
+# browser just reconnects. Does NOT re-emit DPAD_READY (the warm-pool worker greps
+# only the FIRST occurrence; a recovery is signaled by the "Selkies restarted"
+# line + the process being alive again for healthcheck.sh's pgrep).
+relaunch_selkies() {
+    local video_src="${SELKIES_VIDEO_SRC:-pipewiresrc}"
+    local enc="${SELKIES_ENC:-nvh264enc}"
+    local rtc=/tmp/rtc_config.json
+    # re-read gamescope's Xwayland display (may differ after a gamescope restart;
+    # take the LAST 'Starting Xwayland on :N' line — the current gamescope).
+    local in_dpy=""
+    in_dpy="$(grep -oE 'Starting Xwayland on :[0-9]+' /tmp/gamescope-steam.log 2>/dev/null | tail -1 | grep -oE ':[0-9]+')"
+    [ -z "$in_dpy" ] && in_dpy="$(pgrep -af Xwayland 2>/dev/null | grep -oE 'Xwayland :[0-9]+' | head -1 | grep -oE ':[0-9]+')"
+    local selkies_dpy=":2"
+    [ "$video_src" = "pipewiresrc" ] && selkies_dpy="${in_dpy:-:0}"
+    local attempt=0 max_attempts="${DPAD_SELKIES_RETRIES:-3}" err_before err_after selkies_cmd
+    while :; do
+        attempt=$((attempt+1))
+        selkies_cmd="export DISPLAY=${selkies_dpy} DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=${in_dpy} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
+        err_before="$(grep -ac 'NvEncOpenEncodeSessionEx failed' /tmp/selkies.log 2>/dev/null || echo 0)"
+        as_user "${selkies_cmd}" >>/tmp/selkies.log 2>&1 &
+        sleep 6
+        if ! pgrep -f selkies-gstreamer >/dev/null; then
+            echo "    [restart] selkies failed to start (attempt ${attempt}/${max_attempts}; see /tmp/selkies.log)"
+            tail -12 /tmp/selkies.log 2>/dev/null | sed 's/^/      /'
+            pkill -f selkies-gstreamer 2>/dev/null; sleep 2
+            [ "${attempt}" -lt "${max_attempts}" ] && continue
+            SELKIES_RESTART_FAILS=$((SELKIES_RESTART_FAILS+1))
+            echo "    WARNING: selkies restart failed after ${max_attempts} attempts — will retry next health cycle (consecutive fails: ${SELKIES_RESTART_FAILS}); see /tmp/selkies.log"
+            return 1
+        fi
+        err_after="$(grep -ac 'NvEncOpenEncodeSessionEx failed' /tmp/selkies.log 2>/dev/null || echo 0)"
+        if [ "${enc}" = "nvh264enc" ] && [ "${err_after}" -gt "${err_before}" ]; then
+            if [ "${attempt}" -lt "${max_attempts}" ]; then
+                echo "    [restart] NVENC peer-init race (attempt ${attempt}/${max_attempts}) — retrying"
+                pkill -f selkies-gstreamer 2>/dev/null; sleep 2
+                continue
+            fi
+            echo "    WARNING: nvh264enc failed to register on restart after ${max_attempts} attempts (see /tmp/selkies.log)"
+            tail -8 /tmp/selkies.log 2>/dev/null | sed 's/^/      /'
+        fi
+        echo "[*] Selkies restarted (attempt ${attempt}/${max_attempts}) — stream recovered (encoder=${enc}, audio_fec=${DPAD_AUDIO_PACKETLOSS:-0}%, video_fec=${DPAD_VIDEO_PACKETLOSS:-0}%)"
+        SELKIES_RESTART_FAILS=0
+        return 0
+    done
+}
 
 # --- Steam first-run bootstrap on Xvfb (software GL) ---
 # Steam's first-run "update status" UI (updateui_gl.cpp) creates an OpenGL font
@@ -440,6 +503,10 @@ start_gamescope_stream() {
             echo "    WARNING: nvh264enc failed to register after ${max_attempts} attempts (see /tmp/selkies.log) — video may be broken; set DPAD_GAMESCOPE_ENCODER=x264enc for software fallback"
             tail -8 /tmp/selkies.log 2>/dev/null | sed 's/^/      /'
         fi
+        # Capture the resolved encoder + video source for relaunch_selkies()
+        # (the restart-on-disconnect supervisor in the health loop reuses these
+        # so a recovered stream uses the same encoder that actually registered).
+        SELKIES_ENC="${enc}"; SELKIES_VIDEO_SRC="${video_src}"
         echo "    Selkies running on ${DPAD_SELKIES_BIND:-127.0.0.1}:16100 (gamescope bridge, encoder=${enc}, audio_fec=${DPAD_AUDIO_PACKETLOSS:-0}%, video_fec=${DPAD_VIDEO_PACKETLOSS:-0}%)$([ "${attempt}" -gt 1 ] && echo " — encoder registered on attempt ${attempt}/${max_attempts}")"
         # v2 readiness marker (docs/V2-PLAN.md §6/§15 Gap 3): a single
         # parseable line the warm-pool bootstrap worker greps from `docker logs`
@@ -838,6 +905,10 @@ start_gamescope_session() {
             rm -f ${USER_HOME}/.steam/steam/steam.pid ${USER_HOME}/.steam/debian-installation/steam.pid 2>/dev/null
             as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SDL_JOYSTICK_LINUX_CLASSIC=1 SDL_JOYSTICK_DISABLE_UDEV=1 SDL_GAMECONTROLLERCONFIG='${SDL_GAMECONTROLLERCONFIG}' SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
             gs_pid=$!
+            # the old selkies was bound to the dead gamescope's PipeWire node →
+            # it'd stream black/garbage; kill it so the supervisor (below)
+            # relaunches a fresh one once Steam's PipeWire node is back.
+            pkill -f selkies-gstreamer 2>/dev/null || true
         fi
         # Xvfb :2 + the PipeWire->:2 bridge / Xvfb `:2` are the Selkies capture path (ximagesrc mode). If :2 dies (or the bridge gst dies) the
         # browser goes black / loops on 'Waiting for stream'. Recover both without touching gamescope.
@@ -851,6 +922,21 @@ start_gamescope_session() {
             as_user "Xvfb :2 -ac -screen 0 ${GS_W}x${GS_H}x24 +extension GLX +extension RANDR >/tmp/xvfb2.log 2>&1 &" 2>/dev/null
             sleep 2
             as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; gst-launch-1.0 pipewiresrc target-object=gamescope ! videoconvert ! ximagesink display=:2 sync=false force-aspect-ratio=false >/tmp/bridge.log 2>&1 &" 2>/dev/null
+        fi
+
+        # Selkies restart-on-disconnect supervisor (docs/PROJECT_STATE.md §6 #7).
+        # gamescope is alive but selkies-gstreamer died (the documented Selkies
+        # 1.6.2 WebRTC reconnect race, or a crash) → the stream is dead while the
+        # container stays "up" (gamescope keeps it alive, so the worker never
+        # notices). Relaunch selkies so the browser reconnects instead of needing
+        # a manual 2nd refresh. Only relaunch once gamescope+Steam are up (after a
+        # gamescope restart we killed the stale selkies above; wait for Steam's
+        # PipeWire node to be advertised first — natural ~30s backoff per cycle).
+        if kill -0 "$gs_pid" 2>/dev/null && pgrep -x steam >/dev/null; then
+            if ! pgrep -f selkies-gstreamer >/dev/null; then
+                echo "[*] WARNING: selkies-gstreamer died (gamescope still up) — restarting stream..."
+                relaunch_selkies
+            fi
         fi
     done
 }

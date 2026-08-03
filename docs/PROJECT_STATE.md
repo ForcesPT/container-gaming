@@ -121,7 +121,10 @@ reverts to the `:2` bridge fallback.
   595** is a different bug — the host must downgrade 595 → R580 LTS (see §6 #1).
 - **Browser refresh occasionally "Waiting for stream"** — a Selkies 1.6.2
   WebRTC reconnect race. Self-heals on a 2nd refresh; a fresh incognito tab
-  always works. A restart-on-disconnect supervisor would make it 100% (deferred).
+  always works. **A restart-on-disconnect supervisor now auto-relaunches
+  `selkies-gstreamer` when it dies while gamescope is up** (`relaunch_selkies()`
+  in the health loop — §6 #7) so the browser reconnects without a manual
+  refresh; implemented, pending live validation.
 - **Steam "no internet" icon + ~70s CM bounce** — Steam's CM servers bounce the
   datacenter IP. Login/install/play all work; cosmetic, not fixable from the image.
 - **NVRTC "invalid value for --gpu-architecture" on Blackwell** — the bundled
@@ -168,7 +171,7 @@ reverts to the `:2` bridge fallback.
 6. **`dpad-launch-session` live validation** (v2 worker side) — the SSH launch
    + volume mount + per-slot coturn + the `DPAD_READY` readiness marker (the
    worker currently uses a `docker ps` count heuristic).
-7. **(optional) restart-on-disconnect supervisor** for 100%-consistent refresh.
+7. **restart-on-disconnect supervisor — IMPLEMENTED in `entrypoint.sh` (`relaunch_selkies()` + the health loop), pending live validation.** Was: optional, for 100%-consistent refresh. The health loop now relaunches `selkies-gstreamer` when it dies while gamescope+Steam are up (reusing the resolved encoder + re-reading gamescope's current Xwayland display), and kills the stale selkies on a gamescope restart. Ships via the entrypoint bind-mount hotfix (no image rebuild). **Validation:** kill `selkies-gstreamer` in a live streaming container on a GPU VM, confirm it self-recovers + the browser reconnects within ~30s.
 8. **(optional) NVRTC soname-11 real fix** (make CUDA 12.8 libnvrtc win).
 
 ## 7. Deprecated (Vast era — in git history only)
