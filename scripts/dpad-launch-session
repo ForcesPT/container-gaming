@@ -47,6 +47,11 @@
 #   DPAD_SLOT_CPUS, DPAD_SLOT_MEM_MB   per-slot CPU/RAM quota (oversubscription)
 #   DPAD_SELKIES_BIND                 Selkies bind (0.0.0.0 for direct-IP v2)
 #   DPAD_GAMESCOPE                    1 (the SteamOS path)
+#   DPAD_GAMEPAD_INTERPOSER           (optional) =evdev enables the evdev gamepad
+#                                    path (fake-libudev + evdev interposer +
+#                                    evdev_bridge.py); unset = the classic
+#                                    joystick path (the default). See
+#                                    scripts/gamepad-evdev-fallback/README.md.
 #   DPAD_EPHEMERAL_DISK_GB            (optional) hard cap on an ephemeral slot's
 #                                    container rootfs via `--storage-opt size=`.
 #                                    Only applied when the backing Docker storage
@@ -274,6 +279,7 @@ launch() {
         -e DPAD_TURN_UDP_EXTERNAL_PORT="$port" \
         -e SELKIES_BASIC_AUTH_USER=dpad \
         -e "SELKIES_BASIC_AUTH_PASSWORD=${pass}" \
+        -e DPAD_GAMEPAD_INTERPOSER="${DPAD_GAMEPAD_INTERPOSER:-}" \
         "$image" || { err "docker run $name failed"; return 1; }
     log "container $name launched (coturn ${port}/udp, selkies ${selkies_port}->16100, login dpad/${pass:0:4}…)"
 
