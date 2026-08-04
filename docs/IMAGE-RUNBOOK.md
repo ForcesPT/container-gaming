@@ -87,6 +87,7 @@ docker logs -f dpad-0
 | Variable | Default | Purpose |
 |---|---|---|
 | `DPAD_GAMESCOPE` | `0` | `1` = gamescope headless mode (the validated path). |
+| `DPAD_GAMEPAD_INTERPOSER` | (unset) | `evdev` = the **evdev gamepad path** (fake-libudev + evdev interposer + `evdev_bridge.py`; SDL3 auto-detects 4 X-Box 360 pads, no GUID hack; see `scripts/gamepad-evdev-fallback/README.md`). Unset = the classic joystick path (the default; the v1.6.2 interposer + `SDL_JOYSTICK_LINUX_CLASSIC` + the hardcoded GUID). Validated live 2026-08-05 (dispatch + wiring); pending real-controller. NOTE: the control plane does NOT pass this per-session (the worker writes only a fixed `/etc/environment` list at bootstrap) — to test/use evdev on a normal dpadplay session, wire it into the control plane (cloud `apps/worker/src/index.ts:711-726`) or run a manual container (below). |
 | `DPAD_VIDEO_SRC` | `pipewiresrc` | `pipewiresrc` = direct PipeWire capture (zero-copy-ish). `ximagesrc` = the `:2` Xvfb bridge fallback. |
 | `DPAD_SELKIES_BIND` | `127.0.0.1` | Selkies signaling bind. `127.0.0.1` for the SSH-tunnel path; **`0.0.0.0` for direct-IP providers** (UpCloud/Hyperstack/MassedCompute) so Caddy reverse-proxies HTTP straight to `<public-ip>:16100`. |
 | `DPAD_TUNNEL` | (unset) | `ssh` gates cloudflared OFF (the B1 self-hosted `play-<id>.dpadplay.com` path). Unset = cloudflared quick tunnel (legacy). |
@@ -190,3 +191,40 @@ docker build --target vast-vm --build-arg CUDA_VERSION=12.8.1 --build-arg CUDA_P
   -t forcespt/dpadcloud-gaming:dpad-SteamOS-rtx50 .
 docker push forcespt/dpadcloud-gaming:dpad-SteamOS
 ```
+
+## Evdev gamepad path — manual real-controller test (DPAD_GAMEPAD_INTERPOSER=evdev)
+
+The evdev path is gated behind `DPAD_GAMEPAD_INTERPOSER=evdev` (default unset =
+classic). The dispatch + wiring are validated live 2026-08-05 (see
+`PROJECT_STATE.md` §6 #9); the remaining step is the **real-controller** test,
+which the control plane can't do per-session (the worker writes only a fixed
+`/etc/environment` list at bootstrap). Test it with a manual `docker run` on a
+GPU VM (free the GPU + port 3478 first — end any live session on that VM):
+
+```bash
+VM_IP=<the-vm-public-ip>
+docker run -d --name evdev-pad-test --runtime=nvidia \
+  -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=0 \
+  --cap-add SYS_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+  --shm-size 2g --ulimit nofile=1048576:1048576 \
+  -p 3478:3478/udp -p 16100:16100 \
+  -e DPAD_GAMESCOPE=1 -e DPAD_GAMEPAD_INTERPOSER=evdev \
+  -e DPAD_SELKIES_BIND=0.0.0.0 -e DPAD_TUNNEL=ssh \
+  -e DPAD_TURN_PUBLIC_IP=$VM_IP -e DPAD_TURN_UDP_EXTERNAL_PORT=3478 \
+  -e SELKIES_BASIC_AUTH_USER=dpad -e SELKIES_BASIC_AUTH_PASSWORD=testpass \
+  forcespt/dpadcloud-gaming:dpad-SteamOS
+docker logs -f evdev-pad-test
+# look for: [*] Gamepad: EVDEV path (DPAD_GAMEPAD_INTERPOSER=evdev) ...
+#          dpad_gamepad: patched SelkiesGamepad.__make_config -> 1360-byte evdev interposer config
+#          [evdev_bridge] bridge up: 4 pads (js -> event1000-1003)
+#          DPAD_READY slot=0 ... encoder=nvh264enc
+```
+Then open `http://$VM_IP:16100` (login `dpad`/`testpass`), **connect a controller
+to your browser/machine + press a button**, and Steam Big Picture should detect
+a **Microsoft X-Box 360 pad** (auto-mapped — no `SDL_GAMECONTROLLERCONFIG` GUID
+hack) — verify buttons/sticks/triggers/dpad, ideally rumble + a 2nd pad. The
+browser Gamepad API needs a button press to activate. Teardown:
+`docker rm -f evdev-pad-test`. To make a normal dpadplay session boot evdev, wire
+the env into the control plane (cloud `apps/worker/src/index.ts:711-726`: add
+`echo "DPAD_GAMEPAD_INTERPOSER=evdev" >> /etc/environment` to the bootstrap) +
+redeploy the worker. See `scripts/gamepad-evdev-fallback/README.md`.

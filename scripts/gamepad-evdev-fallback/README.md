@@ -86,9 +86,39 @@ chmod 666 /dev/input/js* /dev/input/event100*
 
 - `../dpad_gamepad_patch.py` — `.pth` monkey-patch making v1.6.2 `SelkiesGamepad.__make_config`
   emit the 1360-byte new `js_config_t` (validated: 1360 bytes, vendor 0x045e). The
-  dual-serve event dispatch (input_event on the event100N socket) is NOT in it.
+  dual-serve event dispatch (input_event on the event100N socket) is NOT in it —
+  it's in `../evdev_bridge.py` (below).
+- `../evdev_bridge.py` — **the dual-serve dispatch** (the missing piece). External
+  asyncio bridge: connects to Selkies' js socket (client), reads the interposer's
+  1-byte arch specifier (`sizeof(long)`: 4 i386 / 8 x86_64 → 16B/24B input_event),
+  translates each `js_event` → `input_event`+`EV_SYN` (`BUTTON`→`EV_KEY`/`BTN_MAP`,
+  `AXIS`→`EV_ABS`/`AXES_MAP`) on `selkies_event100N.sock`. No Selkies monkey-patch.
+  **VALIDATED live 2026-08-05 on OVH Gravelines L4** (feeder → bridge → real evdev
+  interposer → evclient: `EV_KEY code=304`/BTN_A, `EV_ABS code=0`/ABS_X — correct,
+  not garbled) + **wiring validated on the real image** (test container booted
+  `Gamepad: EVDEV path` → `dpad_gamepad_patch` activated → bridge up 4 pads → `DPAD_READY`).
 - `../jsfeeder_main.py` — socket feeder speaking the new config protocol (for testing).
 - `../evclient.c` — C client that opens `/dev/input/event1000` and reads `input_event`s.
 - `../udev_enumerate_test.c` — libudev enumeration test (proves fake-libudev discovery).
 - `../jsclassic.c` — C client mimicking SDL3's classic probe sequence (proves the v1.6.2
   interposer handles it — the ACTIVE path's validation).
+
+## Control-plane limitation + the real-controller test
+
+The control plane does NOT pass `DPAD_GAMEPAD_INTERPOSER` per-session: the worker
+writes only a fixed var list to `/etc/environment` at bootstrap
+(`cloud/apps/worker/src/index.ts:711-726`), so a normal dpadplay session always
+boots the **classic** path. To test/use evdev:
+- **Manual container** (the real-controller validation): see `docs/IMAGE-RUNBOOK.md`
+  "Evdev gamepad path — manual real-controller test" for the exact `docker run
+  -e DPAD_GAMEPAD_INTERPOSER=evdev --runtime=nvidia …` command + what to look for
+  (Steam Big Picture should auto-detect a Microsoft X-Box 360 pad, no GUID hack).
+- **Wire it into the control plane** (for normal dpadplay sessions to boot evdev):
+  add `echo "DPAD_GAMEPAD_INTERPOSER=evdev" >> /etc/environment` to the worker's
+  bootstrap commands in `cloud/apps/worker/src/index.ts:711-726` + redeploy the
+  worker. (Currently a global flag — all new VMs in all regions would boot evdev;
+  gate it per-region/tier if needed.)
+
+**Pending:** real-controller validation (the manual test above) — the only part
+not yet done (needs a physical controller in the browser). The dispatch + the
+wiring are both proven on OVH.

@@ -11,6 +11,36 @@
 > **Companion:** `IMAGE-RUNBOOK.md` (the launch recipe + env-var reference +
 > troubleshooting — the operational runbook), `cloud/docs/STATUS.md` (the
 > control-plane handoff), `cloud/docs/V2-PLAN.md` (the post-Vast architecture).
+>
+> **2026-08-05 session (gamepad): the evdev gamepad path — wired + gated
+> (`DPAD_GAMEPAD_INTERPOSER=evdev`, default OFF); dispatch + wiring VALIDATED on
+> OVH; pending real-controller + control-plane wiring.** See §6 #9 +
+> `scripts/gamepad-evdev-fallback/README.md`. Summary: the missing dual-serve
+> dispatch (the evdev interposer does NOT translate `js_event`→`input_event`;
+> confirmed live) is written as `scripts/evdev_bridge.py` (an external asyncio
+> bridge — no Selkies monkey-patch) + VALIDATED live on OVH Gravelines L4
+> (feeder → bridge → real evdev interposer → evclient: `EV_KEY code=304`/BTN_A,
+> `EV_ABS code=0`/ABS_X — correct). The image (`:dpad-SteamOS`, rebuilt + pushed
+> by the owner) bakes the evdev interposer + fake-libudev (x86_64+i386) +
+> `evdev_bridge.py` + `dpad_gamepad_patch.py`. The entrypoint's evdev branch
+> (mknod `js0-3` + `event1000-1003`, `LD_PRELOAD` fake-libudev + evdev
+> interposer, `evdev_bridge.py` started, no classic SDL hints / GUID) + the gate
+> env passing (`dpad-launch-session` + both `selkies_cmd`) are VALIDATED on the
+> real image (test container booted `Gamepad: EVDEV path` → `dpad_gamepad_patch`
+> activated → bridge up 4 pads → `DPAD_READY`). The classic path is UNCHANGED
+> (the default, validated working — Steam sees "Selkies Controller" via the
+> v1.6.2 interposer's `JSIOCG*` probe). **Pending:** (a) real-controller
+> validation (Steam Big Picture should auto-detect a Microsoft X-Box 360 pad, no
+> GUID hack) — only doable via a MANUAL `docker run -e
+> DPAD_GAMEPAD_INTERPOSER=evdev --runtime=nvidia …` (the control plane can't set
+> the env per-session); (b) optionally wire the env into the control plane
+> (cloud `apps/worker/src/index.ts:711-726`: add `echo
+> "DPAD_GAMEPAD_INTERPOSER=evdev" >> /etc/environment` to the bootstrap) +
+> redeploy the worker. **Ops note:** a stale dead-VM loop occurred (an OVH VM
+> was deleted directly on the OVH dashboard; the control plane kept reusing the
+> stale `ready` `warm_pool_vms` record → sessions failed in a loop) — fixed by
+> forcing that row to `destroyed` in the DB; the control plane has no
+> liveness-check for provider-deleted VMs (a gap, not yet fixed).
 
 ## 1. The images
 
@@ -135,6 +165,13 @@ reverts to the `:2` bridge fallback.
   falls back to a pre-compiled cubin. Non-fatal.
 - **`webrtcnice … failed to resolve "<uuid>.local"`** — Chrome's mDNS `.local`
   ICE candidates the container can't resolve; the TURN relay handles it.
+- **Selkies launch loop `[: 0\n0: integer expression expected`** (`entrypoint.sh`
+  ~line 497, `start_gamescope_stream`) — cosmetic. The `err_before`/`err_after`
+  counters are `$(grep -ac … || echo 0)`; when there are 0 NVENC failures (the
+  common case) `grep -ac` prints `0` AND exits 1, so `|| echo 0` appends a
+  second `0` → `0\n0` → the `[ … -gt … ]` errors. Harmless (the comparison
+  fails → falls through to "Selkies running"); not from the evdev/supervisor
+  work. One-line fix: drop the `|| echo 0` (or `grep -ac … | head -1`).
 
 ## 6. Open image-side items
 
@@ -176,6 +213,28 @@ reverts to the `:2` bridge fallback.
    worker currently uses a `docker ps` count heuristic).
 7. **restart-on-disconnect supervisor — IMPLEMENTED in `entrypoint.sh` (`relaunch_selkies()` + the health loop) + VALIDATED LIVE 2026-08-05.** Was: optional, for 100%-consistent refresh. The health loop now relaunches `selkies-gstreamer` when it dies while gamescope+Steam are up (reusing the resolved encoder + re-reading gamescope's current Xwayland display), and kills the stale selkies on a gamescope restart. Ships via the entrypoint bind-mount hotfix (no image rebuild). **Validation (done):** OVH Gravelines L4 — killed `selkies-gstreamer` inside a live streaming container → the health loop detected it within ~20s, `relaunch_selkies()` relaunched it as a fresh process (new PIDs, same encoder=nvh264enc), gamescope untouched, stream recovered (the browser reconnects).
 8. **(optional) NVRTC soname-11 real fix** (make CUDA 12.8 libnvrtc win).
+9. **evdev gamepad path — WIRED + gated (`DPAD_GAMEPAD_INTERPOSER=evdev`, default
+   OFF); dispatch + wiring VALIDATED live 2026-08-05; pending real-controller +
+   control-plane wiring.** Activates the evdev interposer + fake-libudev stack
+   (`scripts/gamepad-evdev-fallback/`) — SDL3 discovers 4 virtual Microsoft
+   X-Box 360 pads (auto-mapped, no GUID hack) + unblocks 4-controller + rumble.
+   The missing dual-serve dispatch (the interposer does NOT translate
+   `js_event`→`input_event`; confirmed live) is `scripts/evdev_bridge.py`
+   (external asyncio bridge: js socket → `input_event`+`EV_SYN` on
+   `event100N`, arch-aware 16B/24B) — VALIDATED on OVH (feeder → bridge →
+   interposer → evclient). The image bakes the `.so` (x86_64+i386) + bridge +
+   `dpad_gamepad_patch.py`; the entrypoint's evdev branch + the gate env
+   (`dpad-launch-session` + both `selkies_cmd`) are VALIDATED on the real image
+   (boots `Gamepad: EVDEV path` → patch activates → bridge up 4 pads →
+   `DPAD_READY`). The classic path (the default) is unchanged + validated working.
+   **Pending:** (a) real-controller test via a MANUAL `docker run -e
+   DPAD_GAMEPAD_INTERPOSER=evdev --runtime=nvidia …` (exact command in
+   `scripts/gamepad-evdev-fallback/README.md`) — Steam Big Picture should
+   auto-detect an X-Box 360 pad; (b) optionally wire the env into the control
+   plane (cloud `apps/worker/src/index.ts:711-726`: add `echo
+   "DPAD_GAMEPAD_INTERPOSER=evdev" >> /etc/environment` to the bootstrap) +
+   redeploy the worker for a normal dpadplay session to boot evdev. See
+   `scripts/gamepad-evdev-fallback/README.md` + the 2026-08-05 session note.
 
 ## 7. Deprecated (Vast era — in git history only)
 
