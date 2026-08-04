@@ -1,13 +1,18 @@
-# Gamepad input — evdev fallback (NOT the active path; preserved for contingency)
+# Gamepad input — evdev path (gated, default OFF; pending rebuild + real-gamepad validation)
 
 This directory holds the **evdev interposer + fake-libudev** approach for gamepad
-input in containers, researched and validated but **NOT currently wired in**.
-The active gamepad path is the **classic joystick path** (see entrypoint.sh
+input in containers. **Wired but gated** behind `DPAD_GAMEPAD_INTERPOSER=evdev`
+(default unset = the classic path below); the `.so` files are built into the
+image (Dockerfile `interposer-builder`) + the entrypoint sets up the nodes /
+LD_PRELOAD / starts `scripts/evdev_bridge.py` only when the gate is set.
+**Pending:** an image rebuild + Docker Hub push (the `.so` files need baking),
+then live validation with a real controller.
+The default gamepad path is the **classic joystick path** (see entrypoint.sh
 `start_gamescope_session`): `SDL_JOYSTICK_LINUX_CLASSIC=1` +
 `SDL_JOYSTICK_DEVICE=/dev/input/js0` + the installed v1.6.2
 `selkies_joystick_interposer.so`. That path was validated end-to-end (the
 interposer handles SDL3's full classic `JSIOCG*` probe sequence + serves
-`js_event` structs).
+`js_event` structs) and is UNCHANGED by this work (the evdev branch is opt-in).
 
 ## When to use this fallback
 
@@ -42,13 +47,22 @@ companion LD_PRELOAD libraries:
 
 - The new interposer's socket protocol is **incompatible** with the installed
   v1.6.2 `gamepad.py` (new `js_config_t` + a 1-byte arch-byte handshake).
-- The new interposer does NOT translate js_event→input_event; the **server must
-  dual-serve**: `js_event` (8B) on `selkies_jsN.sock` AND `input_event`+SYN (24B)
-  on `selkies_event100N.sock`. The v1.6.2 `SelkiesGamepad` only serves the js
-  socket → requires a meaty monkey-patch (see `../dpad_gamepad_patch.py` for the
-  config-protocol part; the dual-serve event dispatch still needs writing, model
-  on `selkies-project/selkies` main `src/selkies/input_handler.py`).
-- Plus `mknod` of dummy `/dev/input/js{0-3}` + `/dev/input/event100{0-3}` (major 13).
+- The new interposer does NOT translate js_event→input_event (confirmed live
+  2026-08-05: it `recv`s `sizeof(input_event)` raw into the app buffer); the
+  **server must dual-serve**: `js_event` (8B) on `selkies_jsN.sock` AND
+  `input_event`+SYN (24B/16B per the client's `sizeof(long)`) on
+  `selkies_event100N.sock`. The v1.6.2 `SelkiesGamepad` only serves the js socket.
+  **This is now implemented WITHOUT monkey-patching Selkies** by `scripts/evdev_bridge.py`
+  — an external asyncio bridge: connects to the js socket (client), reads the
+  1-byte arch specifier from the interposer, and translates each `js_event` →
+  `input_event`+`EV_SYN` (BUTTON→`EV_KEY`/`BTN_MAP`, AXIS→`EV_ABS`/`AXES_MAP`) on
+  the event socket. **Validated live 2026-08-05 on OVH Gravelines L4** (feeder →
+  bridge → real evdev interposer → evclient: `EV_KEY code=304 value=1` BTN_A,
+  `EV_ABS code=0 value=10000` ABS_X — correct, not garbled). `../dpad_gamepad_patch.py`
+  still makes v1.6.2 emit the 1360B config the bridge discards (gated on the same env).
+- Plus `mknod` of dummy `/dev/input/js{0-3}` + `/dev/input/event100{0-3}` (major 13)
+  — done by the entrypoint's evdev branch (static nodes; the health loop supervises
+  `evdev_bridge.py`).
 
 The classic path avoids ALL of that (two env vars + the already-installed
 v1.6.2 interposer).

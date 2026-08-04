@@ -45,14 +45,25 @@ ARG HEROIC_VERSION=v2.22.0
 #   (NVENC #1249 multi-GPU fix). Keeps gcc-multilib out of the final images.
 # =============================================================================
 FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS interposer-builder
-RUN apt-get update && apt-get install -y --no-install-recommends gcc-multilib libc6-dev-i386 \
+RUN apt-get update && apt-get install -y --no-install-recommends gcc-multilib libc6-dev-i386 make \
     && rm -rf /var/lib/apt/lists/*
 COPY scripts/joystick_interposer_v162.c /tmp/joystick_interposer_v162.c
 COPY scripts/nvenc_fix.c /tmp/nvenc_fix.c
+# evdev gamepad path (DPAD_GAMEPAD_INTERPOSER=evdev, default OFF): the MAIN-branch
+# evdev interposer + fake-libudev, built x86_64 + i386 (Steam's main binary is
+# 32-bit). Coexists with the v1.6.2 classic interposer; only LD_PRELOAD'd when
+# the gate is set (entrypoint.sh). See scripts/gamepad-evdev-fallback/README.md.
+COPY scripts/gamepad-evdev-fallback/joystick_interposer_main.c /tmp/joystick_interposer_main.c
+COPY scripts/gamepad-evdev-fallback/fake-udev/ /tmp/fake-udev/
 RUN mkdir -p /out/x86_64 /out/i386 \
     && gcc -shared -fPIC -O2 -ldl -o /out/x86_64/selkies_joystick_interposer.so /tmp/joystick_interposer_v162.c \
     && gcc -shared -fPIC -O2 -m32 -ldl -o /out/i386/selkies_joystick_interposer.so /tmp/joystick_interposer_v162.c \
-    && gcc -shared -fPIC -O2 -o /out/x86_64/libnvenc_fix.so /tmp/nvenc_fix.c -ldl
+    && gcc -shared -fPIC -O2 -o /out/x86_64/libnvenc_fix.so /tmp/nvenc_fix.c -ldl \
+    && gcc -shared -fPIC -O2 -ldl -o /out/x86_64/selkies_joystick_interposer_evdev.so /tmp/joystick_interposer_main.c \
+    && gcc -shared -fPIC -O2 -m32 -ldl -o /out/i386/selkies_joystick_interposer_evdev.so /tmp/joystick_interposer_main.c \
+    && cd /tmp/fake-udev && make all all32 \
+    && cp /tmp/fake-udev/libudev.so.1 /out/x86_64/dpad_fake_libudev.so \
+    && cp /tmp/fake-udev/libudev_x86.so.1 /out/i386/dpad_fake_libudev.so
 
 # =============================================================================
 # Stage: gamescope-builder
@@ -240,10 +251,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # name length so SDL3 accepts the Selkies virtual gamepad) for BOTH arches.
 COPY --from=interposer-builder /out/x86_64/selkies_joystick_interposer.so /usr/lib/x86_64-linux-gnu/selkies_joystick_interposer.so
 COPY --from=interposer-builder /out/i386/selkies_joystick_interposer.so /usr/lib/i386-linux-gnu/selkies_joystick_interposer.so
+# evdev gamepad path (default OFF): the evdev interposer + fake-libudev, both
+# arches (alongside the v1.6.2 classic interposer above). LD_PRELOAD'd per-arch
+# via /usr/$LIB/... only when DPAD_GAMEPAD_INTERPOSER=evdev (entrypoint.sh).
+# evdev_bridge.py translates Selkies' js_event -> input_event on the event100N
+# sockets (scripts/evdev_bridge.py).
+COPY --from=interposer-builder /out/x86_64/selkies_joystick_interposer_evdev.so /usr/lib/x86_64-linux-gnu/selkies_joystick_interposer_evdev.so
+COPY --from=interposer-builder /out/i386/selkies_joystick_interposer_evdev.so /usr/lib/i386-linux-gnu/selkies_joystick_interposer_evdev.so
+COPY --from=interposer-builder /out/x86_64/dpad_fake_libudev.so /usr/lib/x86_64-linux-gnu/dpad_fake_libudev.so
+COPY --from=interposer-builder /out/i386/dpad_fake_libudev.so /usr/lib/i386-linux-gnu/dpad_fake_libudev.so
 
 # Selkies input router (.pth, auto-loaded; no-op when DPAD_INPUT_DISPLAY unset —
 # only the gamescope path sets it). Kept in base so both images share it.
 COPY scripts/dpad_input_patch.py scripts/dpad_input_patch.pth /usr/local/lib/python3.12/dist-packages/
+# dpad_gamepad_patch.py: under DPAD_GAMEPAD_INTERPOSER=evdev, makes Selkies emit the
+# 1360B MAIN-branch js_config_t (vendor 0x045e XBox 360) on the js socket, which
+# evdev_bridge.py discards + re-serves on the event100N sockets. Harmless when the
+# gate is unset (the .pth no-ops). Mirrors dpad_input_patch.py's .pth pattern.
+COPY scripts/dpad_gamepad_patch.py scripts/dpad_gamepad_patch.pth /usr/local/lib/python3.12/dist-packages/
 
 # gamescope headless does not composite the X cursor into its PipeWire output,
 # so the only visible cursor source is Selkies' XFIXES cursor overlay. This
@@ -301,7 +326,7 @@ RUN mkdir -p /etc/X11 && \
 # --- 11. COPY configs + entrypoint + common launcher scripts + display-driver installer ---
 COPY configs/ ${HOME}/.config/
 COPY configs/xorg/xorg.conf.template /opt/dpadcloud/xorg.conf.template
-COPY entrypoint.sh healthcheck.sh /opt/dpadcloud/
+COPY entrypoint.sh healthcheck.sh scripts/evdev_bridge.py /opt/dpadcloud/
 # vgl-steam / proton-wined3d / vgl-test = the Xvfb+VGL debug launchers (kept as
 # manual debug fallbacks). dpad-launch (the deprecated Vast steamcmd headless
 # launcher, no Steam UI — docs/PROJECT_STATE.md §7) is NO LONGER baked in.
@@ -310,7 +335,7 @@ COPY scripts/vgl-steam scripts/proton-wined3d scripts/vgl-test scripts/install-d
 # Strip CR (CRLF) — repo is edited on Windows; `#!/bin/bash\r` fails to exec.
 RUN sed -i 's/\r$//' /opt/dpadcloud/entrypoint.sh /opt/dpadcloud/healthcheck.sh \
         /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \
-        /opt/dpadcloud/install-display-drivers \
+        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/evdev_bridge.py \
         ${HOME}/.config/sunshine/sunshine.conf 2>/dev/null || true && \
     chmod +x /opt/dpadcloud/*.sh \
         /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \

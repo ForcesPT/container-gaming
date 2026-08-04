@@ -230,7 +230,7 @@ relaunch_selkies() {
     local attempt=0 max_attempts="${DPAD_SELKIES_RETRIES:-3}" err_before err_after selkies_cmd
     while :; do
         attempt=$((attempt+1))
-        selkies_cmd="export DISPLAY=${selkies_dpy} DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=${in_dpy} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
+        selkies_cmd="export DISPLAY=${selkies_dpy} DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=${in_dpy} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
         err_before="$(grep -ac 'NvEncOpenEncodeSessionEx failed' /tmp/selkies.log 2>/dev/null || echo 0)"
         as_user "${selkies_cmd}" >>/tmp/selkies.log 2>&1 &
         sleep 6
@@ -474,7 +474,7 @@ start_gamescope_stream() {
     [ "$video_src" = "pipewiresrc" ] && selkies_dpy="${in_dpy:-:0}"
 
     # Selkies launch command (reused by the NVENC-register retry below).
-    local selkies_cmd="export DISPLAY=${selkies_dpy} DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=${in_dpy} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
+    local selkies_cmd="export DISPLAY=${selkies_dpy} DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=${in_dpy} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
     # Launch Selkies, then verify the encoder registered. On multi-GPU hosts
     # (NVIDIA driver 570+) the FIRST nvh264enc open on a non-zero GPU minor can
     # fail at plugin-register time (gstnvenc.c NvEncOpenEncodeSessionEx 'error
@@ -837,39 +837,70 @@ start_gamescope_session() {
     setup_nvenc_fix
     DPAD_PRELOAD=""
     [ "$NVENC_FIX_ENABLED" = "1" ] && DPAD_PRELOAD="/opt/dpadcloud/libnvenc_fix.so"
-    export SELKIES_INTERPOSER='/usr/$LIB/selkies_joystick_interposer.so'
-    mkdir -pm1777 /dev/input 2>/dev/null
-    rm -f /dev/input/js0 /dev/input/js1 /dev/input/js2 /dev/input/js3 2>/dev/null || true
-    # Root gamepad-hotplug watcher: mknod /dev/input/jsN when Selkies' gamepad socket
-    # appears, rm it when the socket goes (so a reconnect re-triggers IN_CREATE).
-    ( while true; do
-          for n in 0 1 2 3; do
-            if [ -S "/tmp/selkies_js${n}.sock" ] && [ ! -e "/dev/input/js${n}" ]; then
-              mknod "/dev/input/js${n}" c 13 "${n}" 2>/dev/null && chmod 666 "/dev/input/js${n}" 2>/dev/null
-            elif [ ! -S "/tmp/selkies_js${n}.sock" ] && [ -e "/dev/input/js${n}" ]; then
-              rm -f "/dev/input/js${n}" 2>/dev/null
-            fi
-          done
-          sleep 0.3
-      done ) &
-    # as_user (su) strips the parent env, so LD_PRELOAD/SDL_JOYSTICK_* must be
-    # re-exported explicitly inside each gamescope+Steam launch below.
-    export LD_PRELOAD="${DPAD_PRELOAD}${DPAD_PRELOAD:+:}${SELKIES_INTERPOSER}${LD_PRELOAD:+:${LD_PRELOAD}}"
-    # SDL_GameController mapping for the Selkies virtual gamepad. The v1.6.2
-    # interposer presents a raw joystick named "Selkies Controller" with NO
-    # vendor/product ID (its js_config_t has no vendor/product fields + it
-    # doesn't intercept JSIOCGID), so SDL3 can't auto-map it as a gamepad —
-    # Steam Big Picture (which drives gamepadui via the SDL_GameController API)
-    # would ignore it. SDL3's GUID for a zero-vendor classic js device is
-    # bus(0)+crc16(name)+name-bytes (SDL_CreateJoystickGUID, vendor=0 branch):
-    # crc16("Selkies Controller")=0x06d6 -> GUID 0000d60653656c6b69657320436f6e00.
-    # This mapping tells SDL3 how the xpad-layout joystick indices map to a
-    # standard gamepad (matches STANDARD_XPAD_CONFIG in selkies gamepad.py:
-    # btn 0-10 = A/B/X/Y/TL/TR/SELECT/START/MODE/THUMBL/THUMBR, axes 0-7 =
-    # X/Y/Z/RX/RY/RZ/HAT0X/HAT0Y; dpad arrives as axes 6/7, triggers as 2/5).
-    export SDL_GAMECONTROLLERCONFIG='0000d60653656c6b69657320436f6e00,Selkies Controller,a:b0,b:b1,x:b2,y:b3,back:b6,guide:b8,start:b7,leftshoulder:b4,rightshoulder:b5,leftstick:b9,rightstick:b10,leftx:a0,lefty:a1,rightx:a3,righty:a4,lefttrigger:a2,righttrigger:a5,dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,'
+    SDL_GP_ENV=""
+    if [ "${DPAD_GAMEPAD_INTERPOSER:-}" = "evdev" ]; then
+        # === evdev gamepad path (DPAD_GAMEPAD_INTERPOSER=evdev, opt-in) ===
+        # fake-libudev + the MAIN-branch evdev interposer (both arches via $LIB)
+        # make SDL3 discover 4 virtual Microsoft X-Box 360 pads at
+        # /dev/input/js{0-3} + event100{0-3} (no udev daemon, no CLASSIC hint, no
+        # GUID hack — the pads report vendor 0x045e so SDL3 auto-maps them). The
+        # evdev interposer reads struct input_event on event100N; evdev_bridge.py
+        # translates Selkies' js_event -> input_event+SYN (scripts/evdev_bridge.py).
+        # The default/classic path is the else branch.
+        export SELKIES_INTERPOSER='/usr/$LIB/selkies_joystick_interposer_evdev.so'
+        mkdir -pm1777 /dev/input 2>/dev/null
+        # static dummy nodes (no hotplug watcher — fake-libudev advertises them;
+        # the interposer intercepts open() by path). jsN minor=N; event100N minor=64+1000+N.
+        for n in 0 1 2 3; do
+            rm -f "/dev/input/js${n}" "/dev/input/event100${n}" 2>/dev/null
+            mknod "/dev/input/js${n}"       c 13 "${n}"           2>/dev/null && chmod 666 "/dev/input/js${n}"       2>/dev/null
+            mknod "/dev/input/event100${n}" c 13 "$((64+1000+n))"  2>/dev/null && chmod 666 "/dev/input/event100${n}" 2>/dev/null
+        done
+        # evdev_bridge.py: Selkies js socket -> input_event on event100N. Detached;
+        # the health loop (below) restarts it if it dies.
+        setsid python3 /opt/dpadcloud/evdev_bridge.py >>/tmp/evdev_bridge.log 2>&1 </dev/null &
+        export LD_PRELOAD="${DPAD_PRELOAD}${DPAD_PRELOAD:+:}/usr/\$LIB/dpad_fake_libudev.so:/usr/\$LIB/selkies_joystick_interposer_evdev.so${LD_PRELOAD:+:${LD_PRELOAD}}"
+        # NO SDL_JOYSTICK_LINUX_CLASSIC / SDL_JOYSTICK_DISABLE_UDEV / SDL_GAMECONTROLLERCONFIG
+        # (the evdev path uses native SDL3 libudev discovery + auto-maps the XBox pad).
+        echo "[*] Gamepad: EVDEV path (DPAD_GAMEPAD_INTERPOSER=evdev) — fake-libudev + evdev interposer + evdev_bridge.py"
+    else
+        # === classic joystick path (default) ===
+        export SELKIES_INTERPOSER='/usr/$LIB/selkies_joystick_interposer.so'
+        mkdir -pm1777 /dev/input 2>/dev/null
+        rm -f /dev/input/js0 /dev/input/js1 /dev/input/js2 /dev/input/js3 2>/dev/null || true
+        # Root gamepad-hotplug watcher: mknod /dev/input/jsN when Selkies' gamepad socket
+        # appears, rm it when the socket goes (so a reconnect re-triggers IN_CREATE).
+        ( while true; do
+              for n in 0 1 2 3; do
+                if [ -S "/tmp/selkies_js${n}.sock" ] && [ ! -e "/dev/input/js${n}" ]; then
+                  mknod "/dev/input/js${n}" c 13 "${n}" 2>/dev/null && chmod 666 "/dev/input/js${n}" 2>/dev/null
+                elif [ ! -S "/tmp/selkies_js${n}.sock" ] && [ -e "/dev/input/js${n}" ]; then
+                  rm -f "/dev/input/js${n}" 2>/dev/null
+                fi
+              done
+              sleep 0.3
+          done ) &
+        # as_user (su) strips the parent env, so LD_PRELOAD/SDL_JOYSTICK_* must be
+        # re-exported explicitly inside each gamescope+Steam launch below.
+        export LD_PRELOAD="${DPAD_PRELOAD}${DPAD_PRELOAD:+:}${SELKIES_INTERPOSER}${LD_PRELOAD:+:${LD_PRELOAD}}"
+        # SDL_GameController mapping for the Selkies virtual gamepad. The v1.6.2
+        # interposer presents a raw joystick named "Selkies Controller" with NO
+        # vendor/product ID (its js_config_t has no vendor/product fields + it
+        # doesn't intercept JSIOCGID), so SDL3 can't auto-map it as a gamepad —
+        # Steam Big Picture (which drives gamepadui via the SDL_GameController API)
+        # would ignore it. SDL3's GUID for a zero-vendor classic js device is
+        # bus(0)+crc16(name)+name-bytes (SDL_CreateJoystickGUID, vendor=0 branch):
+        # crc16("Selkies Controller")=0x06d6 -> GUID 0000d60653656c6b69657320436f6e00.
+        # This mapping tells SDL3 how the xpad-layout joystick indices map to a
+        # standard gamepad (matches STANDARD_XPAD_CONFIG in selkies gamepad.py:
+        # btn 0-10 = A/B/X/Y/TL/TR/SELECT/START/MODE/THUMBL/THUMBR, axes 0-7 =
+        # X/Y/Z/RX/RY/RZ/HAT0X/HAT0Y; dpad arrives as axes 6/7, triggers as 2/5).
+        export SDL_GAMECONTROLLERCONFIG='0000d60653656c6b69657320436f6e00,Selkies Controller,a:b0,b:b1,x:b2,y:b3,back:b6,guide:b8,start:b7,leftshoulder:b4,rightshoulder:b5,leftstick:b9,rightstick:b10,leftx:a0,lefty:a1,rightx:a3,righty:a4,lefttrigger:a2,righttrigger:a5,dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,'
+        SDL_GP_ENV="SDL_JOYSTICK_DEVICE=/dev/input/js0 SDL_JOYSTICK_LINUX_CLASSIC=1 SDL_JOYSTICK_DISABLE_UDEV=1 SDL_GAMECONTROLLERCONFIG='${SDL_GAMECONTROLLERCONFIG}'"
+        echo "[*] Gamepad: classic joystick path (default)"
+    fi
     echo "[*] Launching gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}"
-    as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SDL_JOYSTICK_LINUX_CLASSIC=1 SDL_JOYSTICK_DISABLE_UDEV=1 SDL_GAMECONTROLLERCONFIG='${SDL_GAMECONTROLLERCONFIG}' SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
+    as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
     local gs_pid=$!
 
     # Steam takes ~30-40s to launch through pressure-vessel + steamwebhelper
@@ -903,7 +934,7 @@ start_gamescope_session() {
             echo "[*] WARNING: gamescope died — restarting session..."
             kill $gs_pid 2>/dev/null; pkill -9 -x steam 2>/dev/null; pkill -9 -x steamwebhelper 2>/dev/null; sleep 2
             rm -f ${USER_HOME}/.steam/steam/steam.pid ${USER_HOME}/.steam/debian-installation/steam.pid 2>/dev/null
-            as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SDL_JOYSTICK_LINUX_CLASSIC=1 SDL_JOYSTICK_DISABLE_UDEV=1 SDL_GAMECONTROLLERCONFIG='${SDL_GAMECONTROLLERCONFIG}' SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
+            as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
             gs_pid=$!
             # the old selkies was bound to the dead gamescope's PipeWire node →
             # it'd stream black/garbage; kill it so the supervisor (below)
@@ -937,6 +968,12 @@ start_gamescope_session() {
                 echo "[*] WARNING: selkies-gstreamer died (gamescope still up) — restarting stream..."
                 relaunch_selkies
             fi
+        fi
+        # evdev_bridge.py supervisor (only in evdev mode): restart the js->input_event
+        # translator if it died, so gamepad input keeps flowing.
+        if [ "${DPAD_GAMEPAD_INTERPOSER:-}" = "evdev" ] && ! pgrep -f evdev_bridge.py >/dev/null; then
+            echo "[*] WARNING: evdev_bridge.py died — restarting..."
+            setsid python3 /opt/dpadcloud/evdev_bridge.py >>/tmp/evdev_bridge.log 2>&1 </dev/null &
         fi
     done
 }
