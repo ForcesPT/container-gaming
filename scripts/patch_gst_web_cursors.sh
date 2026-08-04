@@ -13,18 +13,28 @@
 # releases it. The Selkies Ctrl+Shift+LeftClick hotkey also honors the gate.
 # window.DPAD_POINTER_LOCK = true/false still works from the console too.
 #
-# Run at build time (Dockerfile) and/or boot time (entrypoint); idempotent
-# (skips if the marker is already present). Safe to re-run.
+# Run at build time (Dockerfile) and/or boot time (entrypoint); re-runnable
+# (strips any prior DPAD shim block, then injects the current one).
 set -u
 FILE="${1:-/opt/gst-web/input.js}"
-MARKER="DPAD pointer-lock gate"
+# The image bake injects an earlier shim into input.js at BUILD time, so the
+# marker is already present at boot. Re-injecting by prepending would stack two
+# shims and the window.__dpad_pl_patched guard would no-op the new one. So:
+# STRIP any previously-injected DPAD shim block first, then inject the current
+# one. Safe: only deletes when BOTH start+end markers are present (won't nuke
+# the file on a half-injected state). Handles multiple stacked blocks too.
+START_MARK="=== DPAD pointer-lock gate"
+END_MARK="=== end DPAD shim ==="
 if [ ! -f "$FILE" ]; then
     echo "patch_gst_web_cursors: $FILE not found — skipping" >&2
     exit 0
 fi
-if grep -q "$MARKER" "$FILE" 2>/dev/null; then
-    echo "patch_gst_web_cursors: already patched ($FILE) — skipping"
-    exit 0
+if grep -q "$START_MARK" "$FILE" 2>/dev/null && grep -q "$END_MARK" "$FILE" 2>/dev/null; then
+    cp "$FILE" "${FILE}.orig" 2>/dev/null || true
+    sed -i "/$START_MARK/,/$END_MARK/d" "$FILE"
+    echo "patch_gst_web_cursors: stripped previous DPAD shim from $FILE"
+elif grep -q "$START_MARK" "$FILE" 2>/dev/null; then
+    echo "patch_gst_web_cursors: WARNING: start marker present without end marker — not stripping (would nuke file); injecting after" >&2
 fi
 cp "$FILE" "${FILE}.orig" 2>/dev/null || true
 SHIM='// === DPAD pointer-lock gate (auto-injected by patch_gst_web_cursors) ===
