@@ -92,7 +92,7 @@ docker logs -f dpad-0
 | `DPAD_SELKIES_BIND` | `127.0.0.1` | Selkies signaling bind. `127.0.0.1` for the SSH-tunnel path; **`0.0.0.0` for direct-IP providers** (UpCloud/Hyperstack/MassedCompute) so Caddy reverse-proxies HTTP straight to `<public-ip>:16100`. |
 | `DPAD_TUNNEL` | (unset) | `ssh` gates cloudflared OFF (the B1 self-hosted `play-<id>.dpadplay.com` path). Unset = cloudflared quick tunnel (legacy). |
 | `DPAD_DEFAULT_GAMING_MODE` | `0` | `1` = default the browser to **Gaming mode** (pointer lock ON → relative mouse for FPS aim) on stream load; `0` = Desktop mode (visible cursor + absolute mouse for Steam UI). The user can still toggle at runtime (floating button / `Ctrl+Shift+G`). Wired through `patch_gst_web_cursors.sh`; the control plane can set it per region/tier. |
-| `DPAD_INPUT_HOTFIX` | `1` | `1` = at boot, overlay `dpad_input_patch.py` + `patch_gst_web_cursors.sh` from repo `main` (ships input fixes with NO image rebuild, via the entrypoint bind-mount hotfix). `0` = use the baked copies only (set after a rebuild bakes the fixes in). |
+| `DPAD_INPUT_HOTFIX` | `0` | The 2026-08-05 image rebuild baked the input fixes (scroll direction + Gaming-mode toggle), so the boot-time overlay from repo `main` is **OFF by default** (avoids a `main`-regression overwriting the just-pushed image). Set `=1` to re-overlay `dpad_input_patch.py` + `patch_gst_web_cursors.sh` from `main` (useful to ship a NEW input hotfix before the next rebuild); on fetch failure it falls back to the baked copies. |
 | `DPAD_AUDIO_PACKETLOSS` | `0` | Opus inband FEC % (e.g. `10`). 0 = off. |
 | `DPAD_VIDEO_PACKETLOSS` | `0` | ULP_RED video FEC % (e.g. `10`, RFC 2198 forward redundancy). Auto-trims `fec_video_bitrate = video_bitrate / (1 + %/100)`. 0 = off. NACK rtx is always on. |
 | `DPAD_COTURN_PORT` | `3478` | coturn listen port (internal). Expose with `-p`. |
@@ -170,8 +170,8 @@ cloudflared ~10s · the rest ~8s).
 | `~/.local` EPERM aborts Steam bootstrap | A root boot process creates `~/.local` root-owned. The entrypoint's targeted `find ! -user dpad` chown handles it — don't use a blanket `chown -R` (overlayfs copy-up anti-pattern, see `PROJECT_STATE.md` §4). |
 | Gamepad not detected / no controller in Big Picture | Check `/tmp/selkies_js.log` for the FULL probe `JSIOCGNAME -> JSIOCGBUTTONS -> JSIOCGAXES -> JSIOCGBTNMAP -> JSIOCGAXMAP`. Only `JSIOCGNAME` then close = the i386 interposer `.so` is stale (rebuild BOTH arches — `gcc-multilib`). Stale-image check: `ls -la /usr/lib/i386-linux-gnu/selkies_joystick_interposer.so` (i386 should be the build day, not ~Aug 2024). Decisive test: the **32-bit** `sdl3_guid_test32` (Steam's main binary is 32-bit), not the 64-bit one. |
 | No mouse cursor visible | `--enable_cursors=true` missing OR the web client isn't patched (`patch_gst_web_cursors.sh`). Hard-refresh the browser (Ctrl+Shift+R). |
-| Can't aim / no camera-look in an FPS game | The browser is in Desktop mode (absolute mouse). Toggle **Gaming mode** with the floating bottom-right button or `Ctrl+Shift+G` (a badge shows the state), then click the stream to lock the pointer → relative mouse. `Esc` releases. For a per-tier default, set `DPAD_DEFAULT_GAMING_MODE=1`. (The shim is injected by `patch_gst_web_cursors.sh`, which strips any prior shim block before re-injecting — if the button is absent, the patch didn't run; hard-refresh, or check the boot log for `stripped previous DPAD shim` / `patch_gst_web_cursors: patched`.) |
-| Mouse scroll is reversed | The `dpad_input_patch.py` scroll-constant fix is missing (stale image / pre-fix). The XTest scroll buttons are mapped `MOUSE_SCROLL_UP→button 5`, `MOUSE_SCROLL_DOWN→button 4` (intentionally "backwards" — Selkies v1.6.2's scroll constants are inverted vs the physical wheel; stock pynput cancels it with a flipped `dy`, XTest is literal). Re-fetch the fixed `dpad_input_patch.py` (entrypoint `DPAD_INPUT_HOTFIX` overlay) or rebuild the image. |
+| Can't aim / no camera-look in an FPS game | The browser is in Desktop mode (absolute mouse). Toggle **Gaming mode** with the floating bottom-right button or `Ctrl+Shift+G` (a badge shows the state), then click the stream to lock the pointer → relative mouse. `Esc` releases. For a per-tier default, set `DPAD_DEFAULT_GAMING_MODE=1`. Baked in the public image since the 2026-08-05 rebuild; if the button is absent on a stale VM, hard-refresh, re-provision, or set `DPAD_INPUT_HOTFIX=1` to overlay. |
+| Mouse scroll is reversed | Fixed in the public image since the 2026-08-05 rebuild (`dpad_input_patch.py` maps XTest `MOUSE_SCROLL_UP→button 5`, `MOUSE_SCROLL_DOWN→button 4` — intentionally "backwards" because Selkies v1.6.2's scroll constants are inverted vs the physical wheel; stock pynput cancels it with a flipped `dy`, XTest is literal). On a pre-rebuild VM, re-provision or set `DPAD_INPUT_HOTFIX=1` to overlay the fix. |
 | Mild flicker on Steam menu open/close | NVIDIA 580 driver regression (gamescope #1964). Accepted; host-side. **Severe whole-frame flicker = driver 595** → the host must downgrade 595 → R580 LTS (see `cloud/docs/DEPLOY-RUNBOOK.md`). |
 | Browser refresh occasionally "Waiting for stream" | Selkies 1.6.2 reconnect race. Self-heals on a 2nd refresh; a fresh incognito tab always works. **A restart-on-disconnect supervisor (`entrypoint.sh` `relaunch_selkies()` in the gamescope-session health loop) auto-relaunches `selkies-gstreamer` when it dies while gamescope is up, so the browser reconnects without a manual refresh — validated live 2026-08-05 (OVH Gravelines L4: killed selkies mid-stream, health loop relaunched it within ~20s)** (`PROJECT_STATE.md` §6 #7). |
 | `webrtcnice … failed to resolve "<uuid>.local"` | Harmless — Chrome's mDNS `.local` ICE candidates the container can't resolve; the TURN relay handles it. |
@@ -189,6 +189,12 @@ plan.
 
 ## Rebuild + push
 
+The public `:dpad-SteamOS` tag is **current as of the 2026-08-05 rebuild** —
+it bakes the input fixes (scroll direction + Gaming-mode toggle) and the evdev
+gamepad fixes (i386 fake-libudev SONAME + bridge socket-chmod). A fresh
+`docker pull` gets them; no hotfix overlay needed (`DPAD_INPUT_HOTFIX` defaults
+to `0`). Rebuild only when new fixes land in `main`.
+
 ```bash
 docker build --target vast-vm -t forcespt/dpadcloud-gaming:dpad-SteamOS .
 docker build --target vast-vm --build-arg CUDA_VERSION=12.8.1 --build-arg CUDA_PKG=12-8 \
@@ -203,14 +209,13 @@ classic). **VALIDATED END-TO-END with a real controller on 2026-08-04** (OVH
 Gravelines L4 — Steam Big Picture navigated); two blocking bugs were found +
 fixed (see `PROJECT_STATE.md` §6 #9): the i386 fake-libudev SONAME
 (`libudev_x86.so.1` → `libudev.so.1`) + the bridge event-socket chmod
-(`evdev_bridge.py` `os.chmod 0o777`). **Both fixes are baked in the image →
-shipping them requires an image rebuild + Docker Hub push.** On the CURRENT
-(public) image the evdev path still has both bugs (zero gamepads in Steam); to
-test the FIX on a VM without a rebuilt image, bind-mount a fixed
-`dpad_fake_libudev.so` (i386, soname `libudev.so.1`) + the fixed
-`evdev_bridge.py` — as the `docker run` below shows. (The `.so` must be built
-with `fake-udev/Makefile` `all32` after the soname fix; the bridge is the repo
-`scripts/evdev_bridge.py`.)
+(`evdev_bridge.py` `os.chmod 0o777`). **Both fixes are baked in the public
+image since the 2026-08-05 rebuild + push — evdev now works on a fresh `docker
+pull` (no bind-mount workaround needed).** The bind-mount instructions below are
+only for a PRE-rebuild image (or to test a newer bridge hotfix without a rebuild):
+bind-mount a fixed `dpad_fake_libudev.so` (i386, soname `libudev.so.1`) + the
+fixed `evdev_bridge.py`. (The `.so` must be built with `fake-udev/Makefile`
+`all32` after the soname fix; the bridge is the repo `scripts/evdev_bridge.py`.)
 
 ```bash
 VM_IP=<the-vm-public-ip>

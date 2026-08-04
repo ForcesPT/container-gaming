@@ -724,7 +724,7 @@ start_gamescope_session() {
     # two fixed scripts here from repo main delivers input fixes to live VMs on
     # the next bootstrap with NO image rebuild. Best-effort (network failure falls
     # back to the baked copies). Disable with DPAD_INPUT_HOTFIX=0.
-    if [ "${DPAD_INPUT_HOTFIX:-1}" = "1" ]; then
+    if [ "${DPAD_INPUT_HOTFIX:-0}" = "1" ]; then
         local _hb="https://raw.githubusercontent.com/ForcesPT/container-gaming/main/scripts"
         if curl -fsSL "${_hb}/dpad_input_patch.py" -o /usr/local/lib/python3.12/dist-packages/dpad_input_patch.py 2>/dev/null; then
             echo "    input hotfix: dpad_input_patch.py updated from repo main"
