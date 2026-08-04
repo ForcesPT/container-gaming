@@ -734,7 +734,7 @@ start_gamescope_session() {
             echo "    input hotfix: patch_gst_web_cursors.sh updated from repo main"
         fi
     fi
-    bash /opt/dpadcloud/patch_gst_web_cursors.sh "${SELKIES_WEB_ROOT}/input.js" 2>/dev/null || true
+    bash /opt/dpadcloud/patch_gst_web_cursors.sh "${SELKIES_WEB_ROOT}/input.js" "${DPAD_DEFAULT_GAMING_MODE:-0}" 2>/dev/null || true
     local GS_W GS_H STEAM_ARGS
     GS_W="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f1)"
     GS_H="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f2)"
