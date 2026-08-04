@@ -1,12 +1,16 @@
-# Gamepad input — evdev path (gated, default OFF; pending rebuild + real-gamepad validation)
+# Gamepad input — evdev path (gated, default OFF; VALIDATED end-to-end 2026-08-04; needs image rebuild to ship)
 
 This directory holds the **evdev interposer + fake-libudev** approach for gamepad
 input in containers. **Wired but gated** behind `DPAD_GAMEPAD_INTERPOSER=evdev`
 (default unset = the classic path below); the `.so` files are built into the
 image (Dockerfile `interposer-builder`) + the entrypoint sets up the nodes /
 LD_PRELOAD / starts `scripts/evdev_bridge.py` only when the gate is set.
-**Pending:** an image rebuild + Docker Hub push (the `.so` files need baking),
-then live validation with a real controller.
+**Pending:** an image rebuild + Docker Hub push — REQUIRED to ship the two
+2026-08-04 fixes (the i386 fake-libudev SONAME fix is baked into the `.so` at
+link time; the bridge chmod fix is baked via `Dockerfile` COPY). The bridge is
+now ALSO on the entrypoint bind-mount hotfix path (`vm-bootstrap` fetches
+`evdev_bridge.py` + `dpad-launch-session` bind-mounts it) so future bridge
+fixes ship without a rebuild, but the `.so` soname fix still needs the rebuild.
 The default gamepad path is the **classic joystick path** (see entrypoint.sh
 `start_gamescope_session`): `SDL_JOYSTICK_LINUX_CLASSIC=1` +
 `SDL_JOYSTICK_DEVICE=/dev/input/js0` + the installed v1.6.2
@@ -103,22 +107,44 @@ chmod 666 /dev/input/js* /dev/input/event100*
 - `../jsclassic.c` — C client mimicking SDL3's classic probe sequence (proves the v1.6.2
   interposer handles it — the ACTIVE path's validation).
 
-## Control-plane limitation + the real-controller test
+## 2026-08-04 live validation + the two fixes
+
+A real browser controller navigated Steam Big Picture end-to-end on an OVH
+Gravelines L4 (`:dpad-SteamOS` + `DPAD_GAMEPAD_INTERPOSER=evdev`). Two bugs were
+blocking it (both fixed in repo, both need an image rebuild to ship):
+
+1. **i386 fake-libudev wrong SONAME** (`fake-udev/Makefile`): the 32-bit fake
+   was built `-soname libudev_x86.so.1` instead of `libudev.so.1`. Steam's main
+   binary is 32-bit + SDL3 resolves discovery via `dlopen("libudev.so.1")` +
+   `dlsym` (not link-time symbols), so the wrong soname made dlopen skip the
+   LD_PRELOAD'd fake + load the REAL `libudev.so.1.7.8` from the steam runtime
+   → real enumeration over `/sys` (fake nodes have no `/sys` backing) + no udev
+   daemon → **zero devices**. Fix: i386 `-soname libudev.so.1`. Proven with
+   `JS_LOG=1`: SDL3 calls the fake `udev_enumerate_*` (115 calls) → discovers 8
+   nodes → interposer `open()`s `event1000` → `EVIOCGID -> ven:0x045e
+   prod:0x028e` → Steam accepts 4 X-Box 360 pads.
+2. **Bridge event sockets root-owned mode 755** (`../evdev_bridge.py`): the
+   bridge runs as root (entrypoint `setsid`), Steam as `dpad` → interposer got
+   `EACCES` connecting to `/tmp/selkies_event100N.sock`. Fix: the bridge
+   `os.chmod(self.ev_sock, 0o777)` after `start_unix_server`.
+
+With both fixes: browser gamepad → Selkies → bridge (`js client connected` →
+`translated ... input_events`) → interposer (`SOCKET_READ_OK read 16 bytes`) →
+SDL3 → Steam Big Picture navigates.
+
+## Control-plane limitation + enabling evdev for normal sessions
 
 The control plane does NOT pass `DPAD_GAMEPAD_INTERPOSER` per-session: the worker
 writes only a fixed var list to `/etc/environment` at bootstrap
 (`cloud/apps/worker/src/index.ts:711-726`), so a normal dpadplay session always
-boots the **classic** path. To test/use evdev:
-- **Manual container** (the real-controller validation): see `docs/IMAGE-RUNBOOK.md`
-  "Evdev gamepad path — manual real-controller test" for the exact `docker run
-  -e DPAD_GAMEPAD_INTERPOSER=evdev --runtime=nvidia …` command + what to look for
-  (Steam Big Picture should auto-detect a Microsoft X-Box 360 pad, no GUID hack).
-- **Wire it into the control plane** (for normal dpadplay sessions to boot evdev):
-  add `echo "DPAD_GAMEPAD_INTERPOSER=evdev" >> /etc/environment` to the worker's
-  bootstrap commands in `cloud/apps/worker/src/index.ts:711-726` + redeploy the
-  worker. (Currently a global flag — all new VMs in all regions would boot evdev;
-  gate it per-region/tier if needed.)
-
-**Pending:** real-controller validation (the manual test above) — the only part
-not yet done (needs a physical controller in the browser). The dispatch + the
-wiring are both proven on OVH.
+boots the **classic** path. To use evdev for normal sessions (AFTER the image
+rebuild ships the two fixes): add `echo "DPAD_GAMEPAD_INTERPOSER=evdev"
+>> /etc/environment` to the worker's bootstrap commands in
+`cloud/apps/worker/src/index.ts:711-726` + redeploy the worker. (Currently a
+global flag — all new VMs in all regions would boot evdev; gate it
+per-region/tier if needed.) To test evdev WITHOUT the control plane: see
+`docs/IMAGE-RUNBOOK.md` "Evdev gamepad path — manual real-controller test" for
+the exact `docker run -e DPAD_GAMEPAD_INTERPOSER=evdev --runtime=nvidia …`
+command (note: the manual test ALSO needs the rebuilt image, OR bind-mounting a
+fixed `dpad_fake_libudev.so` + the fixed `evdev_bridge.py` as that runbook step
+does).

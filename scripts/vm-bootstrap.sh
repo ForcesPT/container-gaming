@@ -482,6 +482,18 @@ ensure_image() {
         rm -f /opt/dpadcloud/entrypoint.sh 2>/dev/null || true
         log "entrypoint.sh fetch failed — launches will use the image's baked entrypoint"
     fi
+    # Same hotfix path for evdev_bridge.py (the js_event→input_event translator,
+    # started by the entrypoint ONLY in evdev mode). Lets bridge hotfixes ship
+    # without an image rebuild. Best-effort: if the fetch fails, the entrypoint
+    # runs the image's baked bridge.
+    if curl -fsSL https://raw.githubusercontent.com/ForcesPT/container-gaming/main/scripts/evdev_bridge.py \
+        -o /opt/dpadcloud/evdev_bridge.py 2>/dev/null; then
+        chmod +x /opt/dpadcloud/evdev_bridge.py 2>/dev/null || true
+        log "evdev_bridge.py fetched to /opt/dpadcloud (bind-mountable hotfix path)"
+    else
+        rm -f /opt/dpadcloud/evdev_bridge.py 2>/dev/null || true
+        log "evdev_bridge.py fetch failed — evdev mode will use the image's baked bridge"
+    fi
 }
 
 # -----------------------------------------------------------------------------

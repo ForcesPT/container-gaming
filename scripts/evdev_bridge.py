@@ -132,6 +132,17 @@ class PadBridge:
         except FileNotFoundError:
             pass
         srv = await asyncio.start_unix_server(self._ev_client_cb, path=self.ev_sock)
+        # The bridge runs as root (entrypoint starts it via setsid); the evdev
+        # interposer lives in the Steam process which runs as the `dpad` user.
+        # asyncio.start_unix_server creates the socket with the process umask
+        # (root's umask 022 -> mode 755), so `dpad` can't connect (EACCES: no
+        # write bit for others). chmod 0o777 so any user can connect. Without
+        # this the interposer logs "Failed to connect to socket ...: Permission
+        # denied" and Steam never sees the gamepad.
+        try:
+            os.chmod(self.ev_sock, 0o777)
+        except OSError as e:
+            log("pad %d: WARN chmod %s failed: %r" % (self.n, self.ev_sock, e))
         log("pad %d: event server listening on %s" % (self.n, self.ev_sock))
         return srv
 
@@ -184,6 +195,7 @@ class PadBridge:
             while True:
                 chunk = await reader.read(4096)
                 if not chunk:
+                    log("pad %d: js socket EOF (Selkies closed)" % self.n)
                     break
                 self.js_buf += chunk
                 # first CONFIG_SIZE bytes are the js_config_t from Selkies — discard.
@@ -192,6 +204,7 @@ class PadBridge:
                         continue
                     self.js_buf = self.js_buf[CONFIG_SIZE:]
                     self.js_config_done = True
+                    log("pad %d: discarded %dB config; %d bytes remain" % (self.n, CONFIG_SIZE, len(self.js_buf)))
                 # then 8B js_events.
                 dead = []
                 while len(self.js_buf) >= JS_EVENT_SIZE:

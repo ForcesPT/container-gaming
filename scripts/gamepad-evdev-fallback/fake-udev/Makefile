@@ -10,13 +10,24 @@ LDFLAGS += -Wl,-soname,$(TARGET_SO)
 SOURCES = fake-libudev-core.c
 OBJECTS = $(SOURCES:.c=.o)
 
-# 32-bit build variables
+# 32-bit build variables.
+# NOTE: the OUTPUT filename is libudev_x86.so.1 only to avoid colliding with the
+# x86_64 build in this same dir — but the embedded SONAME MUST be libudev.so.1.
+# Steam's main binary is 32-bit (ubuntu12_32/steam) and resolves gamepad
+# discovery via dlopen("libudev.so.1") + dlsym (SDL3's SDL_udev.c). dlopen
+# matches by SONAME, not filename: if the fake's soname were libudev_x86.so.1,
+# dlopen would skip it and load the REAL libudev.so.1 shipped by the steam
+# runtime -> real enumeration over /sys (the fake /dev/input nodes have no
+# /sys backing) + no udev daemon -> zero devices -> no gamepad (the bug this
+# fixes). With soname=libudev.so.1, the LD_PRELOAD'd fake satisfies the soname
+# so dlopen reuses the already-loaded fake -> fake enumeration -> 8 fake nodes.
 TARGET_SO_32 = libudev_x86.so.1
+SONAME_32 = libudev.so.1
 TARGET_BASENAME_32 = libudev_x86.so
 FULL_TARGET_32 = $(TARGET_BASENAME_32).$(LIB_VERSION)
 CFLAGS_32 = $(CFLAGS) -m32
 LDFLAGS_32 = -shared -Wl,--version-script=libudev.sym -m32
-LDFLAGS_32 += -Wl,-soname,$(TARGET_SO_32)
+LDFLAGS_32 += -Wl,-soname,$(SONAME_32)
 OBJECTS_32 = $(SOURCES:.c=.x86.o)
 
 all: $(FULL_TARGET) $(TARGET_SO) $(TARGET_BASENAME)

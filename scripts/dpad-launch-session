@@ -258,6 +258,11 @@ launch() {
     local entry_mount=()
     [ -f /opt/dpadcloud/entrypoint.sh ] \
         && entry_mount+=( -v /opt/dpadcloud/entrypoint.sh:/opt/dpadcloud/entrypoint.sh:ro )
+    # Same hotfix path for evdev_bridge.py (started by the entrypoint in evdev
+    # mode; vm-bootstrap fetches it to /opt/dpadcloud/evdev_bridge.py). Lets
+    # bridge hotfixes ship without an image rebuild.
+    [ -f /opt/dpadcloud/evdev_bridge.py ] \
+        && entry_mount+=( -v /opt/dpadcloud/evdev_bridge.py:/opt/dpadcloud/evdev_bridge.py:ro )
 
     docker run -d --name "$name" \
         --runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=0 \

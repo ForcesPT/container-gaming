@@ -12,35 +12,43 @@
 > troubleshooting — the operational runbook), `cloud/docs/STATUS.md` (the
 > control-plane handoff), `cloud/docs/V2-PLAN.md` (the post-Vast architecture).
 >
-> **2026-08-05 session (gamepad): the evdev gamepad path — wired + gated
-> (`DPAD_GAMEPAD_INTERPOSER=evdev`, default OFF); dispatch + wiring VALIDATED on
-> OVH; pending real-controller + control-plane wiring.** See §6 #9 +
-> `scripts/gamepad-evdev-fallback/README.md`. Summary: the missing dual-serve
-> dispatch (the evdev interposer does NOT translate `js_event`→`input_event`;
-> confirmed live) is written as `scripts/evdev_bridge.py` (an external asyncio
-> bridge — no Selkies monkey-patch) + VALIDATED live on OVH Gravelines L4
-> (feeder → bridge → real evdev interposer → evclient: `EV_KEY code=304`/BTN_A,
-> `EV_ABS code=0`/ABS_X — correct). The image (`:dpad-SteamOS`, rebuilt + pushed
-> by the owner) bakes the evdev interposer + fake-libudev (x86_64+i386) +
-> `evdev_bridge.py` + `dpad_gamepad_patch.py`. The entrypoint's evdev branch
-> (mknod `js0-3` + `event1000-1003`, `LD_PRELOAD` fake-libudev + evdev
-> interposer, `evdev_bridge.py` started, no classic SDL hints / GUID) + the gate
-> env passing (`dpad-launch-session` + both `selkies_cmd`) are VALIDATED on the
-> real image (test container booted `Gamepad: EVDEV path` → `dpad_gamepad_patch`
-> activated → bridge up 4 pads → `DPAD_READY`). The classic path is UNCHANGED
-> (the default, validated working — Steam sees "Selkies Controller" via the
-> v1.6.2 interposer's `JSIOCG*` probe). **Pending:** (a) real-controller
-> validation (Steam Big Picture should auto-detect a Microsoft X-Box 360 pad, no
-> GUID hack) — only doable via a MANUAL `docker run -e
-> DPAD_GAMEPAD_INTERPOSER=evdev --runtime=nvidia …` (the control plane can't set
-> the env per-session); (b) optionally wire the env into the control plane
-> (cloud `apps/worker/src/index.ts:711-726`: add `echo
-> "DPAD_GAMEPAD_INTERPOSER=evdev" >> /etc/environment` to the bootstrap) +
-> redeploy the worker. **Ops note:** a stale dead-VM loop occurred (an OVH VM
-> was deleted directly on the OVH dashboard; the control plane kept reusing the
-> stale `ready` `warm_pool_vms` record → sessions failed in a loop) — fixed by
-> forcing that row to `destroyed` in the DB; the control plane has no
-> liveness-check for provider-deleted VMs (a gap, not yet fixed).
+> **2026-08-04 session (gamepad): the evdev gamepad path — VALIDATED
+> END-TO-END with a real controller on OVH Gravelines L4 (Steam Big Picture
+> navigates); two blocking bugs found + fixed; needs an image rebuild to ship.**
+> See §6 #9 + `scripts/gamepad-evdev-fallback/README.md`. The 2026-08-05 work
+> wired + gated the path (`DPAD_GAMEPAD_INTERPOSER=evdev`, default OFF) +
+> validated the dispatch (feeder → `evdev_bridge.py` → interposer → evclient)
+> + the boot wiring. This session did the real-controller test (the last
+> pending item) + found TWO bugs that made Steam see zero gamepads:
+> **(a) i386 fake-libudev wrong SONAME** — the 32-bit fake was built
+> `-soname libudev_x86.so.1` instead of `libudev.so.1`; Steam's 32-bit binary
+> does `dlopen("libudev.so.1")`+`dlsym` (SDL3), so the wrong soname made it
+> load the REAL libudev from the steam runtime → real enumeration over `/sys`
+> (the fake nodes have no `/sys` backing) → 0 devices. Fix: i386
+> `-soname libudev.so.1` (`fake-udev/Makefile`). **(b) bridge event sockets
+> root-owned mode 755** — the bridge runs as root, Steam as `dpad`, so the
+> interposer got `EACCES` connecting to `/tmp/selkies_event100N.sock`. Fix:
+> `evdev_bridge.py` `os.chmod(self.ev_sock, 0o777)`. With both fixes, `JS_LOG=1`
+> shows SDL3 calling the fake `udev_enumerate_*` (115 calls) → discovering the 8
+> nodes → the interposer `open()`s `event1000` → `EVIOCGID -> ven:0x045e
+> prod:0x028e` → Steam's SDL3 accepts the 4 X-Box 360 pads; a real browser
+> controller then navigated Big Picture (bridge `js client connected` →
+> `translated ... input_events` → interposer `SOCKET_READ_OK read 16 bytes`).
+> **Both fixes are baked in the image** (the `.so` in `interposer-builder`, the
+> bridge via `Dockerfile` COPY) → **shipping requires an image rebuild + Docker
+> Hub push** (the `.so` soname is set at link time, not hotfixable; the bridge
+> is now ALSO on the entrypoint bind-mount hotfix path — `vm-bootstrap` fetches
+> `evdev_bridge.py` + `dpad-launch-session` bind-mounts it — so future bridge
+> fixes ship without a rebuild, but the soname fix still needs the rebuild).
+> Not urgent: evdev is opt-in (default OFF), classic path unaffected. **Remaining
+> (optional, after the rebuild):** wire the env into the control plane (cloud
+> `apps/worker/src/index.ts:711-726`: add `echo "DPAD_GAMEPAD_INTERPOSER=evdev"
+> >> /etc/environment` to the bootstrap) + redeploy the worker.
+> **Ops note:** a stale dead-VM loop occurred (an OVH VM was deleted directly on
+> the OVH dashboard; the control plane kept reusing the stale `ready`
+> `warm_pool_vms` record → sessions failed in a loop) — fixed by forcing that
+> row to `destroyed` in the DB; the control plane has no liveness-check for
+> provider-deleted VMs (a gap, not yet fixed).
 
 ## 1. The images
 
@@ -213,28 +221,48 @@ reverts to the `:2` bridge fallback.
    worker currently uses a `docker ps` count heuristic).
 7. **restart-on-disconnect supervisor — IMPLEMENTED in `entrypoint.sh` (`relaunch_selkies()` + the health loop) + VALIDATED LIVE 2026-08-05.** Was: optional, for 100%-consistent refresh. The health loop now relaunches `selkies-gstreamer` when it dies while gamescope+Steam are up (reusing the resolved encoder + re-reading gamescope's current Xwayland display), and kills the stale selkies on a gamescope restart. Ships via the entrypoint bind-mount hotfix (no image rebuild). **Validation (done):** OVH Gravelines L4 — killed `selkies-gstreamer` inside a live streaming container → the health loop detected it within ~20s, `relaunch_selkies()` relaunched it as a fresh process (new PIDs, same encoder=nvh264enc), gamescope untouched, stream recovered (the browser reconnects).
 8. **(optional) NVRTC soname-11 real fix** (make CUDA 12.8 libnvrtc win).
-9. **evdev gamepad path — WIRED + gated (`DPAD_GAMEPAD_INTERPOSER=evdev`, default
-   OFF); dispatch + wiring VALIDATED live 2026-08-05; pending real-controller +
-   control-plane wiring.** Activates the evdev interposer + fake-libudev stack
+9. **evdev gamepad path — VALIDATED END-TO-END with a real controller
+   (2026-08-04, OVH Gravelines L4); two blocking bugs found + fixed; needs an
+   image rebuild to ship.** Activates the evdev interposer + fake-libudev stack
    (`scripts/gamepad-evdev-fallback/`) — SDL3 discovers 4 virtual Microsoft
    X-Box 360 pads (auto-mapped, no GUID hack) + unblocks 4-controller + rumble.
    The missing dual-serve dispatch (the interposer does NOT translate
-   `js_event`→`input_event`; confirmed live) is `scripts/evdev_bridge.py`
-   (external asyncio bridge: js socket → `input_event`+`EV_SYN` on
-   `event100N`, arch-aware 16B/24B) — VALIDATED on OVH (feeder → bridge →
-   interposer → evclient). The image bakes the `.so` (x86_64+i386) + bridge +
-   `dpad_gamepad_patch.py`; the entrypoint's evdev branch + the gate env
-   (`dpad-launch-session` + both `selkies_cmd`) are VALIDATED on the real image
-   (boots `Gamepad: EVDEV path` → patch activates → bridge up 4 pads →
-   `DPAD_READY`). The classic path (the default) is unchanged + validated working.
-   **Pending:** (a) real-controller test via a MANUAL `docker run -e
-   DPAD_GAMEPAD_INTERPOSER=evdev --runtime=nvidia …` (exact command in
-   `scripts/gamepad-evdev-fallback/README.md`) — Steam Big Picture should
-   auto-detect an X-Box 360 pad; (b) optionally wire the env into the control
+   `js_event`→`input_event`) is `scripts/evdev_bridge.py` (external asyncio
+   bridge: js socket → `input_event`+`EV_SYN` on `event100N`, arch-aware
+   16B/24B). **2026-08-04 live validation: a real browser controller navigated
+   Steam Big Picture end-to-end** (browser gamepad → Selkies → bridge →
+   interposer → SDL3 → Steam). Two bugs were blocking it (both fixed in repo):
+   - **(a) i386 fake-libudev wrong SONAME** (`scripts/gamepad-evdev-fallback/
+     fake-udev/Makefile`): the 32-bit fake was built `-soname libudev_x86.so.1`
+     instead of `libudev.so.1`. Steam's main binary is 32-bit (`ubuntu12_32/
+     steam`) + SDL3 resolves gamepad discovery via `dlopen("libudev.so.1")` +
+     `dlsym` (NOT link-time symbols), so the wrong soname made dlopen skip the
+     LD_PRELOAD'd fake + load the REAL `libudev.so.1.7.8` shipped by the steam
+     runtime → real enumeration over `/sys` (the fake `/dev/input/event100N`
+     nodes have no `/sys` backing) + no udev daemon → **zero devices**. Fix:
+     i386 `-soname libudev.so.1` (x86_64 was already correct). With the fix,
+     SDL3's dlopen finds the already-LD_PRELOAD'd fake → fake enumeration →
+     discovers the 8 nodes (proven: `JS_LOG=1` shows 115 `udev_enumerate_*`
+     calls into the fake + `EVIOCGID -> ven:0x045e prod:0x028e`).
+   - **(b) bridge event sockets created root-owned mode 755** (`scripts/
+     evdev_bridge.py`): the bridge runs as root (entrypoint `setsid`), Steam
+     runs as `dpad`, so the interposer got `EACCES` connecting to
+     `/tmp/selkies_event100N.sock` (no write bit for others). Fix: the bridge
+     `os.chmod(self.ev_sock, 0o777)` after `start_unix_server`.
+   Both fixes are baked into the image (the `.so` in the `interposer-builder`
+   stage, the bridge via `Dockerfile` COPY) — **shipping them requires an image
+   rebuild + Docker Hub push** (the `.so` soname is set at link time + can't be
+   hotfixed; the bridge is now ALSO on the entrypoint bind-mount hotfix path —
+   `vm-bootstrap` fetches `evdev_bridge.py` + `dpad-launch-session` bind-mounts
+   it — so future bridge fixes ship without a rebuild, but the soname fix still
+   needs the rebuild). Not urgent: evdev is opt-in (default OFF), the classic
+   path is the default + unaffected. The classic path (the default) is unchanged
+   + validated working. **Remaining (optional):** wire the env into the control
    plane (cloud `apps/worker/src/index.ts:711-726`: add `echo
    "DPAD_GAMEPAD_INTERPOSER=evdev" >> /etc/environment` to the bootstrap) +
-   redeploy the worker for a normal dpadplay session to boot evdev. See
-   `scripts/gamepad-evdev-fallback/README.md` + the 2026-08-05 session note.
+   redeploy the worker for a normal dpadplay session to boot evdev — but ONLY
+   after the image rebuild ships the two fixes. See `scripts/gamepad-evdev-
+   fallback/README.md` + the 2026-08-04 session note.
 
 ## 7. Deprecated (Vast era — in git history only)
 

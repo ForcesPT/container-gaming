@@ -87,7 +87,7 @@ docker logs -f dpad-0
 | Variable | Default | Purpose |
 |---|---|---|
 | `DPAD_GAMESCOPE` | `0` | `1` = gamescope headless mode (the validated path). |
-| `DPAD_GAMEPAD_INTERPOSER` | (unset) | `evdev` = the **evdev gamepad path** (fake-libudev + evdev interposer + `evdev_bridge.py`; SDL3 auto-detects 4 X-Box 360 pads, no GUID hack; see `scripts/gamepad-evdev-fallback/README.md`). Unset = the classic joystick path (the default; the v1.6.2 interposer + `SDL_JOYSTICK_LINUX_CLASSIC` + the hardcoded GUID). Validated live 2026-08-05 (dispatch + wiring); pending real-controller. NOTE: the control plane does NOT pass this per-session (the worker writes only a fixed `/etc/environment` list at bootstrap) — to test/use evdev on a normal dpadplay session, wire it into the control plane (cloud `apps/worker/src/index.ts:711-726`) or run a manual container (below). |
+| `DPAD_GAMEPAD_INTERPOSER` | (unset) | `evdev` = the **evdev gamepad path** (fake-libudev + evdev interposer + `evdev_bridge.py`; SDL3 auto-detects 4 X-Box 360 pads, no GUID hack; see `scripts/gamepad-evdev-fallback/README.md`). Unset = the classic joystick path (the default; the v1.6.2 interposer + `SDL_JOYSTICK_LINUX_CLASSIC` + the hardcoded GUID). **VALIDATED END-TO-END with a real controller 2026-08-04** (Steam Big Picture navigates); two blocking bugs fixed (i386 fake-libudev SONAME + bridge socket chmod) — **needs an image rebuild + push to ship**. NOTE: the control plane does NOT pass this per-session (the worker writes only a fixed `/etc/environment` list at bootstrap) — to test/use evdev on a normal dpadplay session, wire it into the control plane (cloud `apps/worker/src/index.ts:711-726`) or run a manual container (below). |
 | `DPAD_VIDEO_SRC` | `pipewiresrc` | `pipewiresrc` = direct PipeWire capture (zero-copy-ish). `ximagesrc` = the `:2` Xvfb bridge fallback. |
 | `DPAD_SELKIES_BIND` | `127.0.0.1` | Selkies signaling bind. `127.0.0.1` for the SSH-tunnel path; **`0.0.0.0` for direct-IP providers** (UpCloud/Hyperstack/MassedCompute) so Caddy reverse-proxies HTTP straight to `<public-ip>:16100`. |
 | `DPAD_TUNNEL` | (unset) | `ssh` gates cloudflared OFF (the B1 self-hosted `play-<id>.dpadplay.com` path). Unset = cloudflared quick tunnel (legacy). |
@@ -195,11 +195,18 @@ docker push forcespt/dpadcloud-gaming:dpad-SteamOS
 ## Evdev gamepad path — manual real-controller test (DPAD_GAMEPAD_INTERPOSER=evdev)
 
 The evdev path is gated behind `DPAD_GAMEPAD_INTERPOSER=evdev` (default unset =
-classic). The dispatch + wiring are validated live 2026-08-05 (see
-`PROJECT_STATE.md` §6 #9); the remaining step is the **real-controller** test,
-which the control plane can't do per-session (the worker writes only a fixed
-`/etc/environment` list at bootstrap). Test it with a manual `docker run` on a
-GPU VM (free the GPU + port 3478 first — end any live session on that VM):
+classic). **VALIDATED END-TO-END with a real controller on 2026-08-04** (OVH
+Gravelines L4 — Steam Big Picture navigated); two blocking bugs were found +
+fixed (see `PROJECT_STATE.md` §6 #9): the i386 fake-libudev SONAME
+(`libudev_x86.so.1` → `libudev.so.1`) + the bridge event-socket chmod
+(`evdev_bridge.py` `os.chmod 0o777`). **Both fixes are baked in the image →
+shipping them requires an image rebuild + Docker Hub push.** On the CURRENT
+(public) image the evdev path still has both bugs (zero gamepads in Steam); to
+test the FIX on a VM without a rebuilt image, bind-mount a fixed
+`dpad_fake_libudev.so` (i386, soname `libudev.so.1`) + the fixed
+`evdev_bridge.py` — as the `docker run` below shows. (The `.so` must be built
+with `fake-udev/Makefile` `all32` after the soname fix; the bridge is the repo
+`scripts/evdev_bridge.py`.)
 
 ```bash
 VM_IP=<the-vm-public-ip>
