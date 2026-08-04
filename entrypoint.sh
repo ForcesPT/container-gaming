@@ -716,6 +716,24 @@ start_gamescope_session() {
     # stays visible (pointer lock hides the CSS cursor) + mouse stays absolute for
     # UI navigation. (The dpad_input_patch.py .pth makes XFIXES safe; the old
     # crash was when the :2 bridge was broken.)
+    #
+    # Boot-time input hotfix overlay: dpad_input_patch.py + patch_gst_web_cursors.sh
+    # are baked in the image, but the image rebuild + Docker Hub push is the blocked
+    # owner step. The entrypoint itself ships via the vm-bootstrap bind-mount
+    # hotfix (vm-bootstrap fetches this file from repo main), so overlaying the
+    # two fixed scripts here from repo main delivers input fixes to live VMs on
+    # the next bootstrap with NO image rebuild. Best-effort (network failure falls
+    # back to the baked copies). Disable with DPAD_INPUT_HOTFIX=0.
+    if [ "${DPAD_INPUT_HOTFIX:-1}" = "1" ]; then
+        local _hb="https://raw.githubusercontent.com/ForcesPT/container-gaming/main/scripts"
+        if curl -fsSL "${_hb}/dpad_input_patch.py" -o /usr/local/lib/python3.12/dist-packages/dpad_input_patch.py 2>/dev/null; then
+            echo "    input hotfix: dpad_input_patch.py updated from repo main"
+        fi
+        if curl -fsSL "${_hb}/patch_gst_web_cursors.sh" -o /opt/dpadcloud/patch_gst_web_cursors.sh 2>/dev/null; then
+            chmod +x /opt/dpadcloud/patch_gst_web_cursors.sh 2>/dev/null
+            echo "    input hotfix: patch_gst_web_cursors.sh updated from repo main"
+        fi
+    fi
     bash /opt/dpadcloud/patch_gst_web_cursors.sh "${SELKIES_WEB_ROOT}/input.js" 2>/dev/null || true
     local GS_W GS_H STEAM_ARGS
     GS_W="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f1)"

@@ -144,10 +144,25 @@ def _patch():
                 x, y = data
                 xtest.fake_input(d, X.MotionNotify, detail=True, root=X.NONE, x=x, y=y)
                 d.sync()
+            # Selkies v1.6.2 scroll constants are INVERTED relative to the physical
+            # wheel, so the button numbers here look "backwards" — do NOT swap them.
+            # The web client (gst-web/input.js _mouseWheel) sets button bit 4 for
+            # deltaY<0 (wheel UP) and bit 3 (default) for deltaY>0 (wheel DOWN).
+            # The server (webrtc_input.send_x11_mouse) maps bit 3 -> MOUSE_SCROLL_UP
+            # and bit 4 -> MOUSE_SCROLL_DOWN. So MOUSE_SCROLL_UP is actually sent on
+            # a wheel-DOWN and MOUSE_SCROLL_DOWN on a wheel-UP. Stock Selkies cancels
+            # this with pynput.mouse.scroll(0,-1) for UP / scroll(0,1) for DOWN
+            # (pynput's dy sign is itself flipped), but XTest button numbers are
+            # literal: X button 4 = scroll UP, button 5 = scroll DOWN. To get
+            # wheel-UP -> screen-UP we must inject button 4 for MOUSE_SCROLL_DOWN
+            # (wheel-UP) and button 5 for MOUSE_SCROLL_UP (wheel-DOWN). Swapping
+            # these back to 4/5 re-reverses scrolling (the original bug).
             elif action == M.MOUSE_SCROLL_UP:
-                xtest.fake_input(d, X.ButtonPress, detail=4); xtest.fake_input(d, X.ButtonRelease, detail=4); d.sync()
-            elif action == M.MOUSE_SCROLL_DOWN:
+                # sent on wheel-DOWN -> inject X button 5 (screen-DOWN)
                 xtest.fake_input(d, X.ButtonPress, detail=5); xtest.fake_input(d, X.ButtonRelease, detail=5); d.sync()
+            elif action == M.MOUSE_SCROLL_DOWN:
+                # sent on wheel-UP -> inject X button 4 (screen-UP)
+                xtest.fake_input(d, X.ButtonPress, detail=4); xtest.fake_input(d, X.ButtonRelease, detail=4); d.sync()
             elif action == M.MOUSE_BUTTON:
                 btn_action, btn_enum = data
                 xb = XBTN.get(btn_enum, 1)
