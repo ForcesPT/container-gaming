@@ -302,23 +302,30 @@ ensure_nct() {
     fi
     nvidia-ctk runtime configure --runtime=docker
     systemctl restart docker
-    if ! docker run --rm --gpus all nvidia/cuda:12.8.1-runtime-ubuntu24.04 nvidia-smi >/dev/null 2>&1; then
-        err "container cannot see the GPU after nvidia-container-toolkit install"
-        docker run --rm --gpus all nvidia/cuda:12.8.1-runtime-ubuntu24.04 nvidia-smi || true
-        return 1
-    fi
-    log "GPU visible inside a container (nvidia-container-toolkit OK)"
-    # Generate a CDI spec so each container can be pinned to one GPU with its
-    # full device set (/dev/nvidiaX + /dev/dri/cardX + renderDXXX) via
-    # `--runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=i`. This is what
-    # gives per-GPU isolation AND the DRM device needed for the DFP/full-Steam
-    # path without --privileged. Idempotent; regenerate after driver changes.
+    # Regenerate the CDI spec BEFORE the GPU-visibility check. After a driver
+    # swap (e.g. the proprietary -> open R580 swap on Scaleway, ensure_driver_580),
+    # the OLD CDI spec still references the previous driver's
+    # libcuda.so.<old-version> (now gone) -> both `--gpus all` AND the CDI
+    # `--device nvidia.com/gpu=i` path fail to mount it -> the GPU check below
+    # fails AND dpad-launch-session's container can't start (observed live: after
+    # the proprietary->open swap+reboot, the stale CDI referenced
+    # libcuda.so.580.126.20 while the host had 580.178.04 -> every docker run
+    # failed `failed to fulfil mount request: open .../libcuda.so.580.126.20: no
+    # such file or directory`). Regenerating the CDI spec here (reading the
+    # now-loaded driver) refreshes the libcuda path so both paths work.
+    # Idempotent; also re-runs on every boot (keeps CDI in sync with the driver).
     mkdir -p /etc/cdi
     if nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml >/tmp/cdi-gen.log 2>&1; then
         log "CDI spec generated ($(nvidia-ctk cdi list 2>/dev/null | grep -c 'nvidia.com/gpu=') devices)"
     else
         err "CDI spec generation failed (see /tmp/cdi-gen.log) — CDI launch will not work"
     fi
+    if ! docker run --rm --gpus all nvidia/cuda:12.8.1-runtime-ubuntu24.04 nvidia-smi >/dev/null 2>&1; then
+        err "container cannot see the GPU after nvidia-container-toolkit install"
+        docker run --rm --gpus all nvidia/cuda:12.8.1-runtime-ubuntu24.04 nvidia-smi || true
+        return 1
+    fi
+    log "GPU visible inside a container (nvidia-container-toolkit OK)"
 }
 
 # -----------------------------------------------------------------------------
