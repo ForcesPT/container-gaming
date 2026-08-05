@@ -187,7 +187,7 @@ ensure_driver_580() {
                 # `-580-server` (captures the dkms/driver/kernel-common/utils/
                 # headless/kernel-source/compute-utils metapackages + the
                 # libnvidia-*-580-server:amd64 userspace libs + the firmware pkg).
-                purge_pkgs="$(dpkg -l 2>/dev/null | awk '/^ii/{print $2}' | grep -E '^(nvidia|libnvidia)-.*-580-server' | sort -u | paste -sd ' ')
+                purge_pkgs="$(dpkg -l 2>/dev/null | awk '/^ii/{print $2}' | grep -E '^(nvidia|libnvidia)-.*-580-server' | sort -u | paste -sd ' ')"
                 if [ -n "$purge_pkgs" ]; then
                     log "purging proprietary -580-server packages: $purge_pkgs"
                     if ! DEBIAN_FRONTEND=noninteractive apt-get purge -y $purge_pkgs >/tmp/dpad-driver-580-purge.log 2>&1; then
