@@ -109,33 +109,15 @@ have() { command -v "$1" >/dev/null 2>&1; }
 ensure_driver_580() {
     local drv
     drv="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | tr -d '[:space:]')"
-    log "NVIDIA driver = ${drv:-?} (need 580.x OPEN on the L4 pool)"
+    log "NVIDIA driver = ${drv:-?} (need 580.x on the L4 pool)"
     [ -z "$drv" ] && { log "no driver detected — skipping driver pin (template has none?)"; return 0; }
-
-    # Detect the kernel-module VARIANT: open (nvidia-dkms-580-open) vs proprietary
-    # (nvidia-dkms-580-server / nvidia-dkms-580). The proprietary 580.x — e.g.
-    # Scaleway's pre-installed 580.126.20 (nvidia-dkms-580-server) — has a BROKEN
-    # EGL/GBM glamor path in headless gamescope: Mesa EGL can't match the L4 PCI
-    # id ("pci id 10de:27b8, driver (null)") → "egl: failed to create dri2
-    # screen" → "Failed to initialize glamor, falling back to sw" → Steam CEF
-    # (GL-based Big Picture) composites a BLACK screen while audio plays. The
-    # OPEN 580.x (nvidia-driver-580-open, what UpCloud runs after the 595->580
-    # downgrade) works. So a 580.x PROPRIETARY build MUST be swapped to the open
-    # variant + reboot. (Confirmed live 2026-08-05 on Scaleway Paris L4.)
-    local has_open
-    has_open="$(dpkg -l 2>/dev/null | awk '/^ii.*nvidia-dkms-580-open/{print $2}' | head -1)"
     case "$drv" in
-        580.*)
-            if [ -n "$has_open" ]; then
-                log "driver already 580 LTS (open kernel) — good"
-                return 0
-            fi
-            log "driver is 580.x but PROPRIETARY (no nvidia-dkms-580-open) — EGL/glamor broken in headless gamescope (black CEF); swapping to nvidia-driver-580-open + reboot"
-            ;;
-        595.*) log "driver is 595 (severe L4 flicker) — downgrading to nvidia-driver-580-open + reboot" ;;
-        *)    log "WARNING: driver $drv is not 580/595 — leaving it (only 595 + proprietary-580 are auto-swapped to open)"; return 0 ;;
+        580.*) log "driver already 580 LTS — good"; return 0 ;;
+        595.*) : ;;  # the known-bad flicker driver — downgrade below
+        *)    log "WARNING: driver $drv is not 580 or 595 — leaving it (only 595 is auto-downgraded)"; return 0 ;;
     esac
 
+    log "driver is 595 (severe L4 flicker) — downgrading to nvidia-driver-580-open + reboot"
     apt-get update >/dev/null 2>&1 || true
     # Remove the version-pinning package(s) so apt is free to install 580.
     local pin
@@ -144,9 +126,7 @@ ensure_driver_580() {
         log "removing pinning package(s): $pin"
         DEBIAN_FRONTEND=noninteractive apt-get remove -y $pin >/dev/null 2>&1 || true
     fi
-    # Install R580 LTS (OPEN kernel modules). apt swaps the dkms metapackage
-    # (proprietary nvidia-dkms-580-server -> nvidia-dkms-580-open) + rebuilds the
-    # kernel module via DKMS. The open module's EGL/GBM works in headless gamescope.
+    # Install R580 LTS (open kernel modules). apt swaps the dkms metapackage.
     if ! DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-driver-580-open >/tmp/dpad-driver-580.log 2>&1; then
         err "nvidia-driver-580-open install failed (see /tmp/dpad-driver-580.log)"
         tail -20 /tmp/dpad-driver-580.log >&2 || true
@@ -156,7 +136,7 @@ ensure_driver_580() {
     # NOT enable modeset by default, unlike 595 — and gamescope headless needs it).
     echo 'options nvidia_drm modeset=Y' > /etc/modprobe.d/nvidia-drm-modeset.conf
     update-initramfs -u >/dev/null 2>&1 || true
-    log "driver swap to nvidia-driver-580-open applied — rebooting ONCE to load the new driver"
+    log "driver downgrade 595 -> 580 applied — rebooting ONCE to load the new driver"
     log "(the dpadcloud-bootstrap service will continue automatically after reboot)"
     sync; sleep 3; reboot; exit 0
 }
