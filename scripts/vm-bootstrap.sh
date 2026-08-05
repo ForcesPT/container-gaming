@@ -120,11 +120,18 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # proprietary variant so UpCloud (already open after its 595->580 downgrade)
 # + OVH (open, validated working) are untouched. See cloud/docs/STATUS.md
 # §4 #42 + the Paris session note + cloud/docs/DEPLOY-RUNBOOK.md §5.
+# NOTE: the script runs under `set -uo pipefail` (line ~61), so `grep -qE` in a
+# pipeline is a trap: grep -q exits on the first match → SIGPIPE kills the
+# upstream awk → pipefail propagates 141 → the function returns non-zero (false)
+# even when it SHOULD return true (the proprietary packages ARE installed).
+# That made ensure_driver_580 skip the swap on Scaleway → black screen. Fix:
+# `grep -E ... >/dev/null` reads ALL input (no early exit → no SIGPIPE) so the
+# pipeline exit is grep's real status (0=match) under pipefail.
 has_proprietary_580() {
-    dpkg -l 2>/dev/null | awk '/^ii/{print $2}' | grep -qE 'nvidia-(dkms|driver|kernel-common|utils)-580-server$|^libnvidia-.*-580-server$'
+    dpkg -l 2>/dev/null | awk '/^ii/{print $2}' | grep -E 'nvidia-(dkms|driver|kernel-common|utils)-580-server$|^libnvidia-.*-580-server$' >/dev/null
 }
 has_open_580() {
-    dpkg -l 2>/dev/null | awk '/^ii/{print $2}' | grep -qE 'nvidia-(dkms|driver)-580-open$'
+    dpkg -l 2>/dev/null | awk '/^ii/{print $2}' | grep -E 'nvidia-(dkms|driver)-580-open$' >/dev/null
 }
 
 # Install the OPEN variant of R580 LTS + set modeset=Y persistently + reboot
