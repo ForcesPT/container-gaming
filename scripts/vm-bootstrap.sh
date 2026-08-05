@@ -106,19 +106,90 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # other versions are warned-but-left (don't break a working host). Idempotent —
 # after the reboot this sees 580 and returns. The systemd service resumes after.)
 # -----------------------------------------------------------------------------
+# ---- R580 variant detection (proprietary vs open) ----
+# gamescope headless does NOT support the NVIDIA proprietary driver (emersion,
+# gamescope issue #255): Mesa EGL/glamor can't match the GPU PCI id → Steam
+# CEF composites a BLACK screen while audio plays (the capture+encoder pipeline
+# is fine — it's faithfully encoding black). The OPEN variant of R580
+# (`nvidia-driver-580-open`, what UpCloud runs as 580.173.02-open) works — its
+# Mesa EGL/GBM glamor path works in headless. This is a proprietary-vs-open
+# VARIANT issue, NOT a version issue (R580 LTS is the deliberate choice —
+# longest support to Aug 2028; R595 causes severe L4 flicker; R610 is NFB).
+# Scaleway's "Ubuntu Noble GPU OS 12 passthrough" image ships the PROPRIETARY
+# `nvidia-dkms-580-server` (580.126.20) → must swap to open. Gated on the
+# proprietary variant so UpCloud (already open after its 595->580 downgrade)
+# + OVH (open, validated working) are untouched. See cloud/docs/STATUS.md
+# §4 #42 + the Paris session note + cloud/docs/DEPLOY-RUNBOOK.md §5.
+has_proprietary_580() {
+    dpkg -l 2>/dev/null | awk '/^ii/{print $2}' | grep -qE 'nvidia-(dkms|driver|kernel-common|utils)-580-server$|^libnvidia-.*-580-server$'
+}
+has_open_580() {
+    dpkg -l 2>/dev/null | awk '/^ii/{print $2}' | grep -qE 'nvidia-(dkms|driver)-580-open$'
+}
+
+# Install the OPEN variant of R580 LTS + set modeset=Y persistently + reboot
+# ONCE to load it. Shared by the 595-downgrade + the proprietary-swap paths.
+# `apt-get update` first so the open metapackage is in the index. FATAL on
+# failure (return 1) so a broken/black-screen VM never goes `ready`.
+install_open_580_and_reboot() {
+    apt-get update >/dev/null 2>&1 || true
+    # Install R580 LTS (open kernel modules). apt swaps the dkms metapackage.
+    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-driver-580-open >/tmp/dpad-driver-580-open.log 2>&1; then
+        err "nvidia-driver-580-open install failed (see /tmp/dpad-driver-580-open.log)"
+        tail -20 /tmp/dpad-driver-580-open.log >&2 || true
+        return 1
+    fi
+    # Set modeset=Y persistently so it's active right after the reboot (580 does
+    # NOT enable modeset by default, unlike 595 — and gamescope headless needs it).
+    echo 'options nvidia_drm modeset=Y' > /etc/modprobe.d/nvidia-drm-modeset.conf
+    update-initramfs -u >/dev/null 2>&1 || true
+    log "open R580 applied — rebooting ONCE to load the new driver"
+    log "(the dpadcloud-bootstrap service will continue automatically after reboot)"
+    sync; sleep 3; reboot; exit 0
+}
+
 ensure_driver_580() {
     local drv
     drv="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | tr -d '[:space:]')"
     log "NVIDIA driver = ${drv:-?} (need 580.x on the L4 pool)"
     [ -z "$drv" ] && { log "no driver detected — skipping driver pin (template has none?)"; return 0; }
     case "$drv" in
-        580.*) log "driver already 580 LTS — good"; return 0 ;;
+        580.*)
+            # Right BRANCH (R580 LTS). Check the VARIANT: the proprietary
+            # `-580-server` packages render a BLACK screen in headless gamescope
+            # → swap to the open variant + reboot. The open variant is the no-op
+            # (UpCloud post-downgrade, OVH pre-installed). FATAL on swap failure
+            # so a black-screen VM never goes `ready`.
+            if has_proprietary_580 && ! has_open_580; then
+                log "driver is 580 PROPRIETARY (nvidia-dkms-580-server) — headless gamescope renders BLACK; swapping to nvidia-driver-580-open"
+                # Purge the proprietary -server packages FIRST. They ship
+                # `nvidia-kernel-common-580-server` which CONFLICTS with the open
+                # `nvidia-kernel-common-580` (the install fails without this purge
+                # — observed in the reverted 1bb6f26 attempt; the purge resolves
+                # the conflict). Purge every installed package ending in
+                # `-580-server` (the dkms/driver/kernel-common/utils metapackages
+                # + the libnvidia-*-580-server userspace libs).
+                local purge_pkgs
+                purge_pkgs="$(dpkg -l 2>/dev/null | awk '/^ii.*-580-server$/{print $2}' | sort -u | paste -sd ' ')"
+                if [ -n "$purge_pkgs" ]; then
+                    log "purging proprietary -580-server packages: $purge_pkgs"
+                    if ! DEBIAN_FRONTEND=noninteractive apt-get purge -y $purge_pkgs >/tmp/dpad-driver-580-purge.log 2>&1; then
+                        err "purge of proprietary -580-server packages failed (see /tmp/dpad-driver-580-purge.log)"
+                        tail -20 /tmp/dpad-driver-580-purge.log >&2 || true
+                        return 1
+                    fi
+                fi
+                install_open_580_and_reboot || return 1
+                return 1   # unreachable (install_open_580_and_reboot reboots or returns 1)
+            fi
+            log "driver already 580 LTS (open variant) — good"
+            return 0
+            ;;
         595.*) : ;;  # the known-bad flicker driver — downgrade below
         *)    log "WARNING: driver $drv is not 580 or 595 — leaving it (only 595 is auto-downgraded)"; return 0 ;;
     esac
 
     log "driver is 595 (severe L4 flicker) — downgrading to nvidia-driver-580-open + reboot"
-    apt-get update >/dev/null 2>&1 || true
     # Remove the version-pinning package(s) so apt is free to install 580.
     local pin
     pin="$(dpkg -l 2>/dev/null | awk '/^ii.*nvidia-driver-pinning/{print $2}' | paste -sd ' ')"
@@ -126,19 +197,7 @@ ensure_driver_580() {
         log "removing pinning package(s): $pin"
         DEBIAN_FRONTEND=noninteractive apt-get remove -y $pin >/dev/null 2>&1 || true
     fi
-    # Install R580 LTS (open kernel modules). apt swaps the dkms metapackage.
-    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-driver-580-open >/tmp/dpad-driver-580.log 2>&1; then
-        err "nvidia-driver-580-open install failed (see /tmp/dpad-driver-580.log)"
-        tail -20 /tmp/dpad-driver-580.log >&2 || true
-        return 1
-    fi
-    # Set modeset=Y persistently so it's active right after the reboot (580 does
-    # NOT enable modeset by default, unlike 595 — and gamescope headless needs it).
-    echo 'options nvidia_drm modeset=Y' > /etc/modprobe.d/nvidia-drm-modeset.conf
-    update-initramfs -u >/dev/null 2>&1 || true
-    log "driver downgrade 595 -> 580 applied — rebooting ONCE to load the new driver"
-    log "(the dpadcloud-bootstrap service will continue automatically after reboot)"
-    sync; sleep 3; reboot; exit 0
+    install_open_580_and_reboot || return 1
 }
 
 # -----------------------------------------------------------------------------
@@ -810,7 +869,7 @@ bootstrap() {
     log "=== DpadCloud VM bootstrap starting (warm-VM mode=${DPAD_WARM_VM}) ==="
     ensure_no_auto_updates   # FIRST: stop apt from killing the session mid-boot
     systemctl start docker 2>/dev/null || true
-    ensure_driver_580         # may reboot once (595->580); resumes here after
+    ensure_driver_580  || return 1   # may reboot once (595->580 OR proprietary->open); resumes here after
     ensure_modeset            # may reboot once; resumes here after
     ensure_nct                || return 1
     ensure_docker_xfs_quota   || return 1
