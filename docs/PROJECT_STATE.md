@@ -196,20 +196,24 @@ reverts to the `:2` bridge fallback.
   glamor path works in headless. This is a proprietary-vs-open VARIANT issue,
   NOT a version issue (R580 LTS is the deliberate choice — longest support to
   Aug 2028; R595 causes severe L4 flicker; R610 is NFB; even the newest
-  proprietary would have the same glamor failure). **Fix (Scaleway-gated, NOT
-  yet implemented — see `cloud/docs/STATUS.md` §4 #42 + the Paris session
-  note):** `vm-bootstrap`'s `ensure_driver_580` detects the proprietary variant
-  (`nvidia-dkms-580-server` present, no `nvidia-dkms-580-open`), PURGES the
-  proprietary `-server` packages first (resolves the `nvidia-kernel-common-580`
-  conflict), then `apt install nvidia-driver-580-open` + reboot, fatal on
-  failure. MUST be gated on the proprietary variant (UpCloud is already open
-  after its 595→580 downgrade; OVH's pre-installed 580 must NOT be swapped
-  without confirming its variant first). MUST land with the Scaleway SSH-key fix
-  (`cloud/docs/STATUS.md` §4 #41 — Scaleway's `scw-fetch-ssh-keys` wipes
-  `/root/.ssh/authorized_keys` at every boot, so the driver-swap reboot locks
-  the worker out unless the orchestrator key is registered via the IAM API).
-  A non-gated version of this swap was pushed (`1bb6f26`) then REVERTED
-  (`3d5530c`) — main is back to the safe no-op-on-580 behavior.
+  proprietary would have the same glamor failure). **Fix (Scaleway-gated,
+  IMPLEMENTED — commit `fbbd718`; pending live validation — see
+  `cloud/docs/STATUS.md` §4 #42 + the Paris session note):** `vm-bootstrap`'s
+  `ensure_driver_580` detects the proprietary variant (`nvidia-dkms-580-server`
+  present, no `nvidia-dkms-580-open`), PURGES the proprietary `-server` packages
+  first (every installed package ending in `-580-server` — resolves the
+  `nvidia-kernel-common-580` conflict that failed the reverted `1bb6f26`
+  install), then `apt install nvidia-driver-580-open` + modeset=Y + reboot,
+  FATAL on failure (the `bootstrap()` call site `|| return 1`s it). Gated on the
+  proprietary variant (UpCloud is already open after its 595→580 downgrade;
+  OVH's pre-installed 580 is open + validated working → the gate skips it).
+  LANDED with the Scaleway SSH-key fix (`cloud/docs/STATUS.md` §4 #41 — cloud
+  commit `65cdeba`: the adapter's `ensureOrchestratorSshKey` registers the
+  orchestrator key via the IAM API so `scw-fetch-ssh-keys` re-adds it on every
+  boot; without it the driver-swap reboot would lock the worker out). A
+  non-gated version of this swap was pushed (`1bb6f26`) then REVERTED
+  (`3d5530c`) — main is back to the safe no-op-on-580 behavior; `fbbd718` is
+  the gated, purge-first, FATAL successor.
 - **Browser refresh occasionally "Waiting for stream"** — a Selkies 1.6.2
   WebRTC reconnect race. Self-heals on a 2nd refresh; a fresh incognito tab
   always works. **A restart-on-disconnect supervisor now auto-relaunches
