@@ -177,7 +177,17 @@ ensure_driver_580() {
                 # `-580-server` (the dkms/driver/kernel-common/utils metapackages
                 # + the libnvidia-*-580-server userspace libs).
                 local purge_pkgs
-                purge_pkgs="$(dpkg -l 2>/dev/null | awk '/^ii.*-580-server$/{print $2}' | sort -u | paste -sd ' ')"
+                # Extract the package NAME first (awk '{print $2}') then match
+                # `-580-server` on the NAME — anchoring `$` on the full dpkg -l
+                # line (the earlier `awk '/^ii.*-580-server$/{print $2}'`) was a
+                # bug: a dpkg line ends with the description ("NVIDIA DKMS
+                # package"), NOT `-580-server`, so purge_pkgs was EMPTY → the
+                # purge was skipped → the install hit the nvidia-kernel-common-580
+                # conflict. Match any nvidia/libnvidia package whose NAME contains
+                # `-580-server` (captures the dkms/driver/kernel-common/utils/
+                # headless/kernel-source/compute-utils metapackages + the
+                # libnvidia-*-580-server:amd64 userspace libs + the firmware pkg).
+                purge_pkgs="$(dpkg -l 2>/dev/null | awk '/^ii/{print $2}' | grep -E '^(nvidia|libnvidia)-.*-580-server' | sort -u | paste -sd ' ')
                 if [ -n "$purge_pkgs" ]; then
                     log "purging proprietary -580-server packages: $purge_pkgs"
                     if ! DEBIAN_FRONTEND=noninteractive apt-get purge -y $purge_pkgs >/tmp/dpad-driver-580-purge.log 2>&1; then
