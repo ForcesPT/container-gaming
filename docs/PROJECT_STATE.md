@@ -178,6 +178,38 @@ reverts to the `:2` bridge fallback.
   driver downgrade to 575 (not image-fixable). See
   `cloud/docs/DEPLOY-RUNBOOK.md`. **Severe whole-frame flicker on driver
   595** is a different bug — the host must downgrade 595 → R580 LTS (see §6 #1).
+- **⚠️ NEW 2026-08-05 — headless gamescope renders a BLACK screen on the
+  PROPRIETARY NVIDIA driver (any version); the OPEN variant is required.**
+  Confirmed on Scaleway Paris L4 (proprietary `580.126.20`, `nvidia-dkms-580-
+  server`). Symptom: `vulkan: vkGetPhysicalDeviceFormatProperties2 returned zero
+  modifiers for DRM format 0x38344241/0x38344258` → `libEGL warning: egl:
+  failed to create dri2 screen` (`pci id 10de:27b8, driver (null)`) → `Refusing
+  to try glamor on llvmpipe` → `EGL setup failed, disabling glamor` → `Failed
+  to initialize glamor, falling back to sw` → Steam Big Picture's CEF (GL-
+  based) composites a BLACK screen while audio plays. NVENC IS encoding (7%) —
+  it's encoding black; captured gamescope PipeWire frames are near-pure-black
+  (mean 0.3/255). The capture + encoder pipeline is fine; gamescope is
+  faithfully compositing a black CEF output. **gamescope does NOT support the
+  NVIDIA proprietary driver** (maintainer emersion, gamescope issue #255 —
+  verbatim same log). The OPEN variant of R580 (`nvidia-driver-580-open`, what
+  UpCloud runs successfully as `580.173.02-open`) works — its Mesa EGL/GBM
+  glamor path works in headless. This is a proprietary-vs-open VARIANT issue,
+  NOT a version issue (R580 LTS is the deliberate choice — longest support to
+  Aug 2028; R595 causes severe L4 flicker; R610 is NFB; even the newest
+  proprietary would have the same glamor failure). **Fix (Scaleway-gated, NOT
+  yet implemented — see `cloud/docs/STATUS.md` §4 #42 + the Paris session
+  note):** `vm-bootstrap`'s `ensure_driver_580` detects the proprietary variant
+  (`nvidia-dkms-580-server` present, no `nvidia-dkms-580-open`), PURGES the
+  proprietary `-server` packages first (resolves the `nvidia-kernel-common-580`
+  conflict), then `apt install nvidia-driver-580-open` + reboot, fatal on
+  failure. MUST be gated on the proprietary variant (UpCloud is already open
+  after its 595→580 downgrade; OVH's pre-installed 580 must NOT be swapped
+  without confirming its variant first). MUST land with the Scaleway SSH-key fix
+  (`cloud/docs/STATUS.md` §4 #41 — Scaleway's `scw-fetch-ssh-keys` wipes
+  `/root/.ssh/authorized_keys` at every boot, so the driver-swap reboot locks
+  the worker out unless the orchestrator key is registered via the IAM API).
+  A non-gated version of this swap was pushed (`1bb6f26`) then REVERTED
+  (`3d5530c`) — main is back to the safe no-op-on-580 behavior.
 - **Browser refresh occasionally "Waiting for stream"** — a Selkies 1.6.2
   WebRTC reconnect race. Self-heals on a 2nd refresh; a fresh incognito tab
   always works. **A restart-on-disconnect supervisor now auto-relaunches
