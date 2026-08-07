@@ -1,0 +1,71 @@
+#!/bin/bash
+# =============================================================================
+# lutris-shell — wrapper to start lutris-gamepad-ui (the Option-B2 store-picker
+# shell) in the headless cloud-gaming container. The entrypoint's gamescope
+# headless session launches THIS instead of `steam -gamepadui` when
+# DPAD_STORE_SHELL=lutris (STORES-PLAN.md). Lutris (the backend) is installed in
+# the image; this wrapper just runs the gamepad frontend over it.
+#
+# lutris-gamepad-ui is an Electron AppImage, EXTRACTED at build time to
+# /opt/dpadcloud/lutris-gamepad-ui/ (so no FUSE is needed at runtime — the
+# container's docker run flags don't include --device /dev/fuse). We exec the
+# extracted AppRun directly.
+#
+# Gamepad: the gamepad-UI uses the Web Gamepad API by default, which does NOT
+# work in-container (no browser). We set LUTRIS_GAMEPAD_UI_ENABLE_SDL_INPUT=1
+# so it reads SDL3 gamepad devices — i.e. the /dev/input/jsN nodes the
+# entrypoint mknods via the existing 6-layer gamepad chain (PROJECT_STATE.md §4).
+# The entrypoint's gamescope launch already exports SDL_JOYSTICK_* +
+# SDL_GAMECONTROLLERCONFIG for the child process.
+#
+# Electron sandbox: pass --no-sandbox (matches heroic-launch; the container has
+# userns on v2 full-VMs but --no-sandbox is harmless + avoids Edge cases).
+#
+# Usage:  lutris-shell [--no-sandbox] [extra AppRun args...]
+# Env:    DISPLAY / XDG_RUNTIME_DIR / PULSE_SERVER / DBUS_SESSION_BUS_ADDRESS /
+#         SDL_JOYSTICK_* / SDL_GAMECONTROLLERCONFIG / LD_PRELOAD must be
+#         exported by the caller (the gamescope launch in entrypoint.sh does).
+# Logs:   /tmp/lutris-shell.log
+# =============================================================================
+set -e
+
+# The extracted AppImage tree (built in the Dockerfile, vast-vm stage).
+APPDIR="/opt/dpadcloud/lutris-gamepad-ui"
+APPRUN="${APPDIR}/AppRun"
+if [ ! -x "${APPRUN}" ]; then
+    echo "lutris-shell: FATAL — ${APPRUN} not found/executable (image not built with the store foundation?)" >&2
+    exit 1
+fi
+
+# SDL3 gamepad input (required in-container; the Web Gamepad API default won't
+# see the mknod'd /dev/input/jsN pads).
+export LUTRIS_GAMEPAD_UI_ENABLE_SDL_INPUT=1
+# We bake a pinned AppImage version — disable its self-update checker (avoid a
+# background download of a different version we haven't validated).
+export LUTRIS_GAMEPAD_UI_DISABLE_UPDATE_CHECKER=1
+# Kiosk-ish: hide the "Open Lutris" / reboot / power-off system-menu entries the
+# user can't meaningfully use from a streamed session (the entrypoint owns the
+# lifecycle). Re-enable per-store later if needed.
+export LUTRIS_GAMEPAD_UI_DISABLE_REBOOT_SYSTEM=1
+export LUTRIS_GAMEPAD_UI_DISABLE_POWER_OFF_SYSTEM=1
+export LUTRIS_GAMEPAD_UI_DISABLE_SUSPEND_SYSTEM=1
+
+# Electron sandbox off (matches heroic-launch; harmless on userns hosts).
+ARGS="--no-sandbox"
+# Allow caller overrides / additions.
+if [ -n "${DPAD_LUTRIS_SHELL_ARGS:-}" ]; then
+    ARGS="${DPAD_LUTRIS_SHELL_ARGS}"
+fi
+# Append any CLI args passed through.
+ARGS="${ARGS} $*"
+
+# Lutris (the backend) must be importable as a Python module by the AppImage's
+# lutris_wrapper.py. The deb installs it to /usr/lib/python3/dist-packages/
+# (system Python path) — AppImage bundles its own Python though, so the
+# wrapper may need PYTHONPATH to see the system lutris module. Best-effort: if
+# the system lutris module exists, expose it.
+if python3 -c "import lutris" >/dev/null 2>&1; then
+    export PYTHONPATH="${PYTHONPATH:+${PYTHONPATH}:}/usr/lib/python3/dist-packages"
+fi
+
+exec "${APPRUN}" ${ARGS} >/tmp/lutris-shell.log 2>&1

@@ -522,6 +522,90 @@ RUN chmod +x /tmp/build-bootstrap-steam.sh \
     && rm -f /tmp/build-bootstrap-steam.sh \
     && chown -R ${USERNAME}:${USERNAME} ${HOME}/.steam
 
+# --- Multi-store foundation (docs/STORES-PLAN.md). OFF by default: these
+#    layers just PLACE binaries in the image; nothing launches them until the
+#    entrypoint's DPAD_STORE_SHELL gate is wired (a later commit). The
+#    validated Steam path (gamescope --backend headless -- steam -gamepadui)
+#    is UNCHANGED — a fresh build still boots Steam exactly as before. Build-
+#    test in isolation: `docker build --target vast-vm` succeeds + the image
+#    still reaches DPAD_READY on a Steam session. v1 stores = Steam + Epic +
+#    GOG + Battle.net; EA App + Ubisoft Connect are v1.1 drop-ins (same
+#    pattern as Battle.net). ---
+
+#    (a) GE-Proton11-3 into compatibilitytools.d. The Battle.net white-screen
+#        fix is in (GE-Proton11-2 changelog: "Battle.net: fixed Wine Wayland
+#        white-screen behavior" + "--in-process-gpu handling for Wine Wayland
+#        launchers"); 11-3 is the hotfix on top. Also bundles the NVIDIA
+#        compatibility libs (NVAPI/CUDA/NVENC/NVML/OptiX) + umu.exe ("works
+#        the same way steam.exe does… helps 3rd-party launchers run the same
+#        way Steam runs them") + the Diablo IV/Marvel Rivals upstream fixes +
+#        the DualSense haptics/hotplug work. All Windows launchers run via
+#        Xwayland (PROTON_ENABLE_WAYLAND unset) — STORES-PLAN §4/§5. Not yet
+#        SHA-pinned (matches the existing curl-download pattern; a future
+#        hardening can add the .sha512sum check + an ARG bump on version rollover).
+ARG GE_PROTON_VERSION=GE-Proton11-3
+RUN set -e; \
+    GP_DIR="${HOME}/.steam/debian-installation/compatibilitytools.d/${GE_PROTON_VERSION}"; \
+    mkdir -p "${GP_DIR}"; \
+    curl -fsSL -o /tmp/ge-proton.tar.gz \
+      "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/${GE_PROTON_VERSION}/${GE_PROTON_VERSION}.tar.gz" \
+    && tar -xzf /tmp/ge-proton.tar.gz -C "${GP_DIR}" --strip-components=1 \
+    && rm -f /tmp/ge-proton.tar.gz \
+    && chown -R ${USERNAME}:${USERNAME} "${GP_DIR}" \
+    && test -x "${GP_DIR}/proton"  # sanity: the runner binary is present + executable
+
+#    (b) lutris-gamepad-ui AppImage (v0.2.0) — the Option-B2 store-picker shell
+#        (a gamepad-navigable 10-foot-UI frontend over Lutris). Downloaded but
+#        NOT launched yet (the entrypoint DPAD_STORE_SHELL gate is a later
+#        commit). v0.2.0 migrated to SDL3 input (aligns with
+#        LUTRIS_GAMEPAD_UI_ENABLE_SDL_INPUT=1, which the entrypoint will set —
+#        the Web Gamepad API default won't work in-container) + has Ubuntu-
+#        24.04 fallbacks in its Python wrapper (aligns with this image's base).
+#        Lutris itself (the backend) is installed in a later commit (piece 1b).
+ARG LUTRIS_GAMEPAD_UI_VERSION=v0.2.0
+RUN set -e; \
+    curl -fsSL -o /tmp/lutris-gamepad-ui.AppImage \
+      "https://github.com/andrew-ld/lutris-gamepad-ui/releases/download/${LUTRIS_GAMEPAD_UI_VERSION}/lutris-gamepad-ui-x64.AppImage" \
+    && chmod +x /tmp/lutris-gamepad-ui.AppImage \
+    && test -s /tmp/lutris-gamepad-ui.AppImage \
+    && cd /opt/dpadcloud && /tmp/lutris-gamepad-ui.AppImage --appimage-extract >/dev/null 2>&1 \
+    && mv /opt/dpadcloud/squashfs-root /opt/dpadcloud/lutris-gamepad-ui \
+    && rm -f /tmp/lutris-gamepad-ui.AppImage \
+    && test -x /opt/dpadcloud/lutris-gamepad-ui/AppRun  # sanity: extracted AppRun is executable (no FUSE needed at runtime)
+
+#    lutris-shell wrapper — the entrypoint's DPAD_STORE_SHELL gate (a later
+#    commit) execs this instead of `steam -gamepadui` when DPAD_STORE_SHELL=lutris.
+#    Mirrors scripts/heroic-launch (the vast-docker Heroic wrapper): sets
+#    LUTRIS_GAMEPAD_UI_ENABLE_SDL_INPUT=1 + --no-sandbox + runs the extracted
+#    AppRun. See scripts/lutris-shell for the full rationale.
+COPY scripts/lutris-shell /opt/dpadcloud/lutris-shell
+RUN sed -i 's/\r$//' /opt/dpadcloud/lutris-shell && chmod +x /opt/dpadcloud/lutris-shell
+
+#    (c) Wine + winetricks + Lutris (the backend the gamepad-UI shells out to).
+#        i386 is already enabled in the base stage; libgtk-3-0t64 + python3-gi are
+#        already installed there, so the Lutris .deb's apt-resolved deps are
+#        mostly present (it pulls webkit2gtk for the store-login browser auth,
+#        libnotify, etc. automatically). Lutris v0.5.22 .deb from the GitHub
+#        releases page (matches the existing Steam.deb / Heroic.deb pattern;
+#        apt resolves the GTK/python/system deps). NOT launched yet — the
+#        entrypoint DPAD_STORE_SHELL gate is a later commit; today the image
+#        still boots Steam. umu-launcher (GE-Proton via umu for non-Steam
+#        Windows games) is DEFERRED to piece 1c: the Battle.net install script
+#        uses runner: wine, so the Wine stack alone makes Lutris functional
+#        for the v1 Battle.net pre-bake (piece 2). STORES-PLAN §7.
+ARG LUTRIS_VERSION=v0.5.22
+RUN set -e; \
+    apt-get update && apt-get install -y --no-install-recommends wine wine32 wine64 winetricks \
+    && rm -rf /var/lib/apt/lists/* \
+    && command -v wine && command -v winetricks \
+    && cd /tmp && curl -fsSL -o /tmp/lutris.deb \
+      "https://github.com/lutris/lutris/releases/download/${LUTRIS_VERSION}/lutris_${LUTRIS_VERSION#v}_all.deb" \
+    && apt-get update && ( apt-get install -y --no-install-recommends /tmp/lutris.deb \
+                           || ( apt-get install -f -y && dpkg -i /tmp/lutris.deb ) ) \
+    && rm -f /tmp/lutris.deb && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/games/lutris /usr/bin/lutris \
+    && command -v lutris  # sanity: the Lutris CLI is on PATH (deb ships it in /usr/games, symlink to /usr/bin — same as gamescope)
+
 EXPOSE 16100/tcp
 # 3478 (coturn TURN) opt-in via -p 3478:3478 at launch. No 8080/47989/47990/41641.
 USER root

@@ -285,6 +285,13 @@ launch() {
         -e SELKIES_BASIC_AUTH_USER=dpad \
         -e "SELKIES_BASIC_AUTH_PASSWORD=${pass}" \
         -e DPAD_GAMEPAD_INTERPOSER="${DPAD_GAMEPAD_INTERPOSER:-}" \
+        # Multi-store shell (STORES-PLAN.md). DPAD_STORE_SHELL=lutris switches the
+        # gamescope session from `steam -gamepadui` to the lutris-shell wrapper
+        # (the Lutris gamepad-UI store picker). DPAD_STORES lists the stores the
+        # entrypoint should wire/symlink (steam,epic,gog,battlenet). Both default
+        # empty → the validated Steam path (entrypoint DPAD_STORE_SHELL gate).
+        -e DPAD_STORE_SHELL="${DPAD_STORE_SHELL:-}" \
+        -e DPAD_STORES="${DPAD_STORES:-}" \
         "$image" || { err "docker run $name failed"; return 1; }
     log "container $name launched (coturn ${port}/udp, selkies ${selkies_port}->16100, login dpad/${pass:0:4}…)"
 

@@ -741,6 +741,21 @@ start_gamescope_session() {
     [ -z "$GS_W" ] && GS_W=1920
     [ -z "$GS_H" ] && GS_H=1080
     STEAM_ARGS="${DPAD_STEAM_ARGS:--gamepadui}"
+    # The app launched inside gamescope headless. Default = Steam (the validated
+    # v2 path, UNCHANGED when DPAD_STORE_SHELL is unset). DPAD_STORE_SHELL=lutris
+    # switches to the Lutris gamepad-UI store-picker shell (STORES-PLAN.md
+    # Option B2: Epic + GOG + Battle.net, no forced Steam login). SHELL_PROC is
+    # the process name the ready-check + health-loop target (steam via pgrep -x;
+    # the gamepad-UI via pgrep -f).
+    local SHELL_APP SHELL_PROC
+    if [ "${DPAD_STORE_SHELL:-steam}" = "lutris" ]; then
+        SHELL_APP="/opt/dpadcloud/lutris-shell"
+        SHELL_PROC="lutris-gamepad-ui"   # pgrep -f matches the AppRun cmdline
+        echo "[*] DPAD_STORE_SHELL=lutris — Lutris gamepad-UI shell (Epic+GOG+Battle.net, STORES-PLAN.md)"
+    else
+        SHELL_APP="steam ${STEAM_ARGS}"
+        SHELL_PROC="steam"
+    fi
 
     # Bind the user's persistent library volume (if mounted) BEFORE bootstrapping
     # Steam — the library subpaths (steamapps/config/userdata) must point at the
@@ -917,8 +932,8 @@ start_gamescope_session() {
         SDL_GP_ENV="SDL_JOYSTICK_DEVICE=/dev/input/js0 SDL_JOYSTICK_LINUX_CLASSIC=1 SDL_JOYSTICK_DISABLE_UDEV=1 SDL_GAMECONTROLLERCONFIG='${SDL_GAMECONTROLLERCONFIG}'"
         echo "[*] Gamepad: classic joystick path (default)"
     fi
-    echo "[*] Launching gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}"
-    as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
+    echo "[*] Launching gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}"
+    as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}" >/tmp/gamescope-steam.log 2>&1 &
     local gs_pid=$!
 
     # Steam takes ~30-40s to launch through pressure-vessel + steamwebhelper
@@ -930,7 +945,14 @@ start_gamescope_session() {
     local ready=0
     local rw=0
     while [ $rw -lt 90 ]; do
-        if kill -0 "$gs_pid" 2>/dev/null && pgrep -x steam >/dev/null; then ready=1; break; fi
+        if kill -0 "$gs_pid" 2>/dev/null; then
+            if [ "${SHELL_PROC}" = "steam" ]; then
+                pgrep -x steam >/dev/null && ready=1
+            else
+                pgrep -f "${SHELL_PROC}" >/dev/null && ready=1
+            fi
+        fi
+        [ $ready -eq 1 ] && break
         sleep 3; rw=$((rw+3))
     done
     if [ $ready -eq 1 ]; then
@@ -950,9 +972,9 @@ start_gamescope_session() {
         sleep 30
         if ! kill -0 "$gs_pid" 2>/dev/null; then
             echo "[*] WARNING: gamescope died — restarting session..."
-            kill $gs_pid 2>/dev/null; pkill -9 -x steam 2>/dev/null; pkill -9 -x steamwebhelper 2>/dev/null; sleep 2
+            kill $gs_pid 2>/dev/null; pkill -9 -x steam 2>/dev/null; pkill -9 -x steamwebhelper 2>/dev/null; pkill -9 -f lutris-gamepad-ui 2>/dev/null; sleep 2
             rm -f ${USER_HOME}/.steam/steam/steam.pid ${USER_HOME}/.steam/debian-installation/steam.pid 2>/dev/null
-            as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- steam ${STEAM_ARGS}" >/tmp/gamescope-steam.log 2>&1 &
+            as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}" >/tmp/gamescope-steam.log 2>&1 &
             gs_pid=$!
             # the old selkies was bound to the dead gamescope's PipeWire node →
             # it'd stream black/garbage; kill it so the supervisor (below)

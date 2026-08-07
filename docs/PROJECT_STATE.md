@@ -358,6 +358,14 @@ reverts to the `:2` bridge fallback.
   volumes, on-demand N-to-N, billing).
 - `cloud/docs/DEPLOY-RUNBOOK.md` — the driver-per-pool recommendations
   (R580 LTS for the L4) + the regression registry.
+- `STORES-PLAN.md` — the multi-store pivot (Lutris gamepad-UI shell; Epic+
+  GOG+Battle.net v1; EA App + Ubisoft Connect v1.1). **IMPLEMENTED + deployed
+  2026-08-07** (§16); live-test pending a pre-existing worker↔Scaleway
+  bootstrap-SSH fix (not the multi-store work). The image bakes GE-Proton11-3 +
+  Lutris + the `lutris-gamepad-ui` AppImage; the entrypoint `DPAD_STORE_SHELL`
+  gate (default Steam) + `scripts/lutris-shell` wrapper; `dpad-launch-session`
+  forwards `DPAD_STORE_SHELL`/`DPAD_STORES`; the cloud worker writes them to
+  `/etc/environment` (opt-in via `deploy/vps/docker-compose.yml`).
 
 ## 9. Resume
 
