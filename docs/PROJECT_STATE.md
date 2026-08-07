@@ -237,9 +237,19 @@ reverts to the `:2` bridge fallback.
   reconnects).
 - **Steam "no internet" icon + ~70s CM bounce** — Steam's CM servers bounce the
   datacenter IP. Login/install/play all work; cosmetic, not fixable from the image.
-- **NVRTC "invalid value for --gpu-architecture" on Blackwell** — the bundled
-  GStreamer ships a CUDA 11.4 `libnvrtc` that can't JIT for sm_120; the plugin
-  falls back to a pre-compiled cubin. Non-fatal.
+- **NVRTC "invalid value for --gpu-architecture" on the L4 (sm_89) AND Blackwell
+  (sm_120) — NOT non-fatal; it BLOCKS video.** The bundled GStreamer ships a
+  CUDA 11.4 `libnvrtc` that can't JIT for sm_89/sm_120 → `cudaconvert`'s NVRTC
+  JIT fails → the video pipeline starts but produces NO capturable video (the
+  "cubin fallback" doesn't yield usable frames). The **canonical fix** (from
+  the official Selkies `selkies-gstreamer-entrypoint.sh`): extract a `libnvrtc`
+  matching the host CUDA (capped to 12.9 for host CUDA≥13, GStreamer issue
+  #4655) into `/opt/gstreamer/lib/x86_64-linux-gnu/`, replacing the bundled 11.4.
+  **Validated live 2026-08-07** on Paris L4: extracted `libnvrtc 12.9.86` →
+  `nvrtc: error` count → 0, video pipeline clean, + the **steam** shell then
+  streams video (browser sees the image). See `STORES-PLAN.md` §17.2 + §6 #10.
+  **NOT yet baked into the repo** (next step: add the extraction block to
+  `entrypoint.sh`/Dockerfile + rebuild).
 - **`webrtcnice … failed to resolve "<uuid>.local"`** — Chrome's mDNS `.local`
   ICE candidates the container can't resolve; the TURN relay handles it.
 - **Selkies launch loop `[: 0\n0: integer expression expected`** (`entrypoint.sh`
@@ -290,6 +300,7 @@ reverts to the `:2` bridge fallback.
    worker currently uses a `docker ps` count heuristic).
 7. **restart-on-disconnect supervisor — IMPLEMENTED in `entrypoint.sh` (`relaunch_selkies()` + the health loop) + VALIDATED LIVE 2026-08-05.** Was: optional, for 100%-consistent refresh. The health loop now relaunches `selkies-gstreamer` when it dies while gamescope+Steam are up (reusing the resolved encoder + re-reading gamescope's current Xwayland display), and kills the stale selkies on a gamescope restart. Ships via the entrypoint bind-mount hotfix (no image rebuild). **Validation (done):** OVH Gravelines L4 — killed `selkies-gstreamer` inside a live streaming container → the health loop detected it within ~20s, `relaunch_selkies()` relaunched it as a fresh process (new PIDs, same encoder=nvh264enc), gamescope untouched, stream recovered (the browser reconnects).
 8. **(optional) NVRTC soname-11 real fix** (make CUDA 12.8 libnvrtc win).
+   → SUPERSEDED by #10 below (the 12.9 extraction fix — apply that instead).
 9. **evdev gamepad path — VALIDATED END-TO-END with a real controller
    (2026-08-04, OVH Gravelines L4); two blocking bugs found + fixed; SHIPPED in
    the 2026-08-05 image rebuild + push (the public `:dpad-SteamOS` now bakes
@@ -332,6 +343,37 @@ reverts to the `:2` bridge fallback.
    add `echo "DPAD_GAMEPAD_INTERPOSER=evdev" >> /etc/environment` to the
    bootstrap) + redeploy the worker for a normal dpadplay session to boot evdev.
    See `scripts/gamepad-evdev-fallback/README.md` + the 2026-08-04 session note.
+10. **NVRTC fix — BAKE INTO THE REPO (the validated live fix needs to ship).**
+    The live Paris VM has the libnvrtc 12.9.86 extraction inlined in the
+    bind-mounted `entrypoint.sh` (spliced after `#!/bin/bash`). Add the same
+    extraction block to `container-gaming/entrypoint.sh` (top, after `set -e`)
+    OR the Dockerfile, so fresh VMs get it on every provider (not just the
+    live-patched Paris box). Reference impl: `cloud/scripts/extract-nvrtc.sh`.
+    See §5 (the NVRTC note) + `STORES-PLAN.md` §17.2. This unblocks video for
+    BOTH the steam + lutris shells. (Validated: with 12.9.86, `nvrtc: error`
+    count → 0 + the steam shell streams video.)
+11. **Lutris shell produces NO capturable video — the multi-store blocker
+    (STORES-PLAN §17.3).** With the NVRTC fix + `DPAD_STORE_SHELL=lutris`, the
+    video webrtcbin never adds a video m-line (`m=video: 0` vs `m=video: 2`
+    for steam on the SAME VM/image) → audio connects but no video → "Waiting
+    for stream". `lutris-gamepad-ui` (Electron AppImage) does NOT render into
+    the gamescope `pipewiresrc` capture node the way Steam's CEF does.
+    Investigate: Electron `--ozone-platform=wayland`/`--use-gl`/`--enable-features`
+    flags, OR try `DPAD_VIDEO_SRC=ximagesrc` (the `:2` Xvfb bridge may capture
+    an X-rendering Electron app). Reference: `games-on-whales` runs Lutris with
+    `RUN_SWAY=1`/`RUN_GAMESCOPE=1` — check their capture wiring. Decisive test:
+    `GST_DEBUG=webrtcbin:5` + compare the video pad link/caps between the two
+    shells. (The steam shell streams fine → NOT an image regression.)
+12. **`libSDL3.so.0` unfindable by `lutris-gamepad-ui` (STORES-PLAN §17.4).**
+    `lutris-shell.log`: `[sdl_manager] Unable to load libSDL3.so.0 … No such
+    file or directory`. libSDL3 exists ONLY in Steam's runtime dirs
+    (`steamrt32/`/`steamrt64/`), not on the system library path; the
+    `lutris-gamepad-ui` Electron app (koffi FFI `dlopen`) can't find it → the
+    SDL3 gamepad path (`LUTRIS_GAMEPAD_UI_ENABLE_SDL_INPUT=1`) is broken → the
+    gamepad won't navigate the Lutris UI (keyboard/mouse via Selkies Desktop
+    mode still work). Fix: install `libsdl3-0` system-wide in the Dockerfile
+    (cleanest), OR add the steamrt libSDL3 path to `LD_LIBRARY_PATH` in
+    `scripts/lutris-shell`, OR symlink libSDL3 into the AppImage's `usr/lib`.
 
 ## 7. Deprecated (Vast era — in git history only)
 
@@ -360,12 +402,17 @@ reverts to the `:2` bridge fallback.
   (R580 LTS for the L4) + the regression registry.
 - `STORES-PLAN.md` — the multi-store pivot (Lutris gamepad-UI shell; Epic+
   GOG+Battle.net v1; EA App + Ubisoft Connect v1.1). **IMPLEMENTED + deployed
-  2026-08-07** (§16); live-test pending a pre-existing worker↔Scaleway
-  bootstrap-SSH fix (not the multi-store work). The image bakes GE-Proton11-3 +
-  Lutris + the `lutris-gamepad-ui` AppImage; the entrypoint `DPAD_STORE_SHELL`
-  gate (default Steam) + `scripts/lutris-shell` wrapper; `dpad-launch-session`
-  forwards `DPAD_STORE_SHELL`/`DPAD_STORES`; the cloud worker writes them to
-  `/etc/environment` (opt-in via `deploy/vps/docker-compose.yml`).
+  2026-08-07** (§16). **2026-08-07 deep live-test (§17):** the `dpad-launch-session`
+  inline-`#` bug is FIXED + pushed (`13f8687`); the NVRTC `cudaconvert` blocker
+  is fixed on the live VM (libnvrtc 12.9.86 extraction) but needs baking into
+  the repo; **the remaining multi-store blocker is Lutris-specific** —
+  `lutris-gamepad-ui` doesn't render into gamescope's capture (Steam streams
+  fine on the same VM) + `libSDL3.so.0` is unfindable (gamepad won't navigate).
+  The image bakes GE-Proton11-3 + Lutris + the `lutris-gamepad-ui` AppImage;
+  the entrypoint `DPAD_STORE_SHELL` gate (default Steam) + `scripts/lutris-shell`
+  wrapper; `dpad-launch-session` forwards `DPAD_STORE_SHELL`/`DPAD_STORES`;
+  the cloud worker writes them to `/etc/environment` (opt-in via
+  `deploy/vps/docker-compose.yml`).
 
 ## 9. Resume
 

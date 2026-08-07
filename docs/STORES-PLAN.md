@@ -487,3 +487,113 @@ transient / timeout-too-tight.
 `apps/worker/src/index.ts` + `deploy/vps/docker-compose.yml` modified. (The
 `cloud/scripts/*` OVH/Scaleway probe + `*-reply.md` untracked files predate this
 work — left for review.)
+
+## 17. Live-test findings (2026-08-07 deep session) — the multi-store IS blocked by a Lutris video-capture bug (Steam works)
+
+A full live test on a fresh Paris Standard VM (`51.159.179.121`, `ae94ae48`,
+session `bcd7099b`) reached the browser. Three blockers were found + two FIXED;
+the third (Lutris video capture) is the real multi-store blocker. **Steam
+streams fine** on the same VM/image — so the video bug is **Lutris-specific**,
+NOT a general image regression.
+
+### 17.1 FIXED — `dpad-launch-session` inline `#` comment broke the `docker run` (commit `13f8687`, pushed to `main`)
+The multi-store change inserted a `# Multi-store shell…` explanatory comment
+**inside the `\`-continued `docker run` block** (`scripts/dpad-launch-session`).
+In bash, a `#` inside a line-continuation terminates the logical line →
+`docker run` got no image ("requires at least 1 argument") and the following
+`-e DPAD_STORE_SHELL` line ran as a standalone command ("-e: command not
+found"). **Every `DPAD_STORE_SHELL=lutris` session failed at `docker run`.**
+Fix: moved the comment above the `docker run`, kept the two `-e` flags clean.
+Committed + **pushed to `main`** (`db4784f..13f8687`). This was the actual
+launch blocker (NOT the worker↔Scaleway SSH timeout §16 speculated about —
+that was a red herring; the bootstrap succeeds, the sshd probe loop retries
+silently and connects).
+
+### 17.2 FIXED — NVRTC `cudaconvert` JIT fails on the L4 (sm_89) with the bundled libnvrtc 11.4 → no video
+The bundled GStreamer ships `libnvrtc 11.4.152` (Oct 2021), which **can't JIT
+for sm_89 (Ada/L4)** (or sm_120 Blackwell) → `cudanvrtc: nvrtc: error: invalid
+value for --gpu-architecture (-arch)`. The doc's "non-fatal cubin fallback"
+does NOT produce usable frames here → the video pipeline starts but produces
+no capturable video. **The canonical fix** (from the official Selkies
+`selkies-gstreamer-entrypoint.sh`): extract a `libnvrtc` matching the host CUDA
+(capped to 12.9 for host CUDA≥13, per GStreamer issue #4655) into
+`/opt/gstreamer/lib/x86_64-linux-gnu/`, replacing the bundled 11.4. Web search
+confirmed (PyTorch issue #87595: sm_89 needs CUDA 11.8+).
+- **Applied to the live VM** (ephemeral): the inline NVRTC-extraction block
+  was spliced into the VM's `/opt/dpadcloud/entrypoint.sh` (the bind-mount
+  source) right after `#!/bin/bash`, so every container start extracts
+  `libnvrtc 12.9.86`. Result: `nvrtc: error` count → **0**, video pipeline
+  starts clean. `extract-nvrtc.sh` is in `cloud/scripts/` + `dpadplay/cloud`
+  for reference.
+- **NOT yet baked into the repo** (the next step): add the same extraction
+  block to `container-gaming/entrypoint.sh` (near the top) OR the Dockerfile,
+  so fresh VMs get it without the VM-host patch. The repo `entrypoint.sh`
+  still has `GST_DEBUG=1` (the live VM was patched to `webrtcnice:5` for debug
+  — revert to `GST_DEBUG=1` or a sane level when baking).
+
+### 17.3 BLOCKER — the Lutris shell produces NO capturable video (`m=video: 0`); Steam works (`m=video: 2`)
+With the NVRTC fix + the `steam` shell, the browser **sees the image** — log
+shows `m=video: 2` SDP offers, both peers connect, ICE `completed`, video RTP
+flows. With the `lutris` shell on the SAME VM/image, `m=video: 0` (the video
+webrtcbin never adds a video m-line) — audio connects + flows (session 0 OPUS),
+but no video → "Waiting for stream". So `lutris-gamepad-ui` (Electron/Chromium
+AppImage) **does not render into the gamescope `pipewiresrc` capture node** the
+way Steam's CEF does, even though the process runs + audio works. This is the
+real multi-store blocker (STORES-PLAN §12 #1 "does lutris-gamepad-ui render in
+headless gamescope?" → **NO**). ICE/DTLS + TURN are fine (the browser's relay
+candidate `51.159.179.121:typ relay raddr 95.93.137.125` allocates + the
+short-circuit relay connects — only 3478/udp needs to be open, which it is).
+
+### 17.4 BLOCKER — `libSDL3.so.0` unfindable by `lutris-gamepad-ui` (gamepad won't navigate)
+`lutris-shell.log`: `[ERROR] [sdl_manager] Unable to load libSDL3.so.0 … No such
+file or directory`. libSDL3 exists ONLY inside Steam's runtime dirs
+(`steamrt32/`, `steamrt64/`), NOT on the system library path. The
+`lutris-gamepad-ui` Electron app uses koffi (FFI) `dlopen("libSDL3.so.0")`,
+which searches `ldconfig` + `LD_LIBRARY_PATH` (the AppImage `AppRun` only adds
+`${APPDIR}/usr/lib`, which has no libSDL3) → fails. So even once the video
+captures, the **gamepad won't navigate the Lutris UI** via the SDL3 path
+(`LUTRIS_GAMEPAD_UI_ENABLE_SDL_INPUT=1`). Fix options: install `libsdl3-0`
+system-wide in the Dockerfile (cleanest), OR add the steamrt libSDL3 path to
+`LD_LIBRARY_PATH` in `scripts/lutris-shell`, OR symlink libSDL3 into
+`${APPDIR}/usr/lib`. Keyboard/mouse (Selkies Desktop mode) still works without it.
+
+### 17.5 Resume — next steps (in this order)
+1. **Bake the NVRTC fix into the repo** — add the `extract-nvrtc` block to
+   `container-gaming/entrypoint.sh` (top, after `set -e`) OR the Dockerfile;
+   rebuild + push the image. This unblocks video for BOTH shells on every
+   provider (not just the live-patched Paris VM).
+2. **Fix the Lutris video capture** — investigate why `lutris-gamepad-ui`
+   doesn't render into gamescope's pipewiresrc node. Likely: Electron
+   `--ozone-platform=wayland`/`--enable-features=...`/`--use-gl=...` flags, OR
+   the app renders to Xwayland (try `DPAD_VIDEO_SRC=ximagesrc`, the `:2` Xvfb
+   bridge, which may capture an X-rendering Electron app). Reference:
+   `games-on-whales` runs Lutris with `RUN_SWAY=1`/`RUN_GAMESCOPE=1` — check
+   how they wire capture. Decisive test: `GST_DEBUG=webrtcbin:5` + compare the
+   video pad link/caps between the steam + lutris shells.
+3. **Fix libSDL3** (install libsdl3-0 in the Dockerfile) so the gamepad
+   navigates the Lutris UI (§17.4).
+4. **Revert the live VM debug patches** when the repo fix ships: the VM's
+   `/opt/dpadcloud/entrypoint.sh` has the NVRTC block + `GST_DEBUG=webrtcnice:5`
+   + the `SELKIES_VIDEO_SRC:-ximagesrc` default change — these are live-patches
+   only; the repo entrypoint is the source of truth. `/etc/environment` on the
+   VM was flipped `DPAD_STORE_SHELL=lutris→steam` for the isolation test.
+5. **Revert the worker SSH timeout theory** (§16) — it was NOT the cause; the
+   real launch blocker was the bash comment (§17.1). The `readyTimeoutMs`
+   bump is still a reasonable robustness improvement but is NOT required.
+
+### 17.6 Live VM state (for cleanup/continuation)
+- VM `ae94ae48` @ `51.159.179.121`, session `bcd7099b` (`ready`, slot 0, the
+  stream-bridge mapping is live). The container is currently the **steam**
+  shell (the isolation test) + streams video. The user confirmed they see
+  the image.
+- The VM's `/opt/dpadcloud/entrypoint.sh` (bind-mount source) is the live-
+  patched version (NVRTC inline block + `GST_DEBUG=webrtcnice:5` + the
+  `SELKIES_VIDEO_SRC:-ximagesrc` default). It's NOT in the repo. To get a
+  clean steam session, relaunch with the repo entrypoint (rm the host
+  `/opt/dpadcloud/entrypoint.sh` so no bind-mount → image's baked entrypoint,
+  OR re-fetch from `main`).
+- `/etc/environment` has `DPAD_STORE_SHELL=steam` (changed from lutris for
+  the isolation test) + the multi-store opt-in still on the worker compose env.
+- The `warm_pool_vms` row for `ae94ae48` was manually flipped `warming→ready`
+  early in the session (the bootstrap had actually completed; the worker log
+  looked stuck but had succeeded silently).
