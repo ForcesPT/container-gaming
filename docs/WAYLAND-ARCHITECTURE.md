@@ -1285,3 +1285,161 @@ cd dpadplay/container-gaming && git pull
 # - Socket discovery: polling $XDG_RUNTIME_DIR/wayland-* (§13.14 confirmed it
 #   works). Fallback: the wayland.src GStreamer bus message (§13.12).
 ```
+
+## 15. Step 2a LIVE-VALIDATED 2026-08-08 — m=video:9 GATE PASSED + 2 selkies-patch bugs found + fixed
+
+> **The §14.4 probe gate PASSED on a real OVH Gravelines L4.** The
+> gst-wayland-display compositor engages inside selkies' `webrtcbin` pipeline
+> at runtime — the §17.3 Lutris-capture blocker is RETIRED. Two real selkies-
+> patch bugs (invisible to the §13.14 `gst-launch` probe, which uses dynamic
+> negotiation) were found + fixed by live-probing the actual GStreamer pad caps
+> at the failing `Gst.Element.link`. Commit `2170019`; image pushed
+> `forcespt/dpadcloud-gaming:dpad-SteamOS` digest `aaa880f2`. **VM torn down**
+> (no orphan, billing stopped).
+
+### 15.1 What the live probe proved (the full inverted boot order)
+
+Provisioned an OVH Gravelines L4 (`c92c5b67-…` @ `164.132.255.146`, open R580,
+`l4-90` quota=1) via the §12 API pattern. `vm-bootstrap.sh install` →
+`DPAD_VM_READY` (fresh image pull). Ran the probe container
+(`DPAD_COMPOSITOR=wayland-display DPAD_GAMESCOPE=1 DPAD_STORE_SHELL=steam`),
+waited for `DPAD_READY`, then connected a headless signaling probe
+(`scripts/selkies-sdp-probe.py`) AS peer 1 (the selkies app actively calls
+`SESSION 1`; the browser is peer 1 — §15.3 below). The full inverted boot order
+ran end-to-end:
+
+1. Entrypoint `start_wayland_display_session`: PipeWire + pipewire-pulse +
+   gamepad interposer → coturn → **selkies FIRST** with
+   `DPAD_VIDEO_SRC=waylanddisplaysrc` + `DISPLAY=:99` (dummy Xvfb for pynput
+   import) → `DPAD_READY slot=0 bind=0.0.0.0:16100 encoder=nvh264enc`
+   (selkies **listening**, compositor NOT yet up).
+2. The probe connected as peer 1 (HELLO + the app's `SESSION 1`) → selkies'
+   `on_session` → `start_pipeline()` → `build_video_pipeline()` instantiated
+   `waylanddisplaysrc` → `gstwaylanddisplaysrc: CUDA initialization successful`
+   → the compositor created `wayland-1` in `$XDG_RUNTIME_DIR`.
+3. The entrypoint health loop detected `wayland-1` →
+   `[*] Compositor socket wayland-1 appeared (peer connected) — launching
+   gamescope --backend wayland -- steam -gamepadui`.
+4. The probe received the SDP offer:
+   **`m=video 9 UDP/TLS/RTP/SAVPF 97 96`** → `m=video:9` (a non-zero port = a
+   video track was negotiated) → **GATE PASSED** (vs `m=video:0` for the broken
+   Lutris-under-gamescope-headless case, §17.3).
+
+`m=video:9` is the §17.3 gate — the waylanddisplaysrc compositor engages
+inside selkies at runtime. The §17.3 Lutris-capture blocker is RETIRED: the
+pivot works. `nvrtc: error` count = 0 in the log (NVRTC JIT ran clean on the
+cudaconvert path; `extract-nvrtc.sh` covered it). `Supported DMA formats: []`
+in the log is the compositor's empty DMABuf list (harmless — we use the RGBx
+path, not DMABuf; §15.2 #2).
+
+### 15.2 The two selkies-patch bugs (found + fixed by live-probing the pad caps)
+
+The §13.14 `gst-launch` probe (compositor + gamescope-as-client via a
+standalone GStreamer pipeline) worked because `gst-launch` uses **dynamic**
+caps negotiation at PLAYING. Selkies uses **static** `Gst.Element.link()`
+before PLAYING — which exposed two bugs invisible to §13.14.
+
+A debug-patch (`scripts/dbg-patch-link.py`, run live on the container) printed
+the actual pad `query_caps` + the capsfilter's `caps` property at each link
+attempt, revealing the mismatches.
+
+**Bug 1 — the idempotency check skipped the source-branch insertion.**
+`patch_selkies_waylanddisplay.py`'s idempotency marker was
+`WAYLAND_MARK = 'os.environ.get("DPAD_VIDEO_SRC", "") == "waylanddisplaysrc"'`
+— a string that ALSO appears in the assembly branch + the `set_framerate`
+guard. So on the second+ build the check matched → the patch **skipped the
+source-branch insertion** → `waylanddisplaysrc` was never created → the
+pipeline fell through to `else: ximagesrc` → the compositor never ran. The
+container log showed `CUDA initialization successful` (a stale §13.14
+leftover) but the link failed because the source element was `ximagesrc`, not
+`waylanddisplaysrc`. **Fix:** a source-branch-specific marker,
+`SOURCE_MARK = 'Gst.ElementFactory.make("waylanddisplaysrc", "x11")'` (the
+element-creation line, which only the source branch has).
+
+**Bug 2 — the CUDAMemory-zero-copy assumption was WRONG for selkies' static
+link.** The §2.2/§13.3 thesis was "waylanddisplaysrc emits CUDAMemory BGRA
+directly → skip cudaupload/cudaconvert → link waylanddisplaysrc → nvh264enc."
+The live pad-caps dump showed:
+- `capsfilter0` (waylanddisplaysrc's capsfilter) src caps:
+  `video/x-raw(memory:CUDAMemory), format={BGRA, RGBA}`
+- `nvenc` sink query_caps (static, at link time): `video/x-raw(memory:CUDAMemory),
+  format={NV12, Y444}` (NOT BGRA)
+- → **no common format** → `Failed to link capsfilter0 -> nvenc`.
+
+`nvh264enc`'s pad *template* lists BGRA, but its *static* `query_caps`
+(restricting the format set once the encoder is configured) narrows CUDAMemory
+to `{NV12, Y444}` before PLAYING. The §13.14 `gst-launch` worked because
+`gst-launch` defers caps negotiation to PLAYING (dynamic), where the encoder's
+runtime query accepts BGRA. Selkies' `Gst.Element.link()` does a static
+accept-caps check → fails. **Fix:** use **system-memory RGBx**
+(waylanddisplaysrc's other src-pad template) + the original
+`cudaupload → cudaconvert(BGRx→NV12) → cudaconvert_capsfilter(CUDAMemory,NV12)
+→ nvh264enc` path — the validated encode tail that ximagesrc/pipewiresrc use.
+NVRTC JIT runs (the `extract-nvrtc.sh` bake covers it). CUDAMemory zero-copy
+is now a **§13.3 follow-up**: either `link_pads_full` with a no-caps-check flag
+(Gst.PadLinkCheckTypes.NO_CAPS), OR PR #35's NV12 DMABuf→CUDAMemory path (the
+compositor does RGB→NV12 itself + `dmabuftocuda` imports to CUDAMemory at the
+encoder). Both bypass the static-caps mismatch.
+
+**Bug 3 (adjacent) — `set_framerate` clobbered the waylanddisplaysrc caps.**
+`patch_selkies_pipewire.py`'s `set_framerate` (called from the browser FPS
+slider, but also reachable during pipeline build) had an `else:` branch that
+overwrote `self.ximagesrc_caps` with `video/x-raw` (system memory, NO
+CUDAMemory/RGBx) → re-broke the link even after the source branch was fixed.
+**Fix:** added an `elif os.environ.get("DPAD_VIDEO_SRC", "") ==
+"waylanddisplaysrc": pass` guard so the else branch doesn't clobber.
+
+### 15.3 The signaling-probe insight (why the first attempts got no SDP)
+
+The first probe attempts sent `SESSION 1` themselves — **backwards**. selkies-
+gstreamer's `__main__.py` (traced in the v1.6.2 source): the **app** connects
+as `my_id=0` (video) + `my_id=2` (audio) and ACTIVELY calls `SESSION 1` /
+`SESSION 3` — it waits for a **browser peer 1** (video) + peer 3 (audio) to
+connect. So the probe must connect **as peer 1** and WAIT for the app to call
+it (do NOT send SESSION). The `signaling.on_session` callback fires on
+`SESSION_OK` → `on_session_handler` → `app.start_pipeline()` → the offer is
+generated by webrtcbin's `on-negotiation-needed` + relayed to peer 1. The
+fixed `scripts/selkies-sdp-probe.py` does exactly this + parses the relayed
+`{"sdp":{"type":"offer","sdp":"..."}}` JSON for the `m=video` line.
+
+### 15.4 The remaining live half — gamescope `--backend wayland` died
+
+The compositor→selkies→webrtcbin pipeline is proven (the gate). gamescope
+`--backend wayland -- steam -gamepadui` launched (the entrypoint's
+`_launch_gs_wayland` detected `wayland-1` + fired), but **died shortly after**
+(the health loop logged `WARNING: gamescope died — restarting...` then retried).
+This is the §13.14 caveat verbatim: *"gamescope `--backend wayland` (run as a
+Wayland client) is less battle-tested than `--backend headless`... the
+games-on-whales maintainers note gamescope 'may be unstable with some Nvidia
+driver versions'."* The gamescope-as-client stability is the **next layer**;
+it does NOT invalidate the compositor+capture pipeline (which is the §17.3
+gate that just passed). The §13.14 fallback applies: if `gamescope --backend
+wayland` is flaky, use **sway as the Wayland client** (sway provides XWayland
+too) — same compositor capture, different XWayland provider.
+
+### 15.5 Resume (the next layer — gamescope-as-client stability)
+
+```bash
+cd dpadplay/container-gaming && git pull
+# §15 VALIDATED (commit 2170019, image aaa880f2):
+#   m=video:9 GATE PASSED — the waylanddisplaysrc compositor engages in selkies
+#   at runtime (the §17.3 Lutris-capture blocker is RETIRED).
+#   The two selkies-patch bugs (idempotency + CUDAMemory static-link) are FIXED.
+#
+# NEXT — gamescope --backend wayland stability (§15.4):
+# 1. Provision a fresh OVH L4 (§12 pattern). vm-bootstrap.sh install.
+# 2. VM_IP=<ip> SHELL=steam bash /tmp/wayland-display-probe.sh
+# 3. Connect a peer (browser at http://$VM_IP:16100 OR scripts/selkies-sdp-probe.py).
+# 4. Watch 'docker logs -f wd-probe' for the gamescope death:
+#    - tail -50 /tmp/gamescope-steam.log (gamescope's own log) for the crash.
+#    - GST_DEBUG=gamescope:5 in the gamescope launch (the _launch_gs_wayland line)
+#      to see the Wayland-backend error (EGL init? surface creation? Xwayland?).
+# 5. If gamescope --backend wayland is flaky on R580, try the §13.14 fallback:
+#    sway as the Wayland client (sway provides XWayland; the compositor still
+#    captures it). Add a DPAD_WAYLAND_CLIENT=gamescope|sway gate.
+# 6. Once gamescope/sway stays up + Steam renders, the full multi-store path is
+#    unblocked: §8 step 3 (Lutris shell) → §8 step 4 (store launchers).
+#
+# CUDAMemory zero-copy (§13.3 follow-up, NOT blocking): swap the RGBx capture
+# path for link_pads_full(no-caps-check) OR PR #35 NV12 DMABuf->CUDAMemory.
+```
