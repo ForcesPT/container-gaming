@@ -718,3 +718,115 @@ reboot — `ensure_driver_580` is a no-op); TCP 16100 + UDP 3478 are open in the
 OVH GRA11 security group (Selkies + coturn reach the browser direct); the
 orchestrator SSH key (`VAST_SSH_PRIVATE_KEY` in `cloud/.env`, base64 PEM) is
 authorized on the VM as `ubuntu` with NOPASSWD sudo.
+
+## 13. Spike build notes (from the 2026-08-08 gst-wayland-display research)
+
+Concrete findings that de-risk §8 step 2 — captured so the spike doesn't
+rediscover them.
+
+### 13.1 The gst-cuda build dep is ALREADY in our image
+The `cuda` feature of `waylanddisplaysrc` links `gst-cuda-1.0` (GStreamer's CUDA
+library — the `CUDAMemory` buffer type + the `cudaupload`/`cudaconvert`
+context negotiation). It is **already present in the Selkies GStreamer bundle**
+at `/opt/gstreamer` in the `:dpad-SteamOS` image (verified 2026-08-08):
+- `libgstcuda-1.0.so.0.2406.0` (+ the SONAME + bare `.so`) at
+  `/opt/gstreamer/lib/x86_64-linux-gnu/`
+- `gstreamer-cuda-1.0.pc` at `/opt/gstreamer/lib/x86_64-linux-gnu/pkgconfig/`
+- `gstreamer-1.0.pc` + `gstreamer-base-1.0.pc` + `gstreamer-plugins-bad-1.0.pc`
+  (same pkgconfig dir)
+- headers at `/opt/gstreamer/include/gstreamer-1.0`
+→ **no need to build gst-plugins-bad cuda from source.** The `wayland-display-
+builder` stage just COPYs `/opt/gstreamer` from the `base` stage + builds with
+`PKG_CONFIG_PATH=/opt/gstreamer/lib/x86_64-linux-gnu/pkgconfig`. (Do NOT apt-install
+`libgstreamer-plugins-bad1.0-dev` — that's the system GStreamer 1.22, not our
+1.24.6 bundle; linking it would mismatch the runtime.)
+
+### 13.2 The cuda feature + dynamic CUDA linking landed Sept–Oct 2025
+- commit `6593619` (2025-09-29) "feat: added basic cuda and gst-cuda FFI bindings"
+- commit `e89d9f5` (2025-10-21) "feat: dynamically link to CUDA" — `libcuda.so`
+  is `dlopen`'d at **runtime**, not linked at build time → the builder stage
+  does NOT need the CUDA toolkit / `libcuda.so`, only `gstreamer-cuda-1.0.pc`.
+→ build from the `stable` branch (or any tag ≥ 2025-10) to get a working
+`cuda` feature. Pin a commit/tag in the builder (vendor-risk mitigation, §7).
+
+### 13.3 The exact CUDAMemory pipeline (confirmed from the README + Wolf PR #156)
+```
+waylanddisplaysrc cuda-device-id=$CUDA_ID
+  ! video/x-raw(memory:CUDAMemory),width=1920,height=1080,framerate=60/1
+  ! nvh264enc (zerolatency, preset p1) → webrtcbin → coturn → browser
+```
+**No `cudaupload`, no `cudaconvert`, no NVRTC JIT** — the compositor emits
+`CUDAMemory` directly via `cuGraphicsEGLRegisterImage` (re-uses Smithay's GL
+context). This is the §2.2 win: the §6 #10 NVRTC fix is likely moot on this
+path (confirm `nvrtc: error` count = 0 in the spike WITHOUT `extract-nvrtc.sh`).
+The `DMABuf` path (the Nvidia fallback `waylanddisplaysrc ! DMABuf ! glupload !
+glcolorconvert ! GLMemory ! nvh264enc`) has a known format-negotiation bug on
+some drivers (`drm-format=AB24:… in anything we support`, Hotcooler 4070Ti,
+PR #156) → **prefer CUDAMemory**; only fall back to DMABuf if CUDAMemory fails.
+
+### 13.4 Zero-copy is production in Wolf (PR #156, merged 2025-06-17)
+Big perf wins vs the old system-memory path (from the maintainer's table):
+- Nvidia 3070 4K@60: GPU 88%→10%, CPU 185%→14%
+- AMD RX 9070 4K@60: GPU 20%→2%, CPU 100%→16%
+→ the CUDAMemory path is proven + production. De-risks the spike's
+"CUDAMemory zero-copy engages" validation.
+
+### 13.5 Input — inputtino virtual devices, not GStreamer messages (for our case)
+`waylanddisplaysrc` takes mouse/keyboard two ways: (a) GStreamer messages
+(`MouseMoveRelative`/key structs, the Wolf path) or (b) **`keyboard=`/`mouse=`
+properties pointing at `/dev/input/eventN` devices**. inputtino creates virtual
+`/dev/input/event*` (uinput/uhid) + `fake-udev` for hotplug → pass them to
+`waylanddisplaysrc keyboard=/dev/input/eventN mouse=/dev/input/eventM`. Cleaner
+than message-passing for our single-container case (no Wolf-style separate
+app container). **inputtino** is at `games-on-whales/inputtino` (build from
+source; interface TBD — C++ lib / CLI — needed only for §5.4 phase B gamepad
+migration; phase A keeps XTest under gamescope-XWayland, so inputtino is NOT
+on the spike critical path). The README fetch was empty — check the repo's
+actual build system (likely CMake, C++) before the spike.
+
+### 13.6 We are the first `waylanddisplaysrc → webrtcbin` consumer
+Wolf is **Moonlight-only** (`rtpmoonlightpay` custom RTP+FEC). No one drives
+`waylanddisplaysrc` into a Selkies `webrtcbin`+coturn sink. The compositor→
+GStreamer interface is transport-agnostic (`waylanddisplaysrc` is a generic
+source emitting `video/x-raw(memory:CUDAMemory)`), so this is low-risk, but the
+spike IS the de-risk. Watch for: webrtcbin caps negotiation with CUDAMemory
+(the Moonlight path uses `interpipesink`→`interpipesrc`→`nvh265enc`; we go
+`waylanddisplaysrc ! nvh264enc ! webrtcbin` directly — confirm the caps link).
+
+### 13.7 The build-stage approach
+Mirror `gamescope-builder`/`sdl3-builder`, but it needs the Selkies GStreamer
+(only in the `base` stage). So `COPY --from=base /opt/gstreamer /opt/gstreamer`
+into a fresh `wayland-display-builder` stage (FROM nvidia/cuda-base), install
+Rust + `cargo install cargo-c`, then:
+```bash
+git clone --depth 1 https://github.com/games-on-whales/gst-wayland-display.git /tmp/gwd
+# pin a tag/commit ≥ 2025-10 for the cuda feature (vendor-risk, §7)
+cd /tmp/gwd
+export PKG_CONFIG_PATH=/opt/gstreamer/lib/x86_64-linux-gnu/pkgconfig
+export PKG_CONFIG_SYSTEM_LIBRARY_PATH=/opt/gstreamer/lib/x86_64-linux-gnu
+cargo cinstall --prefix=/out --features cuda   # confirm the feature name in Cargo.toml
+# → /out/lib/gstreamer-1.0/libgstwaylanddisplaysrc.so + /out/lib/libgstwaylanddisplay.*
+```
+Then in `vast-vm`: `COPY --from=wayland-display-builder /out /opt/wayland-display`
++ `GST_PLUGIN_PATH=/opt/wayland-display/lib/gstreamer-1.0` (or copy the .so
+into the existing `/opt/gstreamer/lib/x86_64-linux-gnu/gstreamer-1.0/`).
+
+### 13.8 Known issues to watch in the spike (from PR #156 testers)
+- **`nvrtcGetCUBINSize` undefined symbol** warning — the NVRTC lib version
+  mismatch (adjacent to NVIDIA #1249). Our `extract-nvrtc.sh` bake (§6 #10)
+  covers it; on the CUDAMemory path nvrtc may not even load. Confirm.
+- **Sway segfault under the nvidia container-toolkit** (alibell, 3090) — fixed
+  by the manual nvidia-driver-volume method. We use CDI + the open driver
+  (the Scaleway `ensure_driver_580` path) → should be fine, but if `sway` is
+  used as the full-desktop client (§5.2) and segfaults, fall back to
+  `gamescope --backend wayland` as the XWayland client.
+- **Steam Big Picture tripping under sway** (alibell) — fixed by Windowed mode.
+  Not our path (Lutris shell, not Steam-as-shell, under the new compositor);
+  but the spike's Steam-as-Wayland-client validation (§8 step 2) may hit it.
+- **GStreamer 1.24.6 (our bundle) vs 1.26 (Wolf's)** — CUDAMemory works on
+  1.24.6 (the cuda library is present), but 1.26 is more battle-tested for
+  zero-copy. If the spike hits CUDAMemory caps-negotiation issues, a GStreamer
+  1.26 upgrade is the (heavy, risky — §3 AV1 note) fallback.
+- **Multi-NVIDIA-GPU** — fixed Nov 2025 (PR #287, the render-node→CUDA-device-id
+  mapping). Our N-on-N is one-GPU-per-container (CDI), so this is less relevant,
+  but `cuda-device-id=$CUDA_ID` must match the CDI-assigned GPU.
