@@ -650,25 +650,26 @@ cd dpadplay/container-gaming && git pull
 # created (client-discovery via polling works). See §13.13–§13.14. The prod image
 # already has libwayland 1.24.0 → vast-vm needs only the plugin .so COPY'd.
 #
-# §8 step 2 REMAINING (the client + Selkies + browser half) — NEXT:
-#   1. gamescope has NO `--backend wayland` in the current build (only drm+sdl).
-#      Rebuild gamescope with the wayland backend (meson option) OR use sway as
-#      the XWayland-providing Wayland client (Wolf's RUN_SWAY=1 model). Native-
-#      Wayland apps (Lutris --ozone-platform=wayland) connect directly.
+# §8 step 2 REMAINING (the Selkies + browser-stream half) — NEXT:
+#   1. gamescope `--backend wayland` is AVAILABLE (live-confirmed: "Post-Initted
+#      Wayland backend"; auto-selects when WAYLAND_DISPLAY set). No rebuild/sway.
 #   2. Wire vast-vm: COPY --from=wayland-display-builder the plugin .so to the
-#      gstreamer plugin dir (the prod libwayland 1.24.0 suffices — no libwayland
-#      COPY needed). Add `--device /dev/dri` to the container launch (the CDI
-#      /dev/dri group perms block the compositor's raw render-node open, §13.14).
-#   3. patch_selkies_waylanddisplay.py (mirror patch_selkies_pipewire.py): the
-#      waylanddisplaysrc cuda-device-id=$CUDA_ID ! CUDAMemory ! nvh264enc branch
-#      in build_video_pipeline (gated on DPAD_COMPOSITOR=wayland-display).
+#      gstreamer plugin dir (DONE — committed; the prod libwayland 1.24.0
+#      suffices, no libwayland COPY). Add `--device /dev/dri` to the container
+#      launch (the CDI /dev/dri group perms block the compositor's raw
+#      render-node open, §13.14). DONE: the patch_selkies_waylanddisplay.py
+#      (the waylanddisplaysrc branch) is written + applied in vast-vm.
+#   3. patch_selkies_waylanddisplay.py (mirror patch_selkies_pipewire.py): DONE —
+#      the waylanddisplaysrc cuda-device-id=$CUDA_ID ! CUDAMemory ! nvh264enc
+#      branch in build_video_pipeline (gated on DPAD_VIDEO_SRC=waylanddisplaysrc).
 #   4. entrypoint DPAD_COMPOSITOR=wayland-display gate (default gamescope = no
-#      regression): start the selkies pipeline (waylanddisplaysrc), poll
-#      $XDG_RUNTIME_DIR/wayland-* for the socket, launch the client
-#      (gamescope-as-Wayland-client OR sway OR native-Wayland Lutris) with
-#      WAYLAND_DISPLAY=<that>.
-#   5. Provision an OVH L4 + validate the full browser stream (webrtcbin+coturn,
-#      `m=video:2`) + N-on-N (2+3 compositors on 1 GPU).
+#      regression): start selkies (waylanddisplaysrc) [needs a dummy Xvfb for
+#      pynput to import, §13.14], poll $XDG_RUNTIME_DIR/wayland-* for the socket,
+#      launch gamescope --backend wayland -- <shell> with WAYLAND_DISPLAY (pre-
+#      create /tmp/.X11-unix root-owned 1777, §13.14).
+#   5. Live selkies webrtcbin peer test: provision an OVH L4, run with
+#      DPAD_COMPOSITOR=wayland-display, connect a WebRTC peer (aiortc headless
+#      client OR a browser) → confirm m=video:2 (the §17.3 metric) + N-on-N.
 #
 # Then: Lutris shell (native Wayland, --ozone-platform=wayland) for gamepad nav
 #   (sdl3-builder already ships libSDL3) → store launchers via gamescope-as-client
@@ -1020,17 +1021,21 @@ gst-launch-1.0 waylanddisplaysrc cuda-device-id=0 \
   integration simplifies to **just COPY the plugin `.so`** (drop the libwayland
   COPY + the /opt/wayland-display/lib on LD_LIBRARY_PATH); the prod libwayland
   1.24.0 suffices.
-- ✗ **Finding — gamescope has NO `wayland` backend:** the current gamescope
-  build (3.16.25, patched, §4) only exposes `--backend drm` + `sdl`. So
-  `gamescope --backend wayland -- <app>` (the planned XWayland-providing client
-  of gst-wayland-display, §4/§5.2) is NOT available. The integration needs
-  either (a) a gamescope rebuild with the wayland backend enabled (meson option
-  — check the gamescope `meson_options.txt`), OR (b) **sway** as the
-  XWayland-providing Wayland client (Wolf's `RUN_SWAY=1` model — sway-as-client
-  needs no DRM master). Native-Wayland apps (the Lutris shell with
-  `--ozone-platform=wayland`) connect to the compositor directly — no gamescope.
-  Not a blocker for the compositor+capture (proven above); a follow-up for the
-  client/XWayland layer.
+- ✅ **gamescope `--backend wayland` WORKS (the earlier "no wayland backend"
+  finding was a `grep | head -3` truncation artifact — retracted):** the gamescope
+  build's `--backend` help lists `wayland` (unconditional — `meson_options.txt` has
+  no `wayland_backend` feature; `parse_backend_name`/`CWaylandBackend` are ungated
+  in `main.cpp`). Live-confirmed on the OVH L4: `gamescope --backend wayland -W
+  1920 -H 1080 -- sleep 30` with `WAYLAND_DISPLAY=wayland-1` (the compositor's
+  socket) logged `[gamescope] xdg_backend: Post-Initted Wayland backend` +
+  `wlserver: Running compositor on wayland display 'gamescope-0'` + stayed
+  RUNNING. So gamescope connects to gst-wayland-display as a Wayland client,
+  renders to it, + runs its own wlserver/Xwayland for the child app — exactly
+  the §4/§5.2 model. **No gamescope rebuild OR sway needed.** (gamescope also
+  auto-selects the wayland backend when `WAYLAND_DISPLAY` is set, so explicit
+  `--backend wayland` is optional.) gamescope's `pipewire: pw_context_connect
+  failed` log is its OWN capture pipewire (harmless — the compositor captures
+  gamescope; gamescope's pipewire is unused on this path).
 - ⚠️ **Container `/dev/dri` perms gotcha:** the first probe panicked at
   `comp/mod.rs:741 PermissionDenied` — the CDI-injected `/dev/dri` nodes have
   group perms (`card0 root:video`, `renderD128 root:992`) the container user
@@ -1041,10 +1046,38 @@ gst-launch-1.0 waylanddisplaysrc cuda-device-id=0 \
   issue — but the gamescope path opens the render node via the nvidia ICD, not
   raw `/dev/dri` open, so it didn't hit this; gst-wayland-display opens
   `/dev/dri/renderD128` directly via `EGL_EXT_device_drm_render_node`).
+- ⚠️ **gamescope Xwayland socket gotcha:** gamescope's Xwayland setup checks
+  `/tmp/.X11-unix` is owned by root or the gamescope user; a stale/wrong-owned
+  dir makes gamescope die (`/tmp/.X11-unix not owned by root or us`). The
+  entrypoint gate must pre-create it (`rm -rf /tmp/.X11-unix; mkdir -p
+  /tmp/.X11-unix; chown root:root /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix`;
+  or run gamescope as the `dpad` user with the dir owned accordingly).
+- ⚠️ **selkies-gstreamer `pynput` needs an X display at import** (`Can't connect
+  to display :0` → selkies fails to start). The gamescope-headless path has
+  gamescope's Xwayland :0 up before selkies; the wayland path starts selkies
+  FIRST (the compositor), so a dummy Xvfb (e.g. `:99`) is needed for pynput to
+  import. selkies' pynput/XTest input then targets the dummy, NOT gamescope's
+  Xwayland → **input routing is the §5.4 follow-up** (compositor input /
+  inputtino, not pynput/XTest). The VIDEO path is unaffected.
+- ⚠️ **selkies builds the video pipeline only on a peer's video request** — so
+  the waylanddisplaysrc compositor (inside selkies' `build_video_pipeline`)
+  starts only when a WebRTC peer connects + asks for video. Validating the
+  selkies patch live (the `m=video:2` metric, §17.3) needs a WebRTC peer (a
+  headless client like aiortc, or a real browser). The standalone-compositor
+  probe above (gst-launch + gamescope-as-client) bypasses this + proves the
+  compositor+client+capture directly.
 
-**Net: §8 step 2's compositor+capture half is DONE + live-validated.** The
-remaining live half is the client/XWayland layer (gamescope wayland-backend
-rebuild OR sway) + the Selkies `build_video_pipeline` patch (the
-`waylanddisplaysrc` branch, §13.12) + the entrypoint `DPAD_COMPOSITOR` gate +
-the full browser-stream validation (`webrtcbin`+coturn) + N-on-N. VM torn down
-after the probe (`adapter.destroyVm`, 0 leftover instances, no orphan billing).
+**Net: §8 step 2's compositor + capture + gamescope-as-client are DONE +
+live-validated on a real OVH L4.** The wayland-display-builder stage is
+committed (orphan) + builds; the plugin ships in vast-vm (`dpad-SteamOS-wd`
+spike tag — prod `:dpad-SteamOS` untouched) + the selkies
+`patch_selkies_waylanddisplay.py` (the `waylanddisplaysrc` branch, §13.12) is
+written + applied + builds. Live: compositor on the render node (EGL/CUDAMemory,
+NVRTC=0) → wayland socket → gamescope `--backend wayland` connects + renders
+("Post-Initted Wayland backend") → compositor captures. **Remaining:** the
+entrypoint `DPAD_COMPOSITOR` gate (start selkies with waylanddisplaysrc → poll
+for the wayland socket → launch `gamescope --backend wayland -- <shell>` with
+`WAYLAND_DISPLAY`, incl. the dummy-Xvfb-for-pynput + the /tmp/.X11-unix +
+`--device /dev/dri` fixes) + the live selkies `webrtcbin` peer test (the
+`m=video:2` browser-stream validation — needs a WebRTC peer) + N-on-N. VM torn
+down after the probe (`adapter.destroyVm`, 0 leftover instances, no orphan billing).

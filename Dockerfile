@@ -798,6 +798,27 @@ RUN set -e; \
     && test -L libSDL3.so.0 \
     && test -e libSDL3.so.0  # sanity: the SONAME the app dlopens resolves
 
+# --- DPAD_COMPOSITOR=wayland-display: the gst-wayland-display plugin (the
+#     compositor + capture layer, WAYLAND-ARCHITECTURE.md). Built in the
+#     wayland-display-builder stage (Smithay + the `cuda` feature → CUDAMemory
+#     zero-copy output). Dropped into the default GStreamer plugin dir so
+#     selkies-gstreamer's `Gst.ElementFactory.make("waylanddisplaysrc")` finds
+#     it (the patch_selkies_waylanddisplay.py branch, gated on
+#     DPAD_VIDEO_SRC=waylanddisplaysrc). INERT by default: the gamescope-headless
+#     path never instantiates the element (the plugin's cuda init only runs when
+#     waylanddisplaysrc is created). The runtime libwayland is the prod image's
+#     1.24.0 (≥1.23 — already has wl_client_set_max_buffer_size; no libwayland
+#     COPY needed, §13.14). Live-validated on an OVH L4 (§13.14).
+COPY --from=wayland-display-builder /out/lib/x86_64-linux-gnu/gstreamer-1.0/libgstwaylanddisplaysrc.so /opt/gstreamer/lib/x86_64-linux-gnu/gstreamer-1.0/libgstwaylanddisplaysrc.so
+
+# Apply the waylanddisplaysrc capture-branch patch to Selkies (in the vast-vm
+# stage, late, so the base stage stays cached — base already bakes the pipewire
+# patch; this patch anchors on the pipewire-patched gstwebrtc_app.py). Gated on
+# DPAD_VIDEO_SRC=waylanddisplaysrc; default pipewiresrc → no regression.
+COPY scripts/patch_selkies_waylanddisplay.py /opt/dpadcloud/patch_selkies_waylanddisplay.py
+RUN python3 /opt/dpadcloud/patch_selkies_waylanddisplay.py /usr/local/lib/python3.12/dist-packages/selkies_gstreamer/gstwebrtc_app.py \
+    && rm -f /opt/dpadcloud/patch_selkies_waylanddisplay.py
+
 #    (c) Wine + winetricks + Lutris (the backend the gamepad-UI shells out to).
 #        i386 is already enabled in the base stage; libgtk-3-0t64 + python3-gi are
 #        already installed there, so the Lutris .deb's apt-resolved deps are
