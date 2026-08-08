@@ -272,6 +272,14 @@ launch() {
     [ -f /opt/dpadcloud/extract-nvrtc.sh ] \
         && entry_mount+=( -v /opt/dpadcloud/extract-nvrtc.sh:/opt/dpadcloud/extract-nvrtc.sh:ro )
 
+    # DPAD_COMPOSITOR=wayland-display needs raw /dev/dri access: the gst-wayland-
+    # display compositor opens the DRM render node directly via
+    # EGL_EXT_device_drm_render_node, and the CDI-injected /dev/dri group perms
+    # block that raw open (§13.14). Gated so the gamescope-headless path (default)
+    # is untouched — CDI's /dev/dri via NVIDIA_VISIBLE_DEVICES suffices there.
+    local dev_args=()
+    [ "${DPAD_COMPOSITOR:-gamescope}" = "wayland-display" ] && dev_args+=( --device /dev/dri )
+
     # Multi-store shell (STORES-PLAN.md). DPAD_STORE_SHELL=lutris switches the
     # gamescope session from `steam -gamepadui` to the lutris-shell wrapper
     # (the Lutris gamepad-UI store picker). DPAD_STORES lists the stores the
@@ -287,6 +295,7 @@ launch() {
         "${res[@]}" \
         "${vol_args[@]}" \
         "${entry_mount[@]}" \
+        "${dev_args[@]}" \
         -p "${port}:${port}/udp" \
         -p "${selkies_port}:16100" \
         -v "/tmp/nvidia-mps:/tmp/nvidia-mps" \
@@ -309,6 +318,9 @@ launch() {
         -e DPAD_LUTRIS_USE_GL="${DPAD_LUTRIS_USE_GL:-}" \
         -e DPAD_LUTRIS_EXTRA_ARGS="${DPAD_LUTRIS_EXTRA_ARGS:-}" \
         -e DPAD_LUTRIS_SHELL_ARGS="${DPAD_LUTRIS_SHELL_ARGS:-}" \
+        -e DPAD_COMPOSITOR="${DPAD_COMPOSITOR:-}" \
+        -e DPAD_STREAM_WIDTH="${DPAD_STREAM_WIDTH:-1920}" \
+        -e DPAD_STREAM_HEIGHT="${DPAD_STREAM_HEIGHT:-1080}" \
         "$image" || { err "docker run $name failed"; return 1; }
     log "container $name launched (coturn ${port}/udp, selkies ${selkies_port}->16100, login dpad/${pass:0:4}…)"
 

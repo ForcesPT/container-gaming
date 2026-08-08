@@ -719,6 +719,263 @@ setup_user_volume() {
     echo "    Steam install root -> $target (on the volume; Storage shows the volume)"
 }
 
+setup_gamepad_interposer() {
+    # Sets up the gamepad interposer (classic or evdev) + the LD_PRELOAD assembly.
+    # Sets globals: DPAD_PRELOAD, SDL_GP_ENV, SELKIES_INTERPOSER (exported),
+    # LD_PRELOAD (exported), SDL_GAMECONTROLLERCONFIG (exported). Starts the root
+    # hotplug watcher (classic) or evdev_bridge.py (evdev) daemon. Called AFTER
+    # setup_nvenc_fix (reads NVENC_FIX_ENABLED). Shared by start_gamescope_session
+    # (gamescope-headless) + start_wayland_display_session (gst-wayland-display
+    # compositor, WAYLAND-ARCHITECTURE.md §14) so both paths get identical gamepad.
+    DPAD_PRELOAD=""
+    [ "$NVENC_FIX_ENABLED" = "1" ] && DPAD_PRELOAD="/opt/dpadcloud/libnvenc_fix.so"
+    SDL_GP_ENV=""
+    if [ "${DPAD_GAMEPAD_INTERPOSER:-}" = "evdev" ]; then
+        # === evdev gamepad path (DPAD_GAMEPAD_INTERPOSER=evdev, opt-in) ===
+        # fake-libudev + the MAIN-branch evdev interposer (both arches via $LIB)
+        # make SDL3 discover 4 virtual Microsoft X-Box 360 pads at
+        # /dev/input/js{0-3} + event100{0-3} (no udev daemon, no CLASSIC hint, no
+        # GUID hack — the pads report vendor 0x045e so SDL3 auto-maps them). The
+        # evdev interposer reads struct input_event on event100N; evdev_bridge.py
+        # translates Selkies' js_event -> input_event+SYN (scripts/evdev_bridge.py).
+        # The default/classic path is the else branch.
+        export SELKIES_INTERPOSER='/usr/$LIB/selkies_joystick_interposer_evdev.so'
+        mkdir -pm1777 /dev/input 2>/dev/null
+        # static dummy nodes (no hotplug watcher — fake-libudev advertises them;
+        # the interposer intercepts open() by path). jsN minor=N; event100N minor=64+1000+N.
+        for n in 0 1 2 3; do
+            rm -f "/dev/input/js${n}" "/dev/input/event100${n}" 2>/dev/null
+            mknod "/dev/input/js${n}"       c 13 "${n}"           2>/dev/null && chmod 666 "/dev/input/js${n}"       2>/dev/null
+            mknod "/dev/input/event100${n}" c 13 "$((64+1000+n))"  2>/dev/null && chmod 666 "/dev/input/event100${n}" 2>/dev/null
+        done
+        # evdev_bridge.py: Selkies js socket -> input_event on event100N. Detached;
+        # the health loop (below) restarts it if it dies.
+        setsid python3 /opt/dpadcloud/evdev_bridge.py >>/tmp/evdev_bridge.log 2>&1 </dev/null &
+        export LD_PRELOAD="${DPAD_PRELOAD}${DPAD_PRELOAD:+:}/usr/\$LIB/dpad_fake_libudev.so:/usr/\$LIB/selkies_joystick_interposer_evdev.so${LD_PRELOAD:+:${LD_PRELOAD}}"
+        # NO SDL_JOYSTICK_LINUX_CLASSIC / SDL_JOYSTICK_DISABLE_UDEV / SDL_GAMECONTROLLERCONFIG
+        # (the evdev path uses native SDL3 libudev discovery + auto-maps the XBox pad).
+        echo "[*] Gamepad: EVDEV path (DPAD_GAMEPAD_INTERPOSER=evdev) — fake-libudev + evdev interposer + evdev_bridge.py"
+    else
+        # === classic joystick path (default) ===
+        export SELKIES_INTERPOSER='/usr/$LIB/selkies_joystick_interposer.so'
+        mkdir -pm1777 /dev/input 2>/dev/null
+        rm -f /dev/input/js0 /dev/input/js1 /dev/input/js2 /dev/input/js3 2>/dev/null || true
+        # Root gamepad-hotplug watcher: mknod /dev/input/jsN when Selkies' gamepad socket
+        # appears, rm it when the socket goes (so a reconnect re-triggers IN_CREATE).
+        ( while true; do
+              for n in 0 1 2 3; do
+                if [ -S "/tmp/selkies_js${n}.sock" ] && [ ! -e "/dev/input/js${n}" ]; then
+                  mknod "/dev/input/js${n}" c 13 "${n}" 2>/dev/null && chmod 666 "/dev/input/js${n}" 2>/dev/null
+                elif [ ! -S "/tmp/selkies_js${n}.sock" ] && [ -e "/dev/input/js${n}" ]; then
+                  rm -f "/dev/input/js${n}" 2>/dev/null
+                fi
+              done
+              sleep 0.3
+          done ) &
+        # as_user (su) strips the parent env, so LD_PRELOAD/SDL_JOYSTICK_* must be
+        # re-exported explicitly inside each gamescope+Steam launch below.
+        export LD_PRELOAD="${DPAD_PRELOAD}${DPAD_PRELOAD:+:}${SELKIES_INTERPOSER}${LD_PRELOAD:+:${LD_PRELOAD}}"
+        # SDL_GameController mapping for the Selkies virtual gamepad. The v1.6.2
+        # interposer presents a raw joystick named "Selkies Controller" with NO
+        # vendor/product ID (its js_config_t has no vendor/product fields + it
+        # doesn't intercept JSIOCGID), so SDL3 can't auto-map it as a gamepad —
+        # Steam Big Picture (which drives gamepadui via the SDL_GameController API)
+        # would ignore it. SDL3's GUID for a zero-vendor classic js device is
+        # bus(0)+crc16(name)+name-bytes (SDL_CreateJoystickGUID, vendor=0 branch):
+        # crc16("Selkies Controller")=0x06d6 -> GUID 0000d60653656c6b69657320436f6e00.
+        # This mapping tells SDL3 how the xpad-layout joystick indices map to a
+        # standard gamepad (matches STANDARD_XPAD_CONFIG in selkies gamepad.py:
+        # btn 0-10 = A/B/X/Y/TL/TR/SELECT/START/MODE/THUMBL/THUMBR, axes 0-7 =
+        # X/Y/Z/RX/RY/RZ/HAT0X/HAT0Y; dpad arrives as axes 6/7, triggers as 2/5).
+        export SDL_GAMECONTROLLERCONFIG='0000d60653656c6b69657320436f6e00,Selkies Controller,a:b0,b:b1,x:b2,y:b3,back:b6,guide:b8,start:b7,leftshoulder:b4,rightshoulder:b5,leftstick:b9,rightstick:b10,leftx:a0,lefty:a1,rightx:a3,righty:a4,lefttrigger:a2,righttrigger:a5,dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,'
+        SDL_GP_ENV="SDL_JOYSTICK_DEVICE=/dev/input/js0 SDL_JOYSTICK_LINUX_CLASSIC=1 SDL_JOYSTICK_DISABLE_UDEV=1 SDL_GAMECONTROLLERCONFIG='${SDL_GAMECONTROLLERCONFIG}'"
+        echo "[*] Gamepad: classic joystick path (default)"
+    fi
+}
+
+start_wayland_display_session() {
+    echo "[*] DPAD_COMPOSITOR=wayland-display: gst-wayland-display compositor + gamescope-as-client (WAYLAND-ARCHITECTURE.md §14)"
+    echo "[*] Inverted boot order: selkies (the compositor via waylanddisplaysrc) launches"
+    echo "    FIRST; gamescope launches as a Wayland CLIENT once a peer connects + the"
+    echo "    compositor's wayland-N socket appears. Video appears ~30-40s after the browser"
+    echo "    connects (while gamescope+Steam boot) — GFN-like. Default DPAD_COMPOSITOR=gamescope"
+    echo "    is the unchanged headless path; this path is opt-in (§14)."
+
+    # --- input hotfix overlay (mirrors start_gamescope_session) ---
+    if [ "${DPAD_INPUT_HOTFIX:-0}" = "1" ]; then
+        local _hb="https://raw.githubusercontent.com/ForcesPT/container-gaming/main/scripts"
+        if curl -fsSL "${_hb}/dpad_input_patch.py" -o /usr/local/lib/python3.12/dist-packages/dpad_input_patch.py 2>/dev/null; then
+            echo "    input hotfix: dpad_input_patch.py updated from repo main"
+        fi
+        if curl -fsSL "${_hb}/patch_gst_web_cursors.sh" -o /opt/dpadcloud/patch_gst_web_cursors.sh 2>/dev/null; then
+            chmod +x /opt/dpadcloud/patch_gst_web_cursors.sh 2>/dev/null
+            echo "    input hotfix: patch_gst_web_cursors.sh updated from repo main"
+        fi
+    fi
+    bash /opt/dpadcloud/patch_gst_web_cursors.sh "${SELKIES_WEB_ROOT}/input.js" "${DPAD_DEFAULT_GAMING_MODE:-0}" 2>/dev/null || true
+
+    # --- resolution + shell app (mirrors start_gamescope_session) ---
+    local GS_W GS_H STEAM_ARGS
+    GS_W="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f1)"; [ -z "$GS_W" ] && GS_W=1920
+    GS_H="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f2)"; [ -z "$GS_H" ] && GS_H=1080
+    STEAM_ARGS="${DPAD_STEAM_ARGS:--gamepadui}"
+    local SHELL_APP SHELL_PROC
+    if [ "${DPAD_STORE_SHELL:-steam}" = "lutris" ]; then
+        SHELL_APP="/opt/dpadcloud/lutris-shell"
+        SHELL_PROC="lutris-gamepad-ui"
+        echo "[*] DPAD_STORE_SHELL=lutris — Lutris gamepad-UI shell (Epic+GOG+Battle.net, STORES-PLAN.md)"
+    else
+        SHELL_APP="steam ${STEAM_ARGS}"
+        SHELL_PROC="steam"
+    fi
+    local LUTRIS_ENV="DPAD_LUTRIS_DISABLE_GPU='${DPAD_LUTRIS_DISABLE_GPU:-}' DPAD_LUTRIS_OZONE='${DPAD_LUTRIS_OZONE:-}' DPAD_LUTRIS_USE_GL='${DPAD_LUTRIS_USE_GL:-}' DPAD_LUTRIS_EXTRA_ARGS='${DPAD_LUTRIS_EXTRA_ARGS:-}' DPAD_LUTRIS_SHELL_ARGS='${DPAD_LUTRIS_SHELL_ARGS:-}'"
+
+    # --- shared session prep (mirrors start_gamescope_session) ---
+    setup_user_volume
+    bootstrap_steam_on_xvfb
+
+    # PipeWire + wireplumber — the compositor doesn't need PipeWire for video, but
+    # Selkies' pulsesrc needs it for audio (the null sink + dummy.monitor source).
+    echo "[*] Starting PipeWire + wireplumber..."
+    as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME}; pipewire >/tmp/pipewire.log 2>&1 & sleep 1; wireplumber >/tmp/wireplumber.log 2>&1 &"
+    local pw_wait=0
+    while [ $pw_wait -lt 15 ]; do
+        as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pw-cli info 0 >/dev/null 2>&1" && break
+        sleep 1; pw_wait=$((pw_wait+1))
+    done
+    if as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pw-cli info 0 >/dev/null 2>&1"; then
+        echo "    PipeWire ready"
+    else
+        echo "    WARNING: PipeWire not ready after 15s — see /tmp/pipewire.log (Selkies audio may fail)"
+    fi
+
+    # pipewire-pulse + null sink (Selkies pulsesrc capture source)
+    echo "[*] Starting pipewire-pulse (PulseAudio compat) + null audio sink..."
+    mkdir -p "${XDG_RUNTIME_DIR}/pulse" 2>/dev/null; chmod 1777 "${XDG_RUNTIME_DIR}/pulse" 2>/dev/null
+    as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME}; pipewire-pulse >/tmp/pipewire-pulse.log 2>&1 &"
+    local pp_wait=0
+    while [ $pp_wait -lt 15 ]; do [ -S "${XDG_RUNTIME_DIR}/pulse/native" ] && break; sleep 1; pp_wait=$((pp_wait+1)); done
+    if [ -S "${XDG_RUNTIME_DIR}/pulse/native" ]; then
+        echo "    pipewire-pulse ready (socket ${XDG_RUNTIME_DIR}/pulse/native)"
+        as_user "export PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; pactl load-module module-null-sink sink_name=dummy sink_properties=device.description=DummyOutput 2>/dev/null; pactl set-default-sink dummy 2>/dev/null; pactl set-default-source dummy.monitor 2>/dev/null" >/dev/null 2>&1 || true
+    else
+        echo "    WARNING: pipewire-pulse socket not up after 15s — Selkies audio will fail (see /tmp/pipewire-pulse.log)"
+        tail -8 /tmp/pipewire-pulse.log 2>/dev/null | sed 's/^/      /'
+    fi
+
+    find "${USER_HOME}" ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
+    setup_nvenc_fix
+    setup_gamepad_interposer
+
+    # --- wayland-display-specific setup (§13.14 gotchas) ---
+    # gamescope's Xwayland setup checks /tmp/.X11-unix is root-owned (else it dies:
+    # "/tmp/.X11-unix not owned by root or us"). Pre-create it (the entrypoint's
+    # generic mkdir at line ~1196 already did, but gamescope may have re-checked
+    # after a chown; ensure it's root:root 1777 for the --backend wayland path).
+    rm -rf /tmp/.X11-unix; mkdir -p /tmp/.X11-unix; chown root:root /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix
+    # Dummy Xvfb :99 for pynput to import (selkies-gstreamer's pynput needs an X
+    # display at import time — "Can't connect to display :0" → selkies fails to
+    # start; the compositor has no X server, §13.14). Input routing to gamescope's
+    # Xwayland is the §5.4 phase-A follow-up — this spike validates VIDEO only.
+    as_user "Xvfb :99 -ac -screen 0 1x1x24 >/tmp/xvfb99.log 2>&1 &" 2>/dev/null
+    sleep 1
+
+    # --- coturn + rtc_config (mirrors start_gamescope_stream) ---
+    rm -f /tmp/selkies.log /tmp/coturn.log /tmp/rtc_config.json 2>/dev/null
+    if ! pgrep -x turnserver >/dev/null; then
+        echo "[*] Starting coturn on ${TURN_PORT_EXT}..."
+        turnserver -n -a --lt-cred-mech --fingerprint --no-stun --no-multicast-peers --no-cli --listening-ip=0.0.0.0 --realm=dpadcloud --user="${TURN_USER}:${TURN_PASS}" -p "${TURN_PORT_LISTEN:-${TURN_PORT_EXT}}" -X "${PUBLIC_IP:-localhost}" >/tmp/coturn.log 2>&1 &
+        sleep 2
+        pgrep -x turnserver >/dev/null && echo "    coturn running" || echo "    WARNING: coturn failed (see /tmp/coturn.log)"
+    fi
+    [ -S "${XDG_RUNTIME_DIR}/pulse/native" ] && echo "    audio socket OK (${XDG_RUNTIME_DIR}/pulse/native)" || echo "    WARNING: pipewire-pulse socket missing — Selkies audio will fail"
+    local rtc=/tmp/rtc_config.json _listen="${TURN_PORT_LISTEN:-${TURN_PORT_EXT}}"
+    local TCP_EXT="${DPAD_TURN_EXTERNAL_PORT:-$(printenv VAST_TCP_PORT_${_listen} 2>/dev/null || true)}"
+    local UDP_EXT="${DPAD_TURN_UDP_EXTERNAL_PORT:-$(printenv VAST_UDP_PORT_${_listen} 2>/dev/null || true)}"
+    local _ices=""
+    [ -n "$UDP_EXT" ] && { [ -n "$_ices" ] && _ices+=","; _ices+="{\"urls\":[\"turn:127.0.0.1:${_listen}?transport=udp\"],\"username\":\"${TURN_USER}\",\"credential\":\"${TURN_PASS}\"},{\"urls\":[\"turn:${PUBLIC_IP}:${UDP_EXT}?transport=udp\"],\"username\":\"${TURN_USER}\",\"credential\":\"${TURN_PASS}\"}"; }
+    [ -n "$TCP_EXT" ] && { [ -n "$_ices" ] && _ices+=","; _ices+="{\"urls\":[\"turn:127.0.0.1:${_listen}?transport=tcp\"],\"username\":\"${TURN_USER}\",\"credential\":\"${TURN_PASS}\"},{\"urls\":[\"turn:${PUBLIC_IP}:${TCP_EXT}?transport=tcp\"],\"username\":\"${TURN_USER}\",\"credential\":\"${TURN_PASS}\"}"; }
+    printf '%s' "{\"iceServers\":[${_ices}],\"iceTransportPolicy\":\"all\"}" > "$rtc"; chmod 644 "$rtc"
+    [ -z "$_ices" ] && echo "    WARNING: no TURN port exposed — WebRTC media will fail"
+
+    # --- selkies FIRST (is the compositor via waylanddisplaysrc) ---
+    # DPAD_VIDEO_SRC=waylanddisplaysrc gates the patch_selkies_waylanddisplay.py
+    # branch in selkies' build_video_pipeline. The compositor does NOT start until a
+    # WebRTC peer connects (on_session → start_pipeline → waylanddisplaysrc starts
+    # → creates wayland-N in $XDG_RUNTIME_DIR). So: launch selkies, fire DPAD_READY
+    # (listening), then the health loop polls for the socket + launches gamescope
+    # --backend wayland as a Wayland client of it.
+    local enc="${DPAD_GAMESCOPE_ENCODER:-nvh264enc}"
+    local video_src="waylanddisplaysrc"
+    local selkies_cmd="export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_STREAM_WIDTH=${GS_W} DPAD_STREAM_HEIGHT=${GS_H} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
+    echo "[*] Launching selkies (wayland-display compositor; video_src=${video_src}, encoder=${enc})..."
+    as_user "${selkies_cmd}" >>/tmp/selkies.log 2>&1 &
+    sleep 6
+    if ! pgrep -f selkies-gstreamer >/dev/null; then
+        echo "    WARNING: selkies failed to start (see /tmp/selkies.log)"; tail -20 /tmp/selkies.log 2>/dev/null | sed 's/^/      /'
+        return 1
+    fi
+    SELKIES_ENC="${enc}"; SELKIES_VIDEO_SRC="${video_src}"
+    echo "    Selkies listening on ${DPAD_SELKIES_BIND:-127.0.0.1}:16100 (wayland-display compositor; encoder=${enc}, audio_fec=${DPAD_AUDIO_PACKETLOSS:-0}%, video_fec=${DPAD_VIDEO_PACKETLOSS:-0}%)"
+    echo "DPAD_READY slot=${DPAD_SLOT:-0} bind=${DPAD_SELKIES_BIND:-127.0.0.1}:16100 encoder=${enc}"
+    echo "    NOTE: video appears when a peer connects (starts the compositor) + gamescope boots (~30-40s)"
+
+    # gamescope-as-Wayland-client launcher. Nested function (bash dynamic scoping:
+    # sees the caller's locals — GS_W/GS_H/SHELL_APP/SDL_GP_ENV/LUTRIS_ENV/etc.).
+    # Reused for the initial launch + the restart-on-death path in the health loop.
+    _launch_gs_wayland() {
+        local wl_name="$1"
+        as_user "cd ${USER_HOME}; unset DISPLAY; export WAYLAND_DISPLAY=${wl_name} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} ${LUTRIS_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend wayland -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}" >>/tmp/gamescope-steam.log 2>&1 &
+    }
+
+    # --- health loop: poll for the compositor socket → launch gamescope-as-client ---
+    # The wayland-N socket appears ONLY when a WebRTC peer connects (selkies builds
+    # the pipeline on on_session → waylanddisplaysrc starts the compositor, §13.12).
+    # So gamescope's launch is DEFERRED until the socket appears. If selkies restarts
+    # (compositor restarts → new socket), gamescope must reconnect (gs_launched=0).
+    local gs_pid="" gs_launched=0
+    while true; do
+        sleep 5
+        # Discover the compositor's wayland-N socket (skip the .lock file).
+        local wl_sock="" wl_name=""
+        for f in "${XDG_RUNTIME_DIR}"/wayland-*; do
+            [ -S "$f" ] || continue
+            wl_sock="$f"; wl_name="$(basename "$f")"; break
+        done
+        # Launch gamescope as a Wayland client once the socket appears.
+        if [ -n "$wl_name" ] && [ $gs_launched -eq 0 ]; then
+            echo "[*] Compositor socket ${wl_name} appeared (peer connected) — launching gamescope --backend wayland -- ${SHELL_APP}"
+            _launch_gs_wayland "$wl_name"
+            gs_pid=$!
+            gs_launched=1
+        fi
+        # Restart gamescope if it died (and the socket is still there).
+        if [ $gs_launched -eq 1 ] && [ -n "$gs_pid" ] && ! kill -0 "$gs_pid" 2>/dev/null; then
+            echo "[*] WARNING: gamescope died — restarting..."
+            kill "$gs_pid" 2>/dev/null; pkill -9 -x steam 2>/dev/null; pkill -9 -x steamwebhelper 2>/dev/null; pkill -9 -f lutris-gamepad-ui 2>/dev/null; sleep 2
+            rm -f "${USER_HOME}/.steam/steam/steam.pid" "${USER_HOME}/.steam/debian-installation/steam.pid" 2>/dev/null
+            if [ -n "$wl_name" ] && [ -S "$wl_sock" ]; then
+                _launch_gs_wayland "$wl_name"
+                gs_pid=$!
+            else
+                gs_launched=0   # socket gone → wait for a new peer/compositor
+            fi
+        fi
+        # Restart selkies if it died (the compositor dies with it → new socket on reconnect).
+        if ! pgrep -f selkies-gstreamer >/dev/null; then
+            echo "[*] WARNING: selkies-gstreamer died (compositor gone) — restarting..."
+            pkill -f selkies-gstreamer 2>/dev/null; sleep 2
+            as_user "${selkies_cmd}" >>/tmp/selkies.log 2>&1 &
+            gs_launched=0   # compositor restarted → wait for the new socket
+        fi
+        # evdev_bridge.py supervisor (only in evdev mode).
+        if [ "${DPAD_GAMEPAD_INTERPOSER:-}" = "evdev" ] && ! pgrep -f evdev_bridge.py >/dev/null; then
+            echo "[*] WARNING: evdev_bridge.py died — restarting..."
+            setsid python3 /opt/dpadcloud/evdev_bridge.py >>/tmp/evdev_bridge.log 2>&1 </dev/null &
+        fi
+    done
+}
+
 start_gamescope_session() {
     echo "[*] DPAD_GAMESCOPE mode: gamescope --backend headless + Steam (no DRM master)"
     # gamescope headless does NOT composite the X cursor into its PipeWire output,
@@ -889,70 +1146,7 @@ start_gamescope_session() {
     # before the LD_PRELOAD assembly so the gamescope+Steam AND Selkies encoder
     # inherit it. (The DFP path has its own inline copy of this detection.)
     setup_nvenc_fix
-    DPAD_PRELOAD=""
-    [ "$NVENC_FIX_ENABLED" = "1" ] && DPAD_PRELOAD="/opt/dpadcloud/libnvenc_fix.so"
-    SDL_GP_ENV=""
-    if [ "${DPAD_GAMEPAD_INTERPOSER:-}" = "evdev" ]; then
-        # === evdev gamepad path (DPAD_GAMEPAD_INTERPOSER=evdev, opt-in) ===
-        # fake-libudev + the MAIN-branch evdev interposer (both arches via $LIB)
-        # make SDL3 discover 4 virtual Microsoft X-Box 360 pads at
-        # /dev/input/js{0-3} + event100{0-3} (no udev daemon, no CLASSIC hint, no
-        # GUID hack — the pads report vendor 0x045e so SDL3 auto-maps them). The
-        # evdev interposer reads struct input_event on event100N; evdev_bridge.py
-        # translates Selkies' js_event -> input_event+SYN (scripts/evdev_bridge.py).
-        # The default/classic path is the else branch.
-        export SELKIES_INTERPOSER='/usr/$LIB/selkies_joystick_interposer_evdev.so'
-        mkdir -pm1777 /dev/input 2>/dev/null
-        # static dummy nodes (no hotplug watcher — fake-libudev advertises them;
-        # the interposer intercepts open() by path). jsN minor=N; event100N minor=64+1000+N.
-        for n in 0 1 2 3; do
-            rm -f "/dev/input/js${n}" "/dev/input/event100${n}" 2>/dev/null
-            mknod "/dev/input/js${n}"       c 13 "${n}"           2>/dev/null && chmod 666 "/dev/input/js${n}"       2>/dev/null
-            mknod "/dev/input/event100${n}" c 13 "$((64+1000+n))"  2>/dev/null && chmod 666 "/dev/input/event100${n}" 2>/dev/null
-        done
-        # evdev_bridge.py: Selkies js socket -> input_event on event100N. Detached;
-        # the health loop (below) restarts it if it dies.
-        setsid python3 /opt/dpadcloud/evdev_bridge.py >>/tmp/evdev_bridge.log 2>&1 </dev/null &
-        export LD_PRELOAD="${DPAD_PRELOAD}${DPAD_PRELOAD:+:}/usr/\$LIB/dpad_fake_libudev.so:/usr/\$LIB/selkies_joystick_interposer_evdev.so${LD_PRELOAD:+:${LD_PRELOAD}}"
-        # NO SDL_JOYSTICK_LINUX_CLASSIC / SDL_JOYSTICK_DISABLE_UDEV / SDL_GAMECONTROLLERCONFIG
-        # (the evdev path uses native SDL3 libudev discovery + auto-maps the XBox pad).
-        echo "[*] Gamepad: EVDEV path (DPAD_GAMEPAD_INTERPOSER=evdev) — fake-libudev + evdev interposer + evdev_bridge.py"
-    else
-        # === classic joystick path (default) ===
-        export SELKIES_INTERPOSER='/usr/$LIB/selkies_joystick_interposer.so'
-        mkdir -pm1777 /dev/input 2>/dev/null
-        rm -f /dev/input/js0 /dev/input/js1 /dev/input/js2 /dev/input/js3 2>/dev/null || true
-        # Root gamepad-hotplug watcher: mknod /dev/input/jsN when Selkies' gamepad socket
-        # appears, rm it when the socket goes (so a reconnect re-triggers IN_CREATE).
-        ( while true; do
-              for n in 0 1 2 3; do
-                if [ -S "/tmp/selkies_js${n}.sock" ] && [ ! -e "/dev/input/js${n}" ]; then
-                  mknod "/dev/input/js${n}" c 13 "${n}" 2>/dev/null && chmod 666 "/dev/input/js${n}" 2>/dev/null
-                elif [ ! -S "/tmp/selkies_js${n}.sock" ] && [ -e "/dev/input/js${n}" ]; then
-                  rm -f "/dev/input/js${n}" 2>/dev/null
-                fi
-              done
-              sleep 0.3
-          done ) &
-        # as_user (su) strips the parent env, so LD_PRELOAD/SDL_JOYSTICK_* must be
-        # re-exported explicitly inside each gamescope+Steam launch below.
-        export LD_PRELOAD="${DPAD_PRELOAD}${DPAD_PRELOAD:+:}${SELKIES_INTERPOSER}${LD_PRELOAD:+:${LD_PRELOAD}}"
-        # SDL_GameController mapping for the Selkies virtual gamepad. The v1.6.2
-        # interposer presents a raw joystick named "Selkies Controller" with NO
-        # vendor/product ID (its js_config_t has no vendor/product fields + it
-        # doesn't intercept JSIOCGID), so SDL3 can't auto-map it as a gamepad —
-        # Steam Big Picture (which drives gamepadui via the SDL_GameController API)
-        # would ignore it. SDL3's GUID for a zero-vendor classic js device is
-        # bus(0)+crc16(name)+name-bytes (SDL_CreateJoystickGUID, vendor=0 branch):
-        # crc16("Selkies Controller")=0x06d6 -> GUID 0000d60653656c6b69657320436f6e00.
-        # This mapping tells SDL3 how the xpad-layout joystick indices map to a
-        # standard gamepad (matches STANDARD_XPAD_CONFIG in selkies gamepad.py:
-        # btn 0-10 = A/B/X/Y/TL/TR/SELECT/START/MODE/THUMBL/THUMBR, axes 0-7 =
-        # X/Y/Z/RX/RY/RZ/HAT0X/HAT0Y; dpad arrives as axes 6/7, triggers as 2/5).
-        export SDL_GAMECONTROLLERCONFIG='0000d60653656c6b69657320436f6e00,Selkies Controller,a:b0,b:b1,x:b2,y:b3,back:b6,guide:b8,start:b7,leftshoulder:b4,rightshoulder:b5,leftstick:b9,rightstick:b10,leftx:a0,lefty:a1,rightx:a3,righty:a4,lefttrigger:a2,righttrigger:a5,dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,'
-        SDL_GP_ENV="SDL_JOYSTICK_DEVICE=/dev/input/js0 SDL_JOYSTICK_LINUX_CLASSIC=1 SDL_JOYSTICK_DISABLE_UDEV=1 SDL_GAMECONTROLLERCONFIG='${SDL_GAMECONTROLLERCONFIG}'"
-        echo "[*] Gamepad: classic joystick path (default)"
-    fi
+    setup_gamepad_interposer
     echo "[*] Launching gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}"
     as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} ${LUTRIS_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}" >/tmp/gamescope-steam.log 2>&1 &
     local gs_pid=$!
@@ -1268,7 +1462,14 @@ sleep 1
 # path and stay there (the rest of this script is the DFP/single-user path).
 DPAD_GAMESCOPE="${DPAD_GAMESCOPE:-0}"
 if [ "${DPAD_GAMESCOPE}" = "1" ]; then
-    start_gamescope_session
+    # DPAD_COMPOSITOR=wayland-display: the gst-wayland-display compositor path
+    # (WAYLAND-ARCHITECTURE.md §14 — selkies-first + gamescope-as-Wayland-client).
+    # Default = gamescope (the unchanged headless path; zero regression).
+    if [ "${DPAD_COMPOSITOR:-gamescope}" = "wayland-display" ]; then
+        start_wayland_display_session
+    else
+        start_gamescope_session
+    fi
     exit 0
 fi
 

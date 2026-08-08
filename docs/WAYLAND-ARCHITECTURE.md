@@ -1081,3 +1081,207 @@ for the wayland socket → launch `gamescope --backend wayland -- <shell>` with
 `--device /dev/dri` fixes) + the live selkies `webrtcbin` peer test (the
 `m=video:2` browser-stream validation — needs a WebRTC peer) + N-on-N. VM torn
 down after the probe (`adapter.destroyVm`, 0 leftover instances, no orphan billing).
+
+## 14. The entrypoint `DPAD_COMPOSITOR` gate — implementation (2026-08-08)
+
+> **The implementation of §8 step 2's remaining half** (the entrypoint integration
+> + the live selkies `webrtcbin` validation path). The compositor + capture +
+> gamescope-as-client were live-proven via `gst-launch` in §13.14; this section
+> covers the entrypoint gate that wires them into the real session boot + the
+> probe script that validates the runtime selkies patch (the unvalidated-at-
+> runtime `patch_selkies_waylanddisplay.py` branch). **Status: IMPLEMENTED,
+> pending live validation.**
+
+### 14.1 The central design problem (confirmed from the selkies source)
+
+Traced in selkies-gstreamer v1.6.2 `__main__.py:654`: `app.start_pipeline()` is
+called from `on_session_handler`, wired to `signalling.on_session` — **selkies
+builds the video pipeline (and thus the `waylanddisplaysrc` compositor) ONLY
+when a WebRTC peer establishes a session.** This inverts today's boot order:
+
+| | Today (gamescope-headless) | After (wayland-display) |
+|---|---|---|
+| 1st | gamescope launches + Steam renders | **selkies launches** (listening, no compositor yet) |
+| 2nd | selkies captures gamescope's PipeWire | **a peer connects** → selkies builds the pipeline → `waylanddisplaysrc` starts the compositor → `wayland-N` socket appears |
+| 3rd | — | **gamescope launches** `--backend wayland` as a client of `wayland-N` |
+| DPAD_READY | after selkies is streaming + gamescope up | **after selkies is listening** (before gamescope — it can't launch until a peer connects) |
+
+**Consequence for the control plane:** DPAD_READY fires when selkies is
+*listening* (not when gamescope is up). The worker marks the session ready →
+sets up the stream-bridge → the user's browser connects → the compositor starts
+→ gamescope launches → video appears ~30-40s later (GFN-like). A loading
+indicator is a prod-flip polish item; for the spike the browser shows
+"Waiting for stream" during the gamescope boot window (acceptable — it
+self-heals when gamescope renders).
+
+**Three options were considered; (A) was chosen** (accept peer-connects-first,
+no selkies patch beyond the committed `patch_selkies_waylanddisplay.py`):
+- **(A) Accept peer-connects-first [CHOSEN].** DPAD_READY = selkies listening.
+  The entrypoint polls `$XDG_RUNTIME_DIR/wayland-*` + launches gamescope once
+  the socket appears. Matches §5.2/§11.
+- **(B) Patch selkies to build the pipeline eagerly on startup.** Invasive
+  (`start_pipeline()` creates webrtcbin + the data channel + sets PLAYING with
+  no peer; re-negotiation when a real peer connects is fragile). Rejected.
+- **(C) A headless aiortc "trigger peer" inside the container.** Complex, heavy
+  dep, disconnect may tear down the pipeline. Rejected.
+
+### 14.2 What was implemented (3 files)
+
+**`entrypoint.sh`** — 2 changes:
+1. **Extracted `setup_gamepad_interposer()`** from the inline gamepad if/else
+   block in `start_gamescope_session` (~60 lines). Sets globals `DPAD_PRELOAD`,
+   `SDL_GP_ENV`, `SELKIES_INTERPOSER`, `LD_PRELOAD`, `SDL_GAMECONTROLLERCONFIG`
+   + starts the hotplug watcher (classic) / `evdev_bridge.py` (evdev) daemon.
+   Called after `setup_nvenc_fix` (reads `NVENC_FIX_ENABLED`). **Shared by both
+   session functions** so the gamescope-headless + wayland-display paths get
+   identical gamepad wiring. The inline block in `start_gamescope_session` is
+   now a one-line `setup_gamepad_interposer` call — zero behavior change.
+2. **Added `start_wayland_display_session()`** — the new session function,
+   gated on `DPAD_COMPOSITOR=wayland-display` (default `gamescope` = the
+   unchanged headless path, **zero regression**). It mirrors
+   `start_gamescope_session`'s shared prep (input hotfix, resolution, shell app,
+   `setup_user_volume`, `bootstrap_steam_on_xvfb`, PipeWire + pipewire-pulse +
+   null sink, `setup_nvenc_fix`, `setup_gamepad_interposer`) then does the new
+   wayland-display-specific boot:
+   - Pre-creates `/tmp/.X11-unix` (root:root 1777) — §13.14 gamescope Xwayland
+     gotcha.
+   - Starts a **dummy `Xvfb :99`** for pynput to import (selkies' pynput needs
+     an X display at import; the compositor has no X server, §13.14).
+   - Starts coturn + builds `rtc_config.json` (mirrors `start_gamescope_stream`).
+   - **Launches selkies FIRST** with `DPAD_VIDEO_SRC=waylanddisplaysrc` +
+     `DISPLAY=:99` + `DPAD_STREAM_WIDTH/HEIGHT` (the patch reads these for the
+     CUDAMemory caps). Fires `DPAD_READY` once selkies is listening (NOT after
+     gamescope — see §14.1).
+   - **Health loop polls `$XDG_RUNTIME_DIR/wayland-*`** for the compositor
+     socket (appears when a peer connects → selkies builds the pipeline →
+     `waylanddisplaysrc` starts). On the socket appearing → launches
+     `gamescope --backend wayland -e -W GS_W -H GS_H -- ${SHELL_APP}` with
+     `WAYLAND_DISPLAY=<socket>` (a nested `_launch_gs_wayland()` helper, reused
+     for the initial launch + the restart-on-death path). Supervises: gamescope
+     restart (if it dies + the socket is still there), selkies restart (the
+     compositor dies with it → `gs_launched=0` → wait for the new socket),
+     `evdev_bridge.py` supervisor (evdev mode).
+
+   The gate at the `DPAD_GAMESCOPE` block:
+   ```bash
+   if [ "${DPAD_COMPOSITOR:-gamescope}" = "wayland-display" ]; then
+       start_wayland_display_session
+   else
+       start_gamescope_session
+   fi
+   ```
+
+**`scripts/dpad-launch-session`** — 2 changes:
+1. **`--device /dev/dri`** (gated on `DPAD_COMPOSITOR=wayland-display`) — the
+   compositor opens the DRM render node directly via
+   `EGL_EXT_device_drm_render_node`; the CDI-injected `/dev/dri` group perms
+   block that raw open (§13.14). Gated so the gamescope-headless path (default)
+   is untouched (CDI's `/dev/dri` via `NVIDIA_VISIBLE_DEVICES` suffices there,
+   where gamescope opens the render node via the nvidia ICD, not a raw open).
+   ⚠️ Prod N-on-N on multi-GPU hosts: `--device /dev/dri` mounts ALL GPUs'
+   `/dev/dri` (breaks CDI per-GPU isolation) — for the spike (single L4, 1:1
+   then 2:1 MPS) it's safe; the prod-flip needs a CDI-perm fix instead.
+2. **Forwards `-e DPAD_COMPOSITOR` + `-e DPAD_STREAM_WIDTH` (default 1920) +
+   `-e DPAD_STREAM_HEIGHT` (default 1080)** — the selkies patch reads the
+   latter for the CUDAMemory BGRA caps (the compositor's output WxH@framerate).
+
+**`scripts/wayland-display-probe.sh`** (new) — the Step 2a probe launcher. Run
+ON THE VM (after `vm-bootstrap.sh install`) as root: `VM_IP=<ip> bash
+/opt/dpadcloud/wayland-display-probe.sh`. Launches a probe container with
+`DPAD_COMPOSITOR=wayland-display` + `DPAD_GAMESCOPE=1` + the right flags (CDI,
+`--device /dev/dri`, coturn+selkies ports), waits for `DPAD_READY`, then prints
+the validation checklist (open the browser → watch for the "Compositor socket
+appeared" log → the gate: `m=video:2` in the SDP + Steam renders, not black).
+Env: `IMAGE` (use `dpad-SteamOS-wd-spike` for the spike tag), `SHELL` (steam
+default; `lutris` validates the §17.3 Lutris capture fix), `EXTRA_ENV`.
+
+### 14.3 Risks retired by reading the source (before writing the gate)
+
+1. **`self.gpu_id` in the selkies patch is real.** selkies-gstreamer v1.6.2
+   `__init__(…, gpu_id=0, …)` → `self.gpu_id = gpu_id` (line 89). The patch's
+   `if self.gpu_id >= 0: set_property("cuda-device-id", self.gpu_id)` is valid.
+   selkies' `--gpu_id` defaults to 0 (single-GPU-per-container via CDI → 0 is
+   correct). ✅
+2. **The patch's assembly anchor matches.**
+   `pipeline_elements += [cudaupload, cudaconvert, cudaconvert_capsfilter,
+   nvh264enc, …]` is at `gstwebrtc_app.py:944` verbatim. The patch applies. ✅
+3. **The plugin is in the default `/opt/gstreamer/.../gstreamer-1.0/` dir** —
+   selkies' `gst-env` already puts that on `GST_PLUGIN_PATH`. No extra path
+   config. ✅
+
+### 14.4 The validation gate (Step 2a — the live probe)
+
+The §13.14 live validation proved the compositor + CUDAMemory + EGL + gamescope-
+as-client via `gst-launch` (a standalone GStreamer pipeline, NOT through
+selkies). The **unvalidated** part is: does selkies' `waylanddisplaysrc` branch
+(the `patch_selkies_waylanddisplay.py` patch) work when a WebRTC peer connects
++ selkies builds the pipeline? The probe (`scripts/wayland-display-probe.sh`)
+tests exactly this:
+
+1. Provision a fresh OVH Gravelines L4 via the §12 API pattern (open R580,
+   `l4-90` quota=1).
+2. `vm-bootstrap.sh install` (pulls the image + host setup + fetches the new
+   entrypoint from repo `main` via the bind-mount hotfix path).
+3. `VM_IP=<ip> bash /opt/dpadcloud/wayland-display-probe.sh` (or `docker run`
+   directly with `DPAD_COMPOSITOR=wayland-display`).
+4. Open `http://$VM_IP:16100` (login dpad/testpass) in a browser.
+5. **GATE:** `docker logs wd-probe 2>&1 | grep -E 'm=video|waylanddisplaysrc|nvrtc: error'`
+   - `m=video:2` = video track negotiated (**SUCCESS** — the §17.3 Lutris-capture
+     bug is retired; the pivot works at runtime).
+   - `m=video:0` = no video track (the pivot did NOT fix §17.3 — investigate
+     the selkies patch's caps negotiation with `GST_DEBUG=waylanddisplaysrc:5`).
+   - `nvrtc: error` count = 0 (confirms NVRTC is moot on the CUDAMemory path,
+     §13.14 — `extract-nvrtc.sh` is redundant here).
+   - The browser shows Steam Big Picture (not black) within ~30-40s.
+
+If the probe passes → proceed to N-on-N (2 compositors on 1 L4 via MPS) → then
+§8 step 3 (Lutris shell under the new compositor). If it fails → fix the selkies
+patch in isolation (the `patch_selkies_waylanddisplay.py` branch's caps
+negotiation with `webrtcbin` — §13.6 flagged this as the one unproven seam; we
+are the first `waylanddisplaysrc → webrtcbin` consumer).
+
+### 14.5 What is NOT touched in this pass (deferred, per §8 phasing)
+
+- **Input routing under the new compositor** (§5.4 phase A) — pynput/XTest
+  targets the dummy `:99`; XTest-to-gamescope-Xwayland needs `DPAD_INPUT_DISPLAY`
+  set *after* gamescope launches (dynamic re-target or a selkies restart). The
+  spike validates VIDEO only; keyboard/mouse via Selkies Desktop mode is the
+  fallback. Gamepad works (the interposer is shell-agnostic, §6).
+- **Lutris shell under the new compositor** (§8 step 3) — once 2a proves Steam
+  streams, validate `DPAD_STORE_SHELL=lutris` with `--ozone-platform=wayland`
+  direct (native Wayland) or via gamescope-XWayland. `libSDL3` already shipped
+  (§5.6) so gamepad nav works.
+- **Store launchers** (§8 step 4), **default flip** (§8 step 5),
+  **inputtino migration** (§8 step 6), **vendoring gst-wayland-display** (§8
+  step 7).
+- **The prod Docker Hub rebuild.** The entrypoint gate ships via the
+  **entrypoint bind-mount hotfix path** (vm-bootstrap fetches `entrypoint.sh`
+  from repo `main` — gotcha #19) so a fresh VM gets it without a rebuild. The
+  plugin `.so` + the selkies patch ARE baked into the image (Dockerfile:812 +
+  818-820); the spike tag `dpad-SteamOS-wd-spike` has them. Prod `:dpad-SteamOS`
+  also has them (committed in `96d8442`). So no rebuild is needed for the probe
+  — just `docker pull` + the entrypoint hotfix.
+
+### 14.6 Resume
+
+```bash
+cd dpadplay/container-gaming && git pull
+# §14 IMPLEMENTED (entrypoint gate + dpad-launch-session + probe script).
+# bash -n entrypoint.sh OK + bash -n scripts/dpad-launch-session OK + bash -n scripts/wayland-display-probe.sh OK
+#
+# NEXT — the Step 2a live probe (§14.4):
+# 1. Provision an OVH Gravelines L4 (§12 pattern; createOvhAdapter from the worker container).
+# 2. vm-bootstrap.sh install (pulls the image + fetches the new entrypoint from main).
+# 3. VM_IP=<ip> bash /opt/dpadcloud/wayland-display-probe.sh
+#    (or: docker run -e DPAD_COMPOSITOR=wayland-display -e DPAD_GAMESCOPE=1 ... — the entrypoint does the rest)
+# 4. Open http://$VM_IP:16100 -> watch 'docker logs -f wd-probe' -> GATE: m=video:2 + Steam renders.
+# 5. If pass -> N-on-N (2 compositors on 1 L4 via MPS) -> §8 step 3 (Lutris shell).
+# 6. Teardown: docker rm -f wd-probe; adapter.destroyVm (§12 step 5).
+#
+# Open questions to resolve during the probe (§14.1):
+# - Does selkies tolerate the ~30s gap between peer-connect + first video frame
+#   (while gamescope boots)? If webrtcbin times out, patch selkies to delay the
+#   offer or send a black frame first.
+# - Socket discovery: polling $XDG_RUNTIME_DIR/wayland-* (§13.14 confirmed it
+#   works). Fallback: the wayland.src GStreamer bus message (§13.12).
+```
