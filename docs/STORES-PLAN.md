@@ -488,6 +488,16 @@ transient / timeout-too-tight.
 `cloud/scripts/*` OVH/Scaleway probe + `*-reply.md` untracked files predate this
 work — left for review.)
 
+> **2026-08-08 — the multi-store blocker is now addressed at the architecture
+> level, not the Lutris-flag level.** See **`WAYLAND-ARCHITECTURE.md`** — the
+> decision to adopt `gst-wayland-display` (a Smithay micro-compositor) as the
+> compositor + capture layer, with gamescope demoted to an XWayland-providing
+> *client*. It retires §17.3 (Electron renders directly into the new compositor)
+> + retires §17.4 via the `sdl3-builder` stage (Lutris is the primary shell). The probe knobs
+> below stay as a stopgap + a way to characterise the §17.3 bug; the phased
+> plan (`WAYLAND-ARCHITECTURE.md` §8) starts with a cheap live probe + a build
+> spike. This section is kept as the live-test record + the stopgap plan.
+
 ## 17. Live-test findings (2026-08-07 deep session) — the multi-store IS blocked by a Lutris video-capture bug (Steam works)
 
 A full live test on a fresh Paris Standard VM (`51.159.179.121`, `ae94ae48`,
@@ -558,6 +568,10 @@ system-wide in the Dockerfile (cleanest), OR add the steamrt libSDL3 path to
 `${APPDIR}/usr/lib`. Keyboard/mouse (Selkies Desktop mode) still works without it.
 
 ### 17.5 Resume — next steps (in this order)
+> **Superseded 2026-08-08 by `WAYLAND-ARCHITECTURE.md` §8** — the compositor
+> pivot is the strategic fix; items #2/#3 below (the Lutris-flag probes) are now
+> the *stopgap* + the *bug-characterisation* step (step 1 of the new plan), not
+> the destination.
 1. **✅ DONE (2026-08-07) — NVRTC fix baked into the repo.** Added
    `container-gaming/scripts/extract-nvrtc.sh` (canonical, idempotent,
    hardened — leaves the bundled libnvrtc on a download failure). The

@@ -129,6 +129,72 @@ RUN git clone --depth 1 --branch 3.16.25 --recurse-submodules --shallow-submodul
     && cp build/src/gamescope build/src/gamescopereaper build/src/gamescopestream build/src/gamescopectl /out/
 
 # =============================================================================
+# Stage: sdl3-builder
+#   Builds SDL3 from source with MINIMAL backends — only the subsystems
+#   lutris-gamepad-ui needs for gamepad INPUT via its koffi FFI dlopen
+#   (joystick/hidapi/events). Video/audio/render/GPU/OpenGL/Vulkan are OFF —
+#   the Electron app does the rendering; SDL3 is only on the input path. This
+#   fixes PROJECT_STATE.md §6 #12 / STORES-PLAN.md §17.4: lutris-gamepad-ui's
+#   koffi dlopen can't find libSDL3 (it lives only in Steam's runtime dirs, not
+#   on the system library path) → the SDL3 gamepad path
+#   (LUTRIS_GAMEPAD_UI_ENABLE_SDL_INPUT=1) is broken → gamepad won't navigate
+#   the Lutris UI. See WAYLAND-ARCHITECTURE.md §5.6.
+#
+#   SDL3 is NOT in Ubuntu 24.04 (Noble) repos (landed in 24.10 oracular); the
+#   oracular libsdl3-0 .deb drags a newer libpipewire-0.3-0t64 +
+#   gstreamer1.0-pipewire that would churn the pinned GStreamer/Selkies stack
+#   → build from source instead. Minimal backends → small lib + zero dep churn
+#   in the final image. Pinned to the latest stable SDL3 (3.2.28, 2025-12-02);
+#   bump SDL3_VERSION on rollover. SDL3's SOVERSION is 0 (deliberate — kept
+#   across the 3.x series; only bumps on an incompatible change, which would
+#   rename the lib to SDL4), so `cmake --install` emits libSDL3.so.0 directly —
+#   the exact SONAME lutris-gamepad-ui's koffi dlopens (§17.4). No symlink games.
+# =============================================================================
+FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS sdl3-builder
+ARG DEBIAN_FRONTEND
+ARG SDL3_VERSION=3.2.28
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake ninja-build pkg-config curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+# Video OFF cascades to render/gpu/opengl/vulkan (all depend on video); audio OFF.
+# Joystick/hidapi/events stay ON (the default) — the only subsystems the app
+# uses via koffi. SHARED=ON/STATIC=OFF → only the .so ships; no libSDL3.a bloat.
+# SDL3's SOVERSION is 0 (deliberate — see SDL3 CMakeLists.txt: "Increment this
+# only if there is an incompatible change, but then we should rename the
+# library from SDL3 to SDL4"; SOVERSION stays 0 across the 3.x series), so
+# `cmake --install` emits libSDL3.so.0.2.28 + the libSDL3.so.0 SONAME symlink +
+# the bare libSDL3.so link — i.e. it ALREADY produces the libSDL3.so.0 the app
+# dlopens (§17.4). No manual symlinks needed.
+# SDL_UNIX_CONSOLE_BUILD=ON skips SDL3's hard FATAL "no X11/Wayland dev libs"
+# check (cmake/macros.cmake:381) — we have no X11/Wayland in this builder
+# stage + don't want windows anyway (the Electron app renders; SDL3 is input-
+# only). The sanctioned skip per SDL3 docs/README-cmake.md.
+RUN set -e; \
+    mkdir -p /tmp/sdl3 && cd /tmp/sdl3 \
+    && curl -fsSL -o SDL3.tar.gz \
+      "https://github.com/libsdl-org/SDL/releases/download/release-${SDL3_VERSION}/SDL3-${SDL3_VERSION}.tar.gz" \
+    && tar -xzf SDL3.tar.gz --strip-components=1 \
+    && cmake -S . -B build -GNinja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/out \
+        -DSDL_SHARED=ON -DSDL_STATIC=OFF \
+        -DSDL_TESTS=OFF -DSDL_INSTALL_TESTS=OFF \
+        -DSDL_VIDEO=OFF -DSDL_AUDIO=OFF \
+        -DSDL_UNIX_CONSOLE_BUILD=ON \
+    && cmake --build build --parallel "$(nproc)" \
+    && cmake --install build \
+    && rm -rf /tmp/sdl3
+# Sanity: cmake --install produced the SONAME the app dlopens (§17.4's
+# "Unable to load libSDL3.so.0") + the real versioned file. No manual symlinks —
+# SDL3's SOVERSION is 0, so libSDL3.so.0 is the canonical SONAME, not a stale
+# pre-release name.
+RUN set -e; \
+    cd /out/lib \
+    && test -f libSDL3.so.0 \
+    && test -f libSDL3.so.0.2.28 \
+    && test -L libSDL3.so
+
+# =============================================================================
 # Stage: base — shared by both final images
 #   Selkies-GStreamer + coturn + cloudflared + NVENC fix + display/audio/Mesa/
 #   X/Python + the dpad user. No launcher, no desktop — those are per-target.
@@ -601,6 +667,31 @@ RUN set -e; \
 #    AppRun. See scripts/lutris-shell for the full rationale.
 COPY scripts/lutris-shell /opt/dpadcloud/lutris-shell
 RUN sed -i 's/\r$//' /opt/dpadcloud/lutris-shell && chmod +x /opt/dpadcloud/lutris-shell
+
+#    (d) libSDL3 for lutris-gamepad-ui's gamepad input (koffi FFI dlopen). SDL3
+#        is NOT in Noble repos; the oracular libsdl3-0 .deb churns the pinned
+#        GStreamer/PipeWire stack → built from source in the sdl3-builder stage
+#        with MINIMAL backends (joystick/hidapi/events only — the Electron app
+#        renders; SDL3 is only on the input path). Fixes §17.4: the app's koffi
+#        dlopen("libSDL3.so.0") couldn't find libSDL3 (it lived only in Steam's
+#        runtime dirs) → gamepad wouldn't navigate the Lutris UI. SDL3's SOVERSION
+#        is 0 (deliberate, stays 0 across 3.x — see the SDL3 CMakeLists.txt), so
+#        cmake --install already emits libSDL3.so.0 (the exact SONAME the app
+#        dlopens) + the bare libSDL3.so link; the COPY glob carries both. See
+#        WAYLAND-ARCHITECTURE.md §5.6. Independent of the compositor: ships
+#        gamepad nav for the Lutris shell under BOTH the current gamescope-
+#        headless path AND the new wayland-display path.
+COPY --from=sdl3-builder /out/lib/libSDL3.so.0.2.28 /usr/lib/x86_64-linux-gnu/libSDL3.so.0.2.28
+# Recreate the SONAME + bare-link symlinks (Docker COPY derefs symlinks on a
+# glob, which would duplicate the ~1.5MB lib as 3 real files + spew ldconfig
+# "not a symbolic link" warnings). One real file + two relative symlinks.
+RUN set -e; \
+    cd /usr/lib/x86_64-linux-gnu \
+    && ln -sf libSDL3.so.0.2.28 libSDL3.so.0 \
+    && ln -sf libSDL3.so.0.2.28 libSDL3.so \
+    && ldconfig \
+    && test -L libSDL3.so.0 \
+    && test -e libSDL3.so.0  # sanity: the SONAME the app dlopens resolves
 
 #    (c) Wine + winetricks + Lutris (the backend the gamepad-UI shells out to).
 #        i386 is already enabled in the base stage; libgtk-3-0t64 + python3-gi are

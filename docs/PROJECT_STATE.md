@@ -10,7 +10,19 @@
 >
 > **Companion:** `IMAGE-RUNBOOK.md` (the launch recipe + env-var reference +
 > troubleshooting — the operational runbook), `cloud/docs/STATUS.md` (the
-> control-plane handoff), `cloud/docs/V2-PLAN.md` (the post-Vast architecture).
+> control-plane handoff), `cloud/docs/V2-PLAN.md` (the post-Vast architecture),
+> **`WAYLAND-ARCHITECTURE.md`** (the 2026-08-08 compositor pivot decision —
+> adopts `gst-wayland-display`, retires the §6 #11 Lutris-capture blocker).
+>
+> **2026-08-08 — the multi-store blocker is being solved at the architecture
+> level, not the Lutris-flag level.** See **`WAYLAND-ARCHITECTURE.md`** — the
+> decision to adopt `gst-wayland-display` (a Smithay micro-compositor) as the
+> compositor + capture layer, with gamescope demoted to an XWayland-providing
+> *client*. Retires §6 #11 (Electron renders directly into the new compositor)
+> + retires §6 #12 (libSDL3) via the `sdl3-builder` stage now that Lutris is the
+> primary shell. The §6 #10 NVRTC
+> fix is likely moot on the new CUDAMemory path (kept as fallback). Phased
+> plan (probe → spike → shell → store launchers → flip default → inputtino).
 >
 > **2026-08-04 session (gamepad): the evdev gamepad path — VALIDATED
 > END-TO-END with a real controller on OVH Gravelines L4 (Steam Big Picture
@@ -343,7 +355,7 @@ reverts to the `:2` bridge fallback.
    add `echo "DPAD_GAMEPAD_INTERPOSER=evdev" >> /etc/environment` to the
    bootstrap) + redeploy the worker for a normal dpadplay session to boot evdev.
    See `scripts/gamepad-evdev-fallback/README.md` + the 2026-08-04 session note.
-10. **NVRTC fix — ✅ DONE (2026-08-07): baked into the repo.** Added
+10. **NVRTC fix — ✅ DONE (2026-08-07): baked into the repo.** Likely **moot on the new compositor path** (`WAYLAND-ARCHITECTURE.md` §2.2/§7 — the CUDAMemory `waylanddisplaysrc ! nvh265enc` path bypasses `cudaconvert`'s NVRTC JIT); kept as the hotfix path for existing gamescope-headless images + the gst-wayland-display `DMABuf`/software fallbacks. Confirm in the spike. Added
     `container-gaming/scripts/extract-nvrtc.sh` (canonical, idempotent,
     hardened — leaves the bundled libnvrtc on a download failure). The
     **Dockerfile** (`# --- 4b` block, after the Selkies tarball install) bakes
@@ -362,11 +374,22 @@ reverts to the `:2` bridge fallback.
     fresh VMs get it via the hotfix fetch from `main`. See §5 (the NVRTC
     note) + `STORES-PLAN.md` §17.2/§17.5 #1.
 11. **Lutris shell produces NO capturable video — the multi-store blocker
-    (STORES-PLAN §17.3).** With the NVRTC fix + `DPAD_STORE_SHELL=lutris`, the
+    (STORES-PLAN §17.3).** **Retired by the compositor pivot**
+    (`WAYLAND-ARCHITECTURE.md` — adopt `gst-wayland-display` as the compositor
+    + capture layer; Electron renders directly into it). The probe knobs stay
+    as a stopgap + a way to characterise the bug; the real fix is the new
+    compositor. With the NVRTC fix + `DPAD_STORE_SHELL=lutris`, the
     video webrtcbin never adds a video m-line (`m=video: 0` vs `m=video: 2`
     for steam on the SAME VM/image) → audio connects but no video → "Waiting
     for stream". `lutris-gamepad-ui` (Electron AppImage) does NOT render into
     the gamescope `pipewiresrc` capture node the way Steam's CEF does.
+    **✅ Probe RUN 2026-08-08 (OVH Gravelines L4, image `b403937b…`): `--disable-gpu`
+    did NOT fix it** — browser still "Waiting for stream"; gamescope's PipeWire
+    stream oscillated paused↔streaming + the capture node was active, but
+    Selkies' pipewiresrc→webrtcbin produced no video track (a parallel gst grab
+    captured 0 frames in 14s). So the bug is fundamental to gamescope-headless +
+    Electron, NOT a GPU-init issue → the `gst-wayland-display` pivot is strictly
+    necessary. (Same session validated §17.4 — sdl_manager loaded libSDL3.so.0.)
     **Probe knobs now wired (2026-08-07):** `scripts/lutris-shell` appends
     Electron flags behind env gates (default OFF = no regression): `--disable-gpu`
     (`DPAD_LUTRIS_DISABLE_GPU=1`, the cheapest diagnostic),
@@ -382,6 +405,12 @@ reverts to the `:2` bridge fallback.
     pad link/caps between the two shells. (The steam shell streams fine → NOT
     an image regression.) See STORES-PLAN §17.5 #2.
 12. **`libSDL3.so.0` unfindable by `lutris-gamepad-ui` (STORES-PLAN §17.4).**
+    **On the critical path** under the Lutris-primary shell decision
+    (`WAYLAND-ARCHITECTURE.md` §6 — Lutris is the v1 shell; the new compositor
+    retires the §17.3 capture bug, so Electron is fine, and this libSDL3 bug
+    is the one remaining blocker for gamepad nav). Fix = a `sdl3-builder`
+    stage (build SDL3 from source with minimal backends; §5.6). Keyboard/mouse
+    via Selkies Desktop mode works without it.
     `lutris-shell.log`: `[sdl_manager] Unable to load libSDL3.so.0 … No such
     file or directory`. libSDL3 exists ONLY in Steam's runtime dirs
     (`steamrt32/`/`steamrt64/`), not on the system library path; the
