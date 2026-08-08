@@ -343,27 +343,44 @@ reverts to the `:2` bridge fallback.
    add `echo "DPAD_GAMEPAD_INTERPOSER=evdev" >> /etc/environment` to the
    bootstrap) + redeploy the worker for a normal dpadplay session to boot evdev.
    See `scripts/gamepad-evdev-fallback/README.md` + the 2026-08-04 session note.
-10. **NVRTC fix — BAKE INTO THE REPO (the validated live fix needs to ship).**
-    The live Paris VM has the libnvrtc 12.9.86 extraction inlined in the
-    bind-mounted `entrypoint.sh` (spliced after `#!/bin/bash`). Add the same
-    extraction block to `container-gaming/entrypoint.sh` (top, after `set -e`)
-    OR the Dockerfile, so fresh VMs get it on every provider (not just the
-    live-patched Paris box). Reference impl: `cloud/scripts/extract-nvrtc.sh`.
-    See §5 (the NVRTC note) + `STORES-PLAN.md` §17.2. This unblocks video for
-    BOTH the steam + lutris shells. (Validated: with 12.9.86, `nvrtc: error`
-    count → 0 + the steam shell streams video.)
+10. **NVRTC fix — ✅ DONE (2026-08-07): baked into the repo.** Added
+    `container-gaming/scripts/extract-nvrtc.sh` (canonical, idempotent,
+    hardened — leaves the bundled libnvrtc on a download failure). The
+    **Dockerfile** (`# --- 4b` block, after the Selkies tarball install) bakes
+    `libnvrtc 12.9.86` into `/opt/gstreamer/lib/x86_64-linux-gnu/` at build
+    time with a FATAL `test -f` verify (a silent skip would ship a
+    broken-stream image). The **entrypoint** (first action after `set -o
+    pipefail`) re-runs it idempotently (`|| true`) — no-op when baked; lets the
+    **entrypoint bind-mount hotfix path** ship it to EXISTING images without
+    a Docker Hub rebuild (gotcha #19; the rebuild is owner-blocked). Reference
+    impl mirrors `cloud/scripts/extract-nvrtc.sh` (the live-VM version).
+    Unblocks video for BOTH the steam + lutris shells on every provider (not
+    just the live-patched Paris VM). (Was: the live Paris VM had the
+    libnvrtc 12.9.86 extraction inlined in the bind-mounted `entrypoint.sh`;
+    validated: with 12.9.86, `nvrtc: error` count → 0 + the steam shell streams
+    video.) Next owner step: the image rebuild + push bakes it; until then
+    fresh VMs get it via the hotfix fetch from `main`. See §5 (the NVRTC
+    note) + `STORES-PLAN.md` §17.2/§17.5 #1.
 11. **Lutris shell produces NO capturable video — the multi-store blocker
     (STORES-PLAN §17.3).** With the NVRTC fix + `DPAD_STORE_SHELL=lutris`, the
     video webrtcbin never adds a video m-line (`m=video: 0` vs `m=video: 2`
     for steam on the SAME VM/image) → audio connects but no video → "Waiting
     for stream". `lutris-gamepad-ui` (Electron AppImage) does NOT render into
     the gamescope `pipewiresrc` capture node the way Steam's CEF does.
-    Investigate: Electron `--ozone-platform=wayland`/`--use-gl`/`--enable-features`
-    flags, OR try `DPAD_VIDEO_SRC=ximagesrc` (the `:2` Xvfb bridge may capture
-    an X-rendering Electron app). Reference: `games-on-whales` runs Lutris with
-    `RUN_SWAY=1`/`RUN_GAMESCOPE=1` — check their capture wiring. Decisive test:
-    `GST_DEBUG=webrtcbin:5` + compare the video pad link/caps between the two
-    shells. (The steam shell streams fine → NOT an image regression.)
+    **Probe knobs now wired (2026-08-07):** `scripts/lutris-shell` appends
+    Electron flags behind env gates (default OFF = no regression): `--disable-gpu`
+    (`DPAD_LUTRIS_DISABLE_GPU=1`, the cheapest diagnostic),
+    `--ozone-platform=wayland` (`DPAD_LUTRIS_OZONE=wayland`), `--use-gl=egl`
+    (`DPAD_LUTRIS_USE_GL=egl`), arbitrary flags (`DPAD_LUTRIS_EXTRA_ARGS`);
+    the entrypoint re-exports them through `as_user` (su) via a `LUTRIS_ENV`
+    blob; `dpad-launch-session` forwards them (`-e DPAD_LUTRIS_*`) +
+    `-e DPAD_VIDEO_SRC` (so a manual `DPAD_VIDEO_SRC=ximagesrc` flips Selkies
+    to the `:2` Xvfb bridge, which may capture an X-rendering Electron app).
+    Reference: `games-on-whales` runs Lutris with `RUN_SWAY=1`/`RUN_GAMESCOPE=1`
+    — check their capture wiring. Decisive test: `DPAD_LUTRIS_DISABLE_GPU=1` →
+    does `m=video:2` appear? Then `GST_DEBUG=webrtcbin:5` + compare the video
+    pad link/caps between the two shells. (The steam shell streams fine → NOT
+    an image regression.) See STORES-PLAN §17.5 #2.
 12. **`libSDL3.so.0` unfindable by `lutris-gamepad-ui` (STORES-PLAN §17.4).**
     `lutris-shell.log`: `[sdl_manager] Unable to load libSDL3.so.0 … No such
     file or directory`. libSDL3 exists ONLY in Steam's runtime dirs
@@ -404,15 +421,18 @@ reverts to the `:2` bridge fallback.
   GOG+Battle.net v1; EA App + Ubisoft Connect v1.1). **IMPLEMENTED + deployed
   2026-08-07** (§16). **2026-08-07 deep live-test (§17):** the `dpad-launch-session`
   inline-`#` bug is FIXED + pushed (`13f8687`); the NVRTC `cudaconvert` blocker
-  is fixed on the live VM (libnvrtc 12.9.86 extraction) but needs baking into
-  the repo; **the remaining multi-store blocker is Lutris-specific** —
-  `lutris-gamepad-ui` doesn't render into gamescope's capture (Steam streams
-  fine on the same VM) + `libSDL3.so.0` is unfindable (gamepad won't navigate).
+  is **✅ baked into the repo (§6 #10 — Dockerfile 4b + entrypoint, ships via
+  the bind-mount hotfix path without a rebuild)**; **the remaining multi-store
+  blocker is Lutris-specific** — `lutris-gamepad-ui` doesn't render into
+  gamescope's capture (Steam streams fine on the same VM). **Probe knobs wired**
+  (`DPAD_LUTRIS_DISABLE_GPU`/`_OZONE`/`_USE_GL`/`_EXTRA_ARGS` + `DPAD_VIDEO_SRC=ximagesrc`;
+  STORES-PLAN §17.5 #2) for the next live test. `libSDL3.so.0` unfindable
+  (gamepad won't navigate) is DEFERRED until the capture works (§6 #12).
   The image bakes GE-Proton11-3 + Lutris + the `lutris-gamepad-ui` AppImage;
   the entrypoint `DPAD_STORE_SHELL` gate (default Steam) + `scripts/lutris-shell`
-  wrapper; `dpad-launch-session` forwards `DPAD_STORE_SHELL`/`DPAD_STORES`;
-  the cloud worker writes them to `/etc/environment` (opt-in via
-  `deploy/vps/docker-compose.yml`).
+  wrapper; `dpad-launch-session` forwards `DPAD_STORE_SHELL`/`DPAD_STORES` +
+  the capture-probe env; the cloud worker writes them to `/etc/environment`
+  (opt-in via `deploy/vps/docker-compose.yml`).
 
 ## 9. Resume
 

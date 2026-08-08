@@ -52,7 +52,46 @@ export LUTRIS_GAMEPAD_UI_DISABLE_SUSPEND_SYSTEM=1
 
 # Electron sandbox off (matches heroic-launch; harmless on userns hosts).
 ARGS="--no-sandbox"
-# Allow caller overrides / additions.
+
+# --- Lutris video-capture probe knobs (STORES-PLAN.md §17.3 — the multi-store
+#     blocker). With the steam shell the browser sees m=video:2 (video
+#     negotiates); with the lutris shell on the SAME VM/image it sees m=video:0
+#     → the video webrtcbin never adds a video m-line → audio connects but no
+#     video → "Waiting for stream". lutris-gamepad-ui is an Electron/Chromium
+#     AppImage; the hypothesis is its GPU/EGL init under gamescope headless
+#     either fails silently or composites off the gamescope PipeWire capture
+#     node the way Steam's CEF does. These knobs let a live test A/B the likely
+#     fixes WITHOUT a code change (set per-session via the env the control
+#     plane forwards). All default OFF = current behavior (no regression on
+#     the validated steam shell; the lutris shell is opt-in via
+#     DPAD_STORE_SHELL=lutris).
+#   DPAD_LUTRIS_DISABLE_GPU=1   -> --disable-gpu (software compositing; the
+#       cheapest diagnostic — if this makes m=video:2 appear, the capture bug is
+#       a GPU-init/GL-context issue under gamescope headless).
+#   DPAD_LUTRIS_OZONE=wayland   -> --ozone-platform=wayland --ozone-plugin=wayland
+#       (render to gamescope's Wayland surface directly instead of Xwayland :0).
+#   DPAD_LUTRIS_USE_GL=egl      -> --use-gl=egl --use-angle=gl --enable-features=...
+#       (force the EGL GL backend Chromium uses on the headless X).
+#   DPAD_LUTRIS_EXTRA_ARGS=".." -> append arbitrary Electron flags (escape hatch).
+#   DPAD_LUTRIS_SHELL_ARGS=".." -> FULLY REPLACE the args (the original escape
+#       hatch; takes precedence over the probe knobs above).
+# Also see DPAD_VIDEO_SRC=ximagesrc (an entrypoint-level env, not this wrapper):
+#     flips Selkies capture to the :2 Xvfb bridge (gamescope PipeWire -> videoconvert
+#     -> ximagesink on :2 -> Selkies ximagesrc), which may capture an X-rendering
+#     Electron app even if pipewiresrc doesn't. Set per-session (control plane env).
+if [ "${DPAD_LUTRIS_DISABLE_GPU:-0}" = "1" ]; then
+    ARGS="${ARGS} --disable-gpu"
+fi
+if [ -n "${DPAD_LUTRIS_OZONE:-}" ]; then
+    ARGS="${ARGS} --ozone-platform=${DPAD_LUTRIS_OZONE}"
+fi
+if [ -n "${DPAD_LUTRIS_USE_GL:-}" ]; then
+    ARGS="${ARGS} --use-gl=${DPAD_LUTRIS_USE_GL} --use-angle=gl"
+fi
+if [ -n "${DPAD_LUTRIS_EXTRA_ARGS:-}" ]; then
+    ARGS="${ARGS} ${DPAD_LUTRIS_EXTRA_ARGS}"
+fi
+# Full override takes precedence (the original escape hatch).
 if [ -n "${DPAD_LUTRIS_SHELL_ARGS:-}" ]; then
     ARGS="${DPAD_LUTRIS_SHELL_ARGS}"
 fi

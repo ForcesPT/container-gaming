@@ -558,25 +558,67 @@ system-wide in the Dockerfile (cleanest), OR add the steamrt libSDL3 path to
 `${APPDIR}/usr/lib`. Keyboard/mouse (Selkies Desktop mode) still works without it.
 
 ### 17.5 Resume — next steps (in this order)
-1. **Bake the NVRTC fix into the repo** — add the `extract-nvrtc` block to
-   `container-gaming/entrypoint.sh` (top, after `set -e`) OR the Dockerfile;
-   rebuild + push the image. This unblocks video for BOTH shells on every
-   provider (not just the live-patched Paris VM).
-2. **Fix the Lutris video capture** — investigate why `lutris-gamepad-ui`
-   doesn't render into gamescope's pipewiresrc node. Likely: Electron
-   `--ozone-platform=wayland`/`--enable-features=...`/`--use-gl=...` flags, OR
-   the app renders to Xwayland (try `DPAD_VIDEO_SRC=ximagesrc`, the `:2` Xvfb
-   bridge, which may capture an X-rendering Electron app). Reference:
-   `games-on-whales` runs Lutris with `RUN_SWAY=1`/`RUN_GAMESCOPE=1` — check
-   how they wire capture. Decisive test: `GST_DEBUG=webrtcbin:5` + compare the
-   video pad link/caps between the steam + lutris shells.
-3. **Fix libSDL3** (install libsdl3-0 in the Dockerfile) so the gamepad
-   navigates the Lutris UI (§17.4).
+1. **✅ DONE (2026-08-07) — NVRTC fix baked into the repo.** Added
+   `container-gaming/scripts/extract-nvrtc.sh` (canonical, idempotent,
+   hardened — leaves the bundled libnvrtc on a download failure). The
+   **Dockerfile** (`# --- 4b` block, right after the Selkies tarball install)
+   now bakes `libnvrtc 12.9.86` into `/opt/gstreamer/lib/x86_64-linux-gnu/`
+   at build time with a FATAL `test -f` verify (a silent skip would ship a
+   broken-stream image). The **entrypoint** (`set -o pipefail` → first action)
+   re-runs the script idempotently (`bash /opt/dpadcloud/extract-nvrtc.sh ||
+   true`) — a no-op when baked, but it lets the **entrypoint bind-mount
+   hotfix path** ship the fix to EXISTING images without a Docker Hub rebuild
+   (gotcha #19; the rebuild is the owner-blocked step). Unblocks video for
+   BOTH the steam + lutris shells on every provider (not just the
+   live-patched Paris VM). Next owner step: the image rebuild + push bakes it;
+   until then fresh VMs get it via the hotfix fetch from `main`.
+2. **NEXT — fix the Lutris video capture** (the real multi-store blocker,
+   §17.3). Probe knobs are now wired so a live test can A/B them per-session
+   WITHOUT a code change:
+   - `scripts/lutris-shell` appends Electron flags behind env gates (all
+     default OFF = current behavior, no regression on the validated steam
+     shell): `DPAD_LUTRIS_DISABLE_GPU=1` (`--disable-gpu` — software
+     compositing, the cheapest diagnostic: if `m=video:2` appears, the bug is
+     a GPU-init/GL-context issue under gamescope headless),
+     `DPAD_LUTRIS_OZONE=wayland` (`--ozone-platform=wayland` — render to
+     gamescope's Wayland surface directly), `DPAD_LUTRIS_USE_GL=egl`
+     (`--use-gl=egl --use-angle=gl`), `DPAD_LUTRIS_EXTRA_ARGS=".."` (arbitrary
+     Electron flags), `DPAD_LUTRIS_SHELL_ARGS=".."` (full override, the
+     original escape hatch).
+   - The entrypoint's `as_user` (su) gamescope launch re-exports these into
+     the child env (su strips the parent env — the documented gamepad
+     gotcha; a `LUTRIS_ENV` blob, like `SDL_GP_ENV`).
+   - `dpad-launch-session` forwards them (`-e DPAD_LUTRIS_*`) +
+     `-e DPAD_VIDEO_SRC` (the entrypoint reads `DPAD_VIDEO_SRC` directly) so a
+     manual `DPAD_VIDEO_SRC=ximagesrc dpad-launch-session launch …` (or a
+     worker `/etc/environment` write) flips Selkies to the `:2` Xvfb bridge —
+     which may capture an X-rendering Electron app even if `pipewiresrc`
+     doesn't (§17.3 reference: `games-on-whales` runs Lutris with
+     `RUN_SWAY=1`/`RUN_GAMESCOPE=1`; check their capture wiring).
+   - **Decisive live test:** `DPAD_STORE_SHELL=lutris DPAD_LUTRIS_DISABLE_GPU=1`
+     → does `m=video:2` appear? Then `GST_DEBUG=webrtcbin:5` + compare the
+     video pad link/caps between the steam + lutris shells.
+3. **DEFERRED — libSDL3** (§17.4). NOT urgent yet: you can't navigate what you
+   can't see, and the Lutris shell may yet drop to the B1 custom-picker
+   fallback (§1) if the Electron capture can't be made to work — in which case
+   the SDL3 build is wasted. Re-evaluate once §17.3 is resolved. When it IS
+   needed: SDL3 is NOT in Ubuntu 24.04 (Noble) repos (landed in 24.10 oracular);
+   the Noble-compatible `libsdl3-0` .deb from oracular pulls a newer
+   `libpipewire-0.3-0t64` + `gstreamer1.0-pipewire` → would churn the
+   carefully-pinned GStreamer/Selkies stack (risky). The safe path: build SDL3
+   from source in a `sdl3-builder` stage (mirror `gamescope-builder`),
+   minimal backends (joystick/hidapi/events — the app only needs gamepad INPUT,
+   rendering is Chromium/Electron), install `libSDL3.so.0` to
+   `/usr/lib/x86_64-linux-gnu/` + `ldconfig`. Keyboard/mouse (Selkies Desktop
+   mode) still navigates the Lutris UI without it.
 4. **Revert the live VM debug patches** when the repo fix ships: the VM's
    `/opt/dpadcloud/entrypoint.sh` has the NVRTC block + `GST_DEBUG=webrtcnice:5`
    + the `SELKIES_VIDEO_SRC:-ximagesrc` default change — these are live-patches
    only; the repo entrypoint is the source of truth. `/etc/environment` on the
-   VM was flipped `DPAD_STORE_SHELL=lutris→steam` for the isolation test.
+   VM was flipped `DPAD_STORE_SHELL=lutris→steam` for the isolation test. Once
+   `main` (with this §17.5 #1 + #2 work) is fetched by a fresh VM's
+   `vm-bootstrap`, rm the live-patched `/opt/dpadcloud/entrypoint.sh` so the
+   bind-mount falls back to the baked one (or re-fetch from `main`).
 5. **Revert the worker SSH timeout theory** (§16) — it was NOT the cause; the
    real launch blocker was the bash comment (§17.1). The `readyTimeoutMs`
    bump is still a reasonable robustness improvement but is NOT required.

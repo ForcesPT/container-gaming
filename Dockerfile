@@ -261,6 +261,26 @@ COPY --from=interposer-builder /out/i386/selkies_joystick_interposer_evdev.so /u
 COPY --from=interposer-builder /out/x86_64/dpad_fake_libudev.so /usr/lib/x86_64-linux-gnu/dpad_fake_libudev.so
 COPY --from=interposer-builder /out/i386/dpad_fake_libudev.so /usr/lib/i386-linux-gnu/dpad_fake_libudev.so
 
+# --- 4b. NVRTC fix: replace the bundled libnvrtc 11.4 with 12.9.86 ---
+#    The Selkies GStreamer tarball above ships libnvrtc 11.4.152, which can't
+#    JIT for sm_89 (L4/Ada) or sm_120 (Blackwell) → cudaconvert's NVRTC JIT
+#    fails → the video pipeline starts but produces no capturable video
+#    (webrtcbin never adds a video m-line; browser stuck on "Waiting for
+#    stream"). 12.9.86 JITs for both. Canonical fix from the official Selkies
+#    `selkies-gstreamer-entrypoint.sh` (capped to 12.9 for host CUDA>=13 per
+#    GStreamer issue #4655). Idempotent + tolerant (leaves the bundled lib on
+#    failure); the `test -f` makes the BUILD fail loud if the bake didn't land
+#    (a silent skip would ship a broken-stream image). STORES-PLAN.md §17.2,
+#    PROJECT_STATE.md §6 #10. Also COPY'd to /opt/dpadcloud/ below so the
+#    entrypoint can re-run it (no-op when baked) — lets the entrypoint bind-mount
+#    hotfix path ship the fix to EXISTING images without a Docker Hub rebuild.
+COPY scripts/extract-nvrtc.sh /tmp/extract-nvrtc.sh
+RUN sed -i 's/\r$//' /tmp/extract-nvrtc.sh && chmod +x /tmp/extract-nvrtc.sh \
+    && bash /tmp/extract-nvrtc.sh \
+    && test -f /opt/gstreamer/lib/x86_64-linux-gnu/libnvrtc.so.12.9.86 \
+        || { echo "FATAL: libnvrtc 12.9.86 bake failed — video would be broken"; exit 1; } \
+    && rm -f /tmp/extract-nvrtc.sh
+
 # Selkies input router (.pth, auto-loaded; no-op when DPAD_INPUT_DISPLAY unset —
 # only the gamescope path sets it). Kept in base so both images share it.
 COPY scripts/dpad_input_patch.py scripts/dpad_input_patch.pth /usr/local/lib/python3.12/dist-packages/
@@ -326,7 +346,7 @@ RUN mkdir -p /etc/X11 && \
 # --- 11. COPY configs + entrypoint + common launcher scripts + display-driver installer ---
 COPY configs/ ${HOME}/.config/
 COPY configs/xorg/xorg.conf.template /opt/dpadcloud/xorg.conf.template
-COPY entrypoint.sh healthcheck.sh scripts/evdev_bridge.py /opt/dpadcloud/
+COPY entrypoint.sh healthcheck.sh scripts/evdev_bridge.py scripts/extract-nvrtc.sh /opt/dpadcloud/
 # vgl-steam / proton-wined3d / vgl-test = the Xvfb+VGL debug launchers (kept as
 # manual debug fallbacks). dpad-launch (the deprecated Vast steamcmd headless
 # launcher, no Steam UI — docs/PROJECT_STATE.md §7) is NO LONGER baked in.
@@ -336,10 +356,11 @@ COPY scripts/vgl-steam scripts/proton-wined3d scripts/vgl-test scripts/install-d
 RUN sed -i 's/\r$//' /opt/dpadcloud/entrypoint.sh /opt/dpadcloud/healthcheck.sh \
         /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \
         /opt/dpadcloud/install-display-drivers /opt/dpadcloud/evdev_bridge.py \
+        /opt/dpadcloud/extract-nvrtc.sh \
         ${HOME}/.config/sunshine/sunshine.conf 2>/dev/null || true && \
     chmod +x /opt/dpadcloud/*.sh \
         /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \
-        /opt/dpadcloud/install-display-drivers && \
+        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/extract-nvrtc.sh && \
     chown -R ${USERNAME}:${USERNAME} ${HOME}/.config && \
     rm -f ${HOME}/.config/autostart/*.desktop 2>/dev/null || true
 

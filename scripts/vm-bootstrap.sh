@@ -577,6 +577,21 @@ ensure_image() {
         rm -f /opt/dpadcloud/evdev_bridge.py 2>/dev/null || true
         log "evdev_bridge.py fetch failed — evdev mode will use the image's baked bridge"
     fi
+    # Same hotfix path for extract-nvrtc.sh (the entrypoint's FIRST action calls
+    # it to swap the bundled libnvrtc 11.4 → 12.9.86 so cudaconvert can JIT for
+    # sm_89 L4/Ada + sm_120 Blackwell — without it the video pipeline produces no
+    # capturable video). Lets the NVRTC fix ship to EXISTING (pre-bake) images
+    # without an image rebuild + Docker Hub push. Best-effort: if the fetch
+    # fails, the entrypoint runs the image's baked script (a no-op on a baked
+    # image; on a stale image the boot continues with the NVRTC error).
+    if curl -fsSL https://raw.githubusercontent.com/ForcesPT/container-gaming/main/scripts/extract-nvrtc.sh \
+        -o /opt/dpadcloud/extract-nvrtc.sh 2>/dev/null; then
+        chmod +x /opt/dpadcloud/extract-nvrtc.sh 2>/dev/null || true
+        log "extract-nvrtc.sh fetched to /opt/dpadcloud (bind-mountable hotfix path)"
+    else
+        rm -f /opt/dpadcloud/extract-nvrtc.sh 2>/dev/null || true
+        log "extract-nvrtc.sh fetch failed — entrypoint will use the image's baked script"
+    fi
 }
 
 # -----------------------------------------------------------------------------

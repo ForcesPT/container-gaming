@@ -263,6 +263,14 @@ launch() {
     # bridge hotfixes ship without an image rebuild.
     [ -f /opt/dpadcloud/evdev_bridge.py ] \
         && entry_mount+=( -v /opt/dpadcloud/evdev_bridge.py:/opt/dpadcloud/evdev_bridge.py:ro )
+    # Same hotfix path for extract-nvrtc.sh (the entrypoint's FIRST action calls
+    # it to swap the bundled libnvrtc 11.4 → 12.9.86 so cudaconvert can JIT for
+    # sm_89 L4/Ada + sm_120 Blackwell; vm-bootstrap fetches it to
+    # /opt/dpadcloud/extract-nvrtc.sh). Lets the NVRTC fix ship to EXISTING
+    # (pre-bake) images without an image rebuild. A no-op on a baked image
+    # (the MARK check short-circuits).
+    [ -f /opt/dpadcloud/extract-nvrtc.sh ] \
+        && entry_mount+=( -v /opt/dpadcloud/extract-nvrtc.sh:/opt/dpadcloud/extract-nvrtc.sh:ro )
 
     # Multi-store shell (STORES-PLAN.md). DPAD_STORE_SHELL=lutris switches the
     # gamescope session from `steam -gamepadui` to the lutris-shell wrapper
@@ -295,6 +303,12 @@ launch() {
         -e DPAD_GAMEPAD_INTERPOSER="${DPAD_GAMEPAD_INTERPOSER:-}" \
         -e DPAD_STORE_SHELL="${DPAD_STORE_SHELL:-}" \
         -e DPAD_STORES="${DPAD_STORES:-}" \
+        -e DPAD_VIDEO_SRC="${DPAD_VIDEO_SRC:-}" \
+        -e DPAD_LUTRIS_DISABLE_GPU="${DPAD_LUTRIS_DISABLE_GPU:-}" \
+        -e DPAD_LUTRIS_OZONE="${DPAD_LUTRIS_OZONE:-}" \
+        -e DPAD_LUTRIS_USE_GL="${DPAD_LUTRIS_USE_GL:-}" \
+        -e DPAD_LUTRIS_EXTRA_ARGS="${DPAD_LUTRIS_EXTRA_ARGS:-}" \
+        -e DPAD_LUTRIS_SHELL_ARGS="${DPAD_LUTRIS_SHELL_ARGS:-}" \
         "$image" || { err "docker run $name failed"; return 1; }
     log "container $name launched (coturn ${port}/udp, selkies ${selkies_port}->16100, login dpad/${pass:0:4}…)"
 

@@ -10,6 +10,17 @@
 
 set -o pipefail
 
+# NVRTC fix: ensure libnvrtc 12.9.86 is in the GStreamer lib dir before
+# selkies-gstreamer starts (the bundled 11.4 can't JIT for sm_89 L4/Ada or
+# sm_120 Blackwell → cudaconvert's NVRTC JIT fails → no capturable video →
+# browser stuck on "Waiting for stream"). Idempotent + tolerant: a no-op if
+# the image baked it (Dockerfile 4b) or a prior run already installed it; on a
+# download failure it leaves the bundled lib in place (boot still works, just
+# with the NVRTC error). Ships to EXISTING images via the entrypoint bind-mount
+# hotfix path (no Docker Hub rebuild). STORES-PLAN.md §17.2/§17.5, PROJECT_STATE.md
+# §6 #10.
+bash /opt/dpadcloud/extract-nvrtc.sh 2>/dev/null || true
+
 echo "=========================================="
 echo "  DpadCloud Gaming Container Booting..."
 echo "=========================================="
@@ -757,6 +768,16 @@ start_gamescope_session() {
         SHELL_PROC="steam"
     fi
 
+    # Re-export the Lutris capture-probe knobs into the gamescope child env.
+    # `as_user` (su) strips the parent env (the documented gamepad gotcha —
+    # LD_PRELOAD/SDL_JOYSTICK_* are re-exported in the launch line below), so
+    # the DPAD_LUTRIS_* vars the lutris-shell wrapper reads (STORES-PLAN.md §17.3
+    # probe knobs — disable-gpu / ozone / use-gl / extra-args / shell-args) must
+    # be re-exported here or they never reach the wrapper. Empty-safe: an unset
+    # var exports as '' which the wrapper's `${VAR:-}` / `[ -n "${VAR:-}" ]`
+    # checks treat as unset. No-op for the steam shell (the wrapper isn't exec'd).
+    local LUTRIS_ENV="DPAD_LUTRIS_DISABLE_GPU='${DPAD_LUTRIS_DISABLE_GPU:-}' DPAD_LUTRIS_OZONE='${DPAD_LUTRIS_OZONE:-}' DPAD_LUTRIS_USE_GL='${DPAD_LUTRIS_USE_GL:-}' DPAD_LUTRIS_EXTRA_ARGS='${DPAD_LUTRIS_EXTRA_ARGS:-}' DPAD_LUTRIS_SHELL_ARGS='${DPAD_LUTRIS_SHELL_ARGS:-}'"
+
     # Bind the user's persistent library volume (if mounted) BEFORE bootstrapping
     # Steam — the library subpaths (steamapps/config/userdata) must point at the
     # volume so games + the login persist across sessions (V2-PLAN §5). No-op
@@ -933,7 +954,7 @@ start_gamescope_session() {
         echo "[*] Gamepad: classic joystick path (default)"
     fi
     echo "[*] Launching gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}"
-    as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}" >/tmp/gamescope-steam.log 2>&1 &
+    as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} ${LUTRIS_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}" >/tmp/gamescope-steam.log 2>&1 &
     local gs_pid=$!
 
     # Steam takes ~30-40s to launch through pressure-vessel + steamwebhelper
@@ -974,7 +995,7 @@ start_gamescope_session() {
             echo "[*] WARNING: gamescope died — restarting session..."
             kill $gs_pid 2>/dev/null; pkill -9 -x steam 2>/dev/null; pkill -9 -x steamwebhelper 2>/dev/null; pkill -9 -f lutris-gamepad-ui 2>/dev/null; sleep 2
             rm -f ${USER_HOME}/.steam/steam/steam.pid ${USER_HOME}/.steam/debian-installation/steam.pid 2>/dev/null
-            as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}" >/tmp/gamescope-steam.log 2>&1 &
+            as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} ${LUTRIS_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}" >/tmp/gamescope-steam.log 2>&1 &
             gs_pid=$!
             # the old selkies was bound to the dead gamescope's PipeWire node →
             # it'd stream black/garbage; kill it so the supervisor (below)
