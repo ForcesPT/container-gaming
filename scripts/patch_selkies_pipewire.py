@@ -154,6 +154,8 @@ FPS_NEW = (
     '                self.framerate_caps = Gst.caps_from_string("video/x-raw,format=BGRx")\n'
     '                self.framerate_caps.set_value("framerate", Gst.Fraction(self.framerate, 1))\n'
     '                self.framerate_capsfilter.set_property("caps", self.framerate_caps)\n'
+    '            elif os.environ.get("DPAD_VIDEO_SRC", "") == "waylanddisplaysrc":\n'
+    '                pass   # CUDAMemory caps set in build_video_pipeline; clobbering breaks the link\n'
     '            else:\n'
     '                self.ximagesrc_caps = Gst.caps_from_string("video/x-raw")\n'
     '                self.ximagesrc_caps.set_value("framerate", Gst.Fraction(self.framerate, 1))\n'
