@@ -614,9 +614,12 @@ confirmed.
 
 ```bash
 cd dpadplay/container-gaming && git pull
-# This doc = the decision. Implementation starts at §8 step 1 (the probe) +
-# step 2 (the spike). Nothing in the image changes until the spike validates
-# the compositor→Selkies path on one VM. The default stays
+# This doc = the decision. §8 step 1 (the probe) is DONE (2026-08-08, OVH L4):
+# DPAD_LUTRIS_DISABLE_GPU=1 did NOT fix §17.3 → the pivot is strictly necessary.
+# §17.4 (libSDL3) is SHIPPED (sdl3-builder, commit af5bda6, image b403937b on
+# Docker Hub) + live-validated (sdl_manager "SDL3 initialized! libSDL3.so.0").
+# START at §8 step 2 (the spike). Nothing else in the image changes until the
+# spike validates the compositor→Selkies path on one VM. The default stays
 # DPAD_COMPOSITOR=gamescope (no regression) until the parallel-run validation.
 #
 # Spike build:
@@ -638,3 +641,80 @@ cd dpadplay/container-gaming && git pull
 #   sdl3-builder stage for gamepad nav → store launchers via gamescope-as-client
 #   gamescope-as-client (XWayland) → flip default → inputtino migration (last).
 ```
+
+## 12. Reproducible test-VM provisioning (OVH API, no website)
+
+The 2026-08-08 validation provisioned a raw OVH Gravelines L4 **directly via the
+OVH API** (not through the dpadplay website) — the clean way to test an image
+change in isolation. The creds + the adapter live in the worker container on
+the VPS. From the build host (with VPS SSH access via the orchestrator key):
+
+```bash
+# 0. Deploy the read-only ops helper into the worker container (one-time):
+scp cloud/scripts/ovh-ops.mjs root@187.124.187.252:/tmp/ovh-ops.mjs
+ssh root@187.124.187.252 'docker cp /tmp/ovh-ops.mjs dpadplay-worker-1:/tmp/ovh-ops.mjs'
+# Pre-flight (read-only): confirm creds + l4-90 stock + no leftover instance:
+ssh root@187.124.187.252 'docker exec dpadplay-worker-1 node /tmp/ovh-ops.mjs time;
+  docker exec dpadplay-worker-1 node /tmp/ovh-ops.mjs flavors | grep -A3 l4-90;
+  docker exec dpadplay-worker-1 node /tmp/ovh-ops.mjs instances'
+
+# 1. Create the VM via the adapter (run in the worker container; pipe the script
+#    to `node -` so it inherits the OVH_* env):
+ssh root@187.124.187.252 'docker exec -i dpadplay-worker-1 node -' <<'NODE'
+const { createOvhAdapter } = require('/repo/packages/providers/dist/index.js');
+(async () => {
+  const a = createOvhAdapter({
+    appKey: process.env.OVH_APP_KEY, appSecret: process.env.OVH_APP_SECRET,
+    consumerKey: process.env.OVH_CONSUMER_KEY, serviceName: process.env.OVH_SERVICE_NAME,
+    sshPublicKey: process.env.OVH_SSH_PUBLIC_KEY, image: process.env.OVH_IMAGE,
+  });
+  const c = await a.createVm({ region:'gravelines', gpuClass:'L4', tier:'standard',
+    sshPublicKey: process.env.OVH_SSH_PUBLIC_KEY, label:'dpadtest-spike' });
+  console.log('vmId=' + c.vmId);
+  const t0=Date.now();
+  while (Date.now() < t0+6*60*1000) {
+    const v = await a.getVm(c.vmId);
+    console.log('status=' + v.status + ' ip=' + (v.publicIp||'(none)'));
+    if (v.publicIp) { console.log('READY ip=' + v.publicIp); process.exit(0); }
+    await new Promise(r=>setTimeout(r,10000));
+  }
+  process.exit(2);
+})().catch(e=>{ console.error('FATAL '+(e&&e.message||e)); process.exit(1); });
+NODE
+
+# 2. SSH to the VM as `ubuntu` with the orchestrator key (decode VAST_SSH_PRIVATE_KEY
+#    from cloud/.env to a file, BINARY mode so LF line endings are preserved):
+python -c "import base64,os; v=open('cloud/.env').read(); [print(os.path.join(os.path.expanduser('~'),'dpad_orchestrator_key')) or open(os.path.join(os.path.expanduser('~'),'dpad_orchestrator_key'),'wb').write(base64.b64decode(l.split('=',1)[1])) for l in v.splitlines() if l.startswith('VAST_SSH_PRIVATE_KEY=')]"
+KEY="$HOME/dpad_orchestrator_key"; chmod 600 "$KEY"   # pubkey must match OVH_SSH_PUBLIC_KEY (dpadplay-orchestrator)
+IP=<the-IP-from-step-1>
+ssh -i "$KEY" ubuntu@$IP 'nvidia-smi --query-gpu=name,driver_version --format=csv,noheader'
+
+# 3. vm-bootstrap (host setup + pulls the image + MPS) — write the session env
+#    to /etc/environment first so the systemd oneshot sees it:
+ssh -i "$KEY" ubuntu@$IP 'sudo bash -c "grep -q DPAD_GAMESCOPE /etc/environment 2>/dev/null || echo DPAD_GAMESCOPE=1 >> /etc/environment; grep -q DPAD_STORE_SHELL /etc/environment 2>/dev/null || echo DPAD_STORE_SHELL=lutris >> /etc/environment; grep -q DPAD_SELKIES_BIND /etc/environment 2>/dev/null || echo DPAD_SELKIES_BIND=0.0.0.0 >> /etc/environment"; sudo mkdir -p /opt/dpadcloud; sudo curl -fsSL https://raw.githubusercontent.com/ForcesPT/container-gaming/main/scripts/vm-bootstrap.sh -o /opt/dpadcloud/vm-bootstrap.sh; sudo chmod +x /opt/dpadcloud/vm-bootstrap.sh; sudo /opt/dpadcloud/vm-bootstrap.sh install'
+# follow: ssh -i "$KEY" ubuntu@$IP 'sudo journalctl -u dpadcloud-bootstrap -f'
+# ...ends with DPAD_VM_READY + the image digest (confirm it matches the push).
+
+# 4. Launch a session container manually (vm-bootstrap leaves the VM warm, 0
+#    containers; the worker normally launches via dpad-launch-session):
+ssh -i "$KEY" ubuntu@$IP 'sudo docker run -d --name dpad-0 --runtime=nvidia --cap-add SYS_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=0 --device /dev/uinput --shm-size=2g --ulimit nofile=1048576:1048576 -p 3478:3478/udp -p 16100:16100 -e DPAD_GAMESCOPE=1 -e DPAD_STORE_SHELL=lutris -e DPAD_SELKIES_BIND=0.0.0.0 -e DPAD_TUNNEL=ssh -e DPAD_COTURN_PORT=3478 -e DPAD_TURN_PUBLIC_IP='$IP' -e DPAD_TURN_UDP_EXTERNAL_PORT=3478 -e SELKIES_BASIC_AUTH_USER=dpad -e SELKIES_BASIC_AUTH_PASSWORD=testpass forcespt/dpadcloud-gaming:dpad-SteamOS'
+# stream: http://$IP:16100  (login dpad/testpass). logs: sudo docker logs dpad-0
+
+# 5. Tear down (stop billing; OVH removes the boot disk with the instance):
+ssh root@187.124.187.252 'docker exec -i dpadplay-worker-1 node -' <<'NODE'
+const { createOvhAdapter } = require('/repo/packages/providers/dist/index.js');
+(async () => {
+  const a = createOvhAdapter({ appKey:process.env.OVH_APP_KEY, appSecret:process.env.OVH_APP_SECRET, consumerKey:process.env.OVH_CONSUMER_KEY, serviceName:process.env.OVH_SERVICE_NAME, sshPublicKey:process.env.OVH_SSH_PUBLIC_KEY, image:process.env.OVH_IMAGE });
+  await a.destroyVm('<vmId-from-step-1>');
+  console.log('destroyed');
+})().catch(e=>{ console.error('FATAL '+(e&&e.message||e)); process.exit(1); });
+NODE
+ssh root@187.124.187.252 'docker exec dpadplay-worker-1 node /tmp/ovh-ops.mjs instances'   # [] = gone
+```
+
+Key facts for the spike: `l4-90` quota=1 (one L4 at a time); image
+`Ubuntu 24.04 - NVIDIA - v580` ships the open R580 driver (no driver-swap
+reboot — `ensure_driver_580` is a no-op); TCP 16100 + UDP 3478 are open in the
+OVH GRA11 security group (Selkies + coturn reach the browser direct); the
+orchestrator SSH key (`VAST_SSH_PRIVATE_KEY` in `cloud/.env`, base64 PEM) is
+authorized on the VM as `ubuntu` with NOPASSWD sudo.

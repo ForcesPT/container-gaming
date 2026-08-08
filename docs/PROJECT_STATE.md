@@ -24,6 +24,45 @@
 > fix is likely moot on the new CUDAMemory path (kept as fallback). Phased
 > plan (probe → spike → shell → store launchers → flip default → inputtino).
 >
+> **2026-08-08 session (libSDL3 bake + WAYLAND-ARCHITECTURE decision + OVH live
+> validation): the §17.4 gamepad-nav fix is SHIPPED + live-validated; the §17.3
+> probe confirms the `gst-wayland-display` pivot is strictly necessary.**
+> - **Built + pushed** a new `:dpad-SteamOS` image (Docker Hub digest
+>   `sha256:b403937ba97ddea54856502cf2b9d93119424bb1885175c05db4d541ffe8c0b5`)
+>   with a new `sdl3-builder` Dockerfile stage: SDL3 3.2.28 from source, minimal
+>   backends (joystick/hidapi/events; video/audio/render OFF;
+>   `SDL_UNIX_CONSOLE_BUILD=ON` skips the no-X11/Wayland FATAL), installed as
+>   `libSDL3.so.0` (SDL3's SOVERSION is 0, deliberate) → fixes §6 #12 / §17.4:
+>   `lutris-gamepad-ui`'s koffi `dlopen("libSDL3.so.0")` now resolves (it lived
+>   only in Steam's runtime dirs before → gamepad wouldn't navigate the Lutris
+>   UI). Committed to `main` as `af5bda6` (Dockerfile + WAYLAND-ARCHITECTURE.md +
+>   the §6/§17 cross-refs).
+> - **Provisioned an OVH Gravelines L4 directly via the OVH API** (NOT the
+>   website — `createOvhAdapter` from the worker container's env; VM
+>   `188.165.71.21`, driver 580.159.03, image `b403937b…`). `vm-bootstrap.sh
+>   install` → `DPAD_VM_READY`; manual `docker run -e DPAD_STORE_SHELL=lutris …`.
+> - **§17.4 FIXED (live):** `lutris-shell.log` → `[sdl_manager] SDL3
+>   initialized! libSDL3.so.0` (vs the old `Unable to load libSDL3.so.0`).
+>   `lutris-gamepad-ui.bin` running + the Lutris wrapper querying the library.
+> - **§17.3 probe (§8 step 1) RUN — `DPAD_LUTRIS_DISABLE_GPU=1` did NOT fix
+>   it:** browser still "Waiting for stream"; gamescope's PipeWire stream
+>   oscillated paused↔streaming + the `gamescope:capture_1` node was active,
+>   but Selkies' `pipewiresrc → webrtcbin` produced no video track (a parallel
+>   `gst-launch pipewiresrc` grab captured 0 frames in 14s). → the bug is
+>   fundamental to gamescope-headless + Electron, NOT a GPU-init issue → **the
+>   `gst-wayland-display` pivot (§8 step 2) is strictly necessary.**
+> - **VM torn down** (`adapter.destroyVm`; `[]` instances, no orphan, billing
+>   stopped). The spike will rebuild the image (add `wayland-display-builder`)
+>   + provision a fresh OVH L4.
+> - **Next (§8 step 2, the spike):** build `gst-wayland-display` (Rust + cargo-c
+>   + Smithay, `cuda` feature) + `gst-cuda-1.0` + `inputtino` from source; wire
+>   `DPAD_COMPOSITOR=wayland-display` in the entrypoint (default stays
+>   `gamescope` = no regression) with `waylanddisplaysrc ! CUDAMemory ! nvh264enc
+>   ! webrtcbin`; rebuild + push; fresh OVH L4; validate the Lutris shell
+>   **streams video** (retires §17.3) + N-on-N (2 compositors on 1 GPU) +
+>   CUDAMemory zero-copy + NVRTC-error=0-without-extraction. With libSDL3
+>   already shipped, the Lutris shell will then have BOTH video + gamepad nav.
+>
 > **2026-08-04 session (gamepad): the evdev gamepad path — VALIDATED
 > END-TO-END with a real controller on OVH Gravelines L4 (Steam Big Picture
 > navigates); two blocking bugs found + fixed; shipped in the 2026-08-05 image
