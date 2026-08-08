@@ -1443,3 +1443,133 @@ cd dpadplay/container-gaming && git pull
 # CUDAMemory zero-copy (§13.3 follow-up, NOT blocking): swap the RGBx capture
 # path for link_pads_full(no-caps-check) OR PR #35 NV12 DMABuf->CUDAMemory.
 ```
+
+## 16. Browser-test session 2026-08-08 — 2 more bugs found (1 fixed), gamescope-wayland client drops
+
+> **Followed up the §15 validation by opening the browser path + diagnosing why
+> gamescope `--backend wayland` died.** Found + fixed a second EGL-vendor bug
+> (the gamescope-as-client crash was NOT the §15.4 Nvidia-driver caveat — it was
+> the Mesa EGL vendor override leaking into the wayland-client launch). After
+> the fix, gamescope gets through Wayland-backend init + Xwayland + Steam launch,
+> THEN hits the genuine §13.14 gamescope-wayland-client connection-drop
+> (`IWaitable hung up`), which is the remaining layer. Commit `21dfb1e`. **VM
+> torn down** (no orphan, billing stopped).
+
+### 16.1 The browser-test result (with the open driver)
+
+Reprovisioned a fresh OVH Gravelines L4 (`dba62614-…` @ `91.134.95.115`).
+The first gamescope crash log showed the **exact `PROJECT_STATE.md` §5 EGL
+failure**:
+
+```
+libEGL warning: pci id for fd 7: 10de:27b8, driver (null)
+libEGL warning: egl: failed to create dri2 screen
+[gamescope] Error: waitable: IWaitable hung up. Aborting.
+```
+
+**Initial (wrong) hypothesis:** OVH's `Ubuntu 24.04 - NVIDIA - v580` ships the
+**proprietary** 580 (`nvidia-dkms-580` / `nvidia-driver-580`, `license: NVIDIA` —
+NOT `-open`), the same black-screen class as Scaleway §5. So I installed
+`nvidia-driver-580-open` + rebooted → the open kernel module loaded
+(`license: Dual MIT/GPL`, `580.178.04`). **But the crash persisted** — so it
+was NOT the proprietary-vs-open variant (unlike Scaleway). The open driver is
+still the right choice (the compositor's EGL/GBM glamor needs it), but it was
+not the gamescope crash cause.
+
+### 16.2 The real bug — the Mesa EGL vendor override leaked into gamescope (FIXED)
+
+The container's `eglinfo` with the NVIDIA ICD forced worked perfectly
+(`EGL vendor: NVIDIA`, `renderer: NVIDIA L4`). But gamescope's launch did NOT
+force it → Mesa EGL got picked → `driver (null)`. Root cause: the entrypoint's
+Xvfb path exports `__EGL_VENDOR_LIBRARY_FILENAMES=50_mesa.json` globally (so
+Xvfb doesn't segfault on NVIDIA EGL GBM) — + the wayland-client gamescope
+launch (`_launch_gs_wayland`) inherited it. Mesa EGL can't match the L4 PCI id
+→ `failed to create dri2 screen` → Steam's CEF can't init → gamescope aborts.
+
+**Fix (commit `21dfb1e`):** in `_launch_gs_wayland`, `unset
+__EGL_VENDOR_LIBRARY_FILENAMES` + force the NVIDIA EGL vendor
+(`__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json`).
+The open R580 EGL/GBM glamor path works off the render node (§13.14 confirmed
+EGL init). Ships via the entrypoint bind-mount hotfix path (no image rebuild —
+vm-bootstrap fetches entrypoint.sh from `main`). **Validated:** after the fix
+the `libEGL warning: driver (null)` / `dri2 screen` errors are GONE + gamescope
+gets through Wayland-backend init + Xwayland :0 + Steam launch.
+
+### 16.3 The remaining layer — gamescope-wayland client connection drop
+
+With the EGL fix, gamescope's crash log now shows a **different, later failure**:
+
+```
+[gamescope] wlserver: Running compositor on wayland display 'gamescope-0'
+[gamescope] wlserver: Starting Xwayland on :0
+steam.sh[729]: Running Steam on ubuntu 24.04 64-bit
+[gamescope] Error: waitable: IWaitable hung up. Aborting.
+(EE) failed to read Wayland events: Connection reset by peer
+Aborted (core dumped)
+```
+
+gamescope's Wayland backend inits ("Post-Initted Wayland backend"), its own
+wlserver starts, Xwayland :0 comes up, Steam launches — then gamescope's
+client connection to the gst-wayland-display compositor (`wayland-1`) **drops**
+(`Connection reset by peer`). The compositor side is solid throughout
+(selkies log: `EGL hardware-acceleration enabled`, full GL extension list,
+`Supported DMA_formats` populated, `Creating new wl_output HEADLESS-1`).
+
+This is the genuine **§13.14 caveat** verbatim: *"gamescope `--backend wayland`
+(run as a Wayland client) is less battle-tested than `--backend headless`...
+the games-on-whales maintainers note gamescope 'may be unstable with some
+Nvidia driver versions.'"* The §13.14 spike (`gamescope --backend wayland --
+sleep 30`) didn't hit it because `sleep` doesn't render/commit surfaces; Steam's
+CEF does, which is what triggers the connection drop. **The compositor +
+capture + webrtcbin pipeline (the §17.3 gate) is proven** — this is purely the
+gamescope-as-Wayland-client stability layer.
+
+### 16.4 The two documented fallbacks for the client stability (§13.14)
+
+1. **sway as the Wayland client** (the games-on-whales default, `RUN_SWAY=1`):
+   sway provides XWayland to the app too, + is more stable as a Wayland client
+   of gst-wayland-display than gamescope on Nvidia. Add a
+   `DPAD_WAYLAND_CLIENT=gamescope|sway` gate; the entrypoint launches
+   `sway` (with `WAYLAND_DISPLAY=wayland-N`) instead of `gamescope --backend
+   wayland`. Same compositor capture; different XWayland provider.
+2. **A gamescope rebuild** with a newer gamescope tag (the image's gamescope is
+   3.16.25) — upstream may have fixed the Wayland-client connection issue. Lower-
+   priority (a build change); try sway first.
+
+### 16.5 Resume (the client-stability layer)
+
+```bash
+cd dpadplay/container-gaming && git pull
+# §16: the EGL-vendor bug is FIXED (21dfb1e, ships via the entrypoint hotfix).
+# gamescope --backend wayland now reaches Steam launch before the connection drop.
+#
+# NEXT — the gamescope-wayland client stability (§16.3/§16.4):
+# 1. Provision an OVH L4 (§12). vm-bootstrap.sh install (fetches the EGL-fixed entrypoint).
+#    Confirm the open R580 (vm-bootstrap's ensure_driver_580 must now ALSO swap the
+#    plain proprietary nvidia-driver-580 — NOT just -580-server; the has_proprietary_580
+#    gate matches -580-server only, so OVH's plain -580 isn't swapped — OPEN ITEM §16.6).
+# 2. VM_IP=<ip> SHELL=steam bash /tmp/wayland-display-probe.sh
+# 3. Connect a peer (selkies-sdp-probe.py) → gamescope launches → opens the browser
+#    at http://$VM_IP:16100 to SEE the compositor surface (black until a client renders).
+# 4. Try the sway fallback (§16.4 #1): DPAD_WAYLAND_CLIENT=sway gate in the entrypoint
+#    (launch sway with WAYLAND_DISPLAY=wayland-N instead of gamescope --backend wayland).
+# 5. If sway stays up + Steam renders, the browser shows Steam Big Picture (the full
+#    multi-store path unblocked: §8 step 3 Lutris shell → §8 step 4 store launchers).
+```
+
+### 16.6 Open item — `ensure_driver_580` doesn't swap OVH's plain proprietary 580
+
+OVH's `Ubuntu 24.04 - NVIDIA - v580` ships `nvidia-dkms-580` + `nvidia-driver-580`
+(the plain proprietary variant, `license: NVIDIA` — no `-server`, no `-open`).
+`vm-bootstrap.sh`'s `has_proprietary_580` gate matches `-580-server` only (the
+Scaleway variant), so on OVH the gate returns false → `ensure_driver_580` skips
+the swap → the proprietary 580 stays. The compositor's EGL/GBM glamor REQUIRES
+the open variant (the proprietary `dri2 screen` failure, §5) — so OVH
+wayland-display sessions boot on the proprietary driver + hit the EGL crash
+UNLESS the open swap runs. **Fix (deferred):** extend `has_proprietary_580` to
+also match the plain `nvidia-(dkms|driver)-580$` (non-open, non-server) +
+purge it before installing `-open` (resolves the `nvidia-kernel-common-580`
+conflict, same as the Scaleway purge). The manual `apt install
+nvidia-driver-580-open` + reboot worked on this VM (the open module loaded,
+`license: Dual MIT/GPL`), so the swap is viable — it just isn't automated for
+OVH yet.
