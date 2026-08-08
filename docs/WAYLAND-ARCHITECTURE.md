@@ -642,23 +642,33 @@ cd dpadplay/container-gaming && git pull
 # §17.4 (libSDL3) is SHIPPED (sdl3-builder, commit af5bda6, image b403937b on
 # Docker Hub) + live-validated (sdl_manager "SDL3 initialized! libSDL3.so.0").
 #
-# §8 step 2 BUILD HALF — DONE + VALIDATED 2026-08-08: the wayland-display-builder
-# stage is committed to Dockerfile (orphan; after `base`, before `vast-docker`)
-# + `docker build --target wayland-display-builder` succeeds: libwayland 1.23.1
-# from source + the gst-wayland-display plugin (cuda feature) compile + the .so
-# loads (gst-inspect shows all 5 properties + the CUDAMemory caps). See §13.9–13.13.
+# §8 step 2 BUILD + COMPOSITOR-CAPTURE HALVES — DONE + LIVE-VALIDATED 2026-08-08:
+# the wayland-display-builder stage is committed to Dockerfile (orphan) + builds;
+# on a real OVH L4 (open R580) the compositor starts on the render node (NO DRM
+# master → N-on-N), EGL/GBM glamor works, CUDAMemory zero-copy engages, nvh264enc
+# inits, NVRTC-error=0 (extract-nvrtc.sh redundant here), + the wayland socket is
+# created (client-discovery via polling works). See §13.13–§13.14. The prod image
+# already has libwayland 1.24.0 → vast-vm needs only the plugin .so COPY'd.
 #
-# §8 step 2 LIVE HALF — NEXT: wire the stage into vast-vm (COPY the plugin .so +
-# the libwayland 1.23 .so to a runtime dir on LD_LIBRARY_PATH) + add the entrypoint
-# DPAD_COMPOSITOR=wayland-display gate (default gamescope = no regression) + the
-# selkies build_video_pipeline patch (the waylanddisplaysrc branch, mirroring
-# patch_selkies_pipewire.py) + a bus watch for the `wayland.src` Application msg
-# (→ WAYLAND_DISPLAY for the gamescope-as-client launch). Then provision a fresh
-# OVH L4 + validate: Steam via `gamescope --backend wayland -- steam -gamepadui`
-# streams; N-on-N (2+3 on 1 GPU); CUDAMemory zero-copy engages; NVRTC-error=0
-# WITHOUT extract-nvrtc.sh (validates the §7 NVRTC-moot hypothesis); open-driver
-# EGL init clean (no #379 panic). Default stays DPAD_COMPOSITOR=gamescope until the
-# parallel-run validation.
+# §8 step 2 REMAINING (the client + Selkies + browser half) — NEXT:
+#   1. gamescope has NO `--backend wayland` in the current build (only drm+sdl).
+#      Rebuild gamescope with the wayland backend (meson option) OR use sway as
+#      the XWayland-providing Wayland client (Wolf's RUN_SWAY=1 model). Native-
+#      Wayland apps (Lutris --ozone-platform=wayland) connect directly.
+#   2. Wire vast-vm: COPY --from=wayland-display-builder the plugin .so to the
+#      gstreamer plugin dir (the prod libwayland 1.24.0 suffices — no libwayland
+#      COPY needed). Add `--device /dev/dri` to the container launch (the CDI
+#      /dev/dri group perms block the compositor's raw render-node open, §13.14).
+#   3. patch_selkies_waylanddisplay.py (mirror patch_selkies_pipewire.py): the
+#      waylanddisplaysrc cuda-device-id=$CUDA_ID ! CUDAMemory ! nvh264enc branch
+#      in build_video_pipeline (gated on DPAD_COMPOSITOR=wayland-display).
+#   4. entrypoint DPAD_COMPOSITOR=wayland-display gate (default gamescope = no
+#      regression): start the selkies pipeline (waylanddisplaysrc), poll
+#      $XDG_RUNTIME_DIR/wayland-* for the socket, launch the client
+#      (gamescope-as-Wayland-client OR sway OR native-Wayland Lutris) with
+#      WAYLAND_DISPLAY=<that>.
+#   5. Provision an OVH L4 + validate the full browser stream (webrtcbin+coturn,
+#      `m=video:2`) + N-on-N (2+3 compositors on 1 GPU).
 #
 # Then: Lutris shell (native Wayland, --ozone-platform=wayland) for gamepad nav
 #   (sdl3-builder already ships libSDL3) → store launchers via gamescope-as-client
@@ -966,3 +976,75 @@ library` log line is EXPECTED in the no-GPU builder (`libcuda.so` is dlopen'd at
 runtime, only on a GPU VM via the nvidia container toolkit, §13.2). The stage is
 an orphan (not referenced by `vast-vm`) → no regression to the live image until
 it's wired in (the §8 step 2 live half).
+
+### 13.14 LIVE VALIDATION 2026-08-08 — compositor + CUDAMemory + EGL PROVEN on a real OVH L4
+Provisioned an OVH Gravelines L4 via the worker's `createOvhAdapter` (vmId
+`10f5d05c-…`, IP 164.132.255.195, driver 580.159.03 = open R580; the §12
+provisioning pattern). Built a throwaway spike image
+`forcespt/dpadcloud-gaming:dpad-SteamOS-wd-spike` = the prod `:dpad-SteamOS`
++ 2 COPY layers (the plugin → `/opt/wayland-display/lib/gstreamer-1.0/`, + the
+libwayland 1.23 set → `/opt/wayland-display/lib/`), pushed as a SEPARATE tag so
+prod `:dpad-SteamOS` is untouched. Ran (via `--entrypoint sh`, nvidia runtime +
+CDI `nvidia.com/gpu=0`, `--device /dev/dri`, `--cap-add SYS_ADMIN`):
+```
+gst-launch-1.0 waylanddisplaysrc cuda-device-id=0 \
+  ! video/x-raw(memory:CUDAMemory),width=1920,height=1080,framerate=60/1 \
+  ! nvh264enc ! fakesink sync=false
+```
+**Results — the core architecture is PROVEN on real L4 hardware:**
+- ✅ `CUDA initialization successful` (libcuda via the nvidia runtime).
+- ✅ `EGL platform: PLATFORM_DEVICE_EXT on /dev/dri/renderD128` — the **render
+  node, NO DRM master** → the N-on-N linchpin (§2.1) holds.
+- ✅ `GL Renderer: "NVIDIA L4/PCIe/SSE2"`, `OpenGL ES 3.2 NVIDIA 580.159.03` —
+  the **open R580 driver's EGL/GBM glamor works** (NOT the black-screen
+  proprietary-driver issue, §5). EGL hardware-acceleration enabled + explicit
+  sync (linux-drm-syncobj-v1) engaged.
+- ✅ `Creating CUDA buffer (DrmFourcc AR24)` + `Configured CUDA buffer pool` →
+  **CUDAMemory zero-copy engages** (no `cudaupload`/`cudaconvert`).
+- ✅ `Pipeline is PREROLLED … Setting pipeline to PLAYING` → **nvh264enc inits**
+  + the pipeline runs.
+- ✅ **NVRTC errors = 0** in the log → the §7 "NVRTC moot on the CUDAMemory
+  path" hypothesis is **CONFIRMED** — `extract-nvrtc.sh` (§6 #10) is redundant
+  here (the failing element `cudaconvert`'s NVRTC JIT is not in the pipeline).
+- ✅ The **wayland socket is created** (`$XDG_RUNTIME_DIR/wayland-1` + `.lock`)
+  → client-discovery by polling `$XDG_RUNTIME_DIR/wayland-*` works (§13.12);
+  the compositor's auto-assigned socket name is discoverable WITHOUT reading
+  the `wayland.src` bus message (a simpler integration path).
+- ✅ **libwayland runtime simplification:** the prod `:dpad-SteamOS` image
+  already ships **libwayland 1.24.0** (`/lib/x86_64-linux-gnu/libwayland-server.so.0
+  → …0.24.0`, a noble backport) — ≥1.23, so it already has
+  `wl_client_set_max_buffer_size`. The plugin LOADS against the prod libwayland
+  1.24.0 (`ldd` confirms `libwayland-server.so.0 => /lib/x86_64-linux-gnu/…`). So
+  the **runtime does NOT need the builder's shipped libwayland 1.23** — the 1.23
+  build is only needed in the BUILDER (the cuda-base has 1.22). The vast-vm
+  integration simplifies to **just COPY the plugin `.so`** (drop the libwayland
+  COPY + the /opt/wayland-display/lib on LD_LIBRARY_PATH); the prod libwayland
+  1.24.0 suffices.
+- ✗ **Finding — gamescope has NO `wayland` backend:** the current gamescope
+  build (3.16.25, patched, §4) only exposes `--backend drm` + `sdl`. So
+  `gamescope --backend wayland -- <app>` (the planned XWayland-providing client
+  of gst-wayland-display, §4/§5.2) is NOT available. The integration needs
+  either (a) a gamescope rebuild with the wayland backend enabled (meson option
+  — check the gamescope `meson_options.txt`), OR (b) **sway** as the
+  XWayland-providing Wayland client (Wolf's `RUN_SWAY=1` model — sway-as-client
+  needs no DRM master). Native-Wayland apps (the Lutris shell with
+  `--ozone-platform=wayland`) connect to the compositor directly — no gamescope.
+  Not a blocker for the compositor+capture (proven above); a follow-up for the
+  client/XWayland layer.
+- ⚠️ **Container `/dev/dri` perms gotcha:** the first probe panicked at
+  `comp/mod.rs:741 PermissionDenied` — the CDI-injected `/dev/dri` nodes have
+  group perms (`card0 root:video`, `renderD128 root:992`) the container user
+  couldn't open r/w. Fix: pass `--device /dev/dri` explicitly on the `docker
+  run` (r/w). The entrypoint `DPAD_COMPOSITOR` gate / `dpad-launch-session` must
+  include `--device /dev/dri` (the existing gamescope path uses CDI's `/dev/dri`
+  via `NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=0`, which has the same group-perms
+  issue — but the gamescope path opens the render node via the nvidia ICD, not
+  raw `/dev/dri` open, so it didn't hit this; gst-wayland-display opens
+  `/dev/dri/renderD128` directly via `EGL_EXT_device_drm_render_node`).
+
+**Net: §8 step 2's compositor+capture half is DONE + live-validated.** The
+remaining live half is the client/XWayland layer (gamescope wayland-backend
+rebuild OR sway) + the Selkies `build_video_pipeline` patch (the
+`waylanddisplaysrc` branch, §13.12) + the entrypoint `DPAD_COMPOSITOR` gate +
+the full browser-stream validation (`webrtcbin`+coturn) + N-on-N. VM torn down
+after the probe (`adapter.destroyVm`, 0 leftover instances, no orphan billing).

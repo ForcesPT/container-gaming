@@ -394,7 +394,7 @@ reverts to the `:2` bridge fallback.
    add `echo "DPAD_GAMEPAD_INTERPOSER=evdev" >> /etc/environment` to the
    bootstrap) + redeploy the worker for a normal dpadplay session to boot evdev.
    See `scripts/gamepad-evdev-fallback/README.md` + the 2026-08-04 session note.
-10. **NVRTC fix — ✅ DONE (2026-08-07): baked into the repo.** Likely **moot on the new compositor path** (`WAYLAND-ARCHITECTURE.md` §2.2/§7 — the CUDAMemory `waylanddisplaysrc ! nvh265enc` path bypasses `cudaconvert`'s NVRTC JIT); kept as the hotfix path for existing gamescope-headless images + the gst-wayland-display `DMABuf`/software fallbacks. Confirm in the spike. Added
+10. **NVRTC fix — ✅ DONE (2026-08-07): baked into the repo.** Likely **moot on the new compositor path** (`WAYLAND-ARCHITECTURE.md` §2.2/§7 — the CUDAMemory `waylanddisplaysrc ! nvh265enc` path bypasses `cudaconvert`'s NVRTC JIT); kept as the hotfix path for existing gamescope-headless images + the gst-wayland-display `DMABuf`/software fallbacks. **✅ CONFIRMED LIVE 2026-08-08 (OVH L4, §13.14): NVRTC-error count = 0 on the CUDAMemory path** (no `cudaconvert` in the pipeline → no NVRTC JIT). Added
     `container-gaming/scripts/extract-nvrtc.sh` (canonical, idempotent,
     hardened — leaves the bundled libnvrtc on a download failure). The
     **Dockerfile** (`# --- 4b` block, after the Selkies tarball install) bakes
@@ -415,7 +415,15 @@ reverts to the `:2` bridge fallback.
 11. **Lutris shell produces NO capturable video — the multi-store blocker
     (STORES-PLAN §17.3).** **Retired by the compositor pivot**
     (`WAYLAND-ARCHITECTURE.md` — adopt `gst-wayland-display` as the compositor
-    + capture layer; Electron renders directly into it). The probe knobs stay
+    + capture layer; Electron renders directly into it). **✅ The compositor +
+    CUDAMemory capture are LIVE-VALIDATED 2026-08-08 on an OVH L4**
+    (`WAYLAND-ARCHITECTURE.md` §13.14: compositor starts on the render node, EGL
+    glamor works on the open R580, CUDAMemory zero-copy engages, nvh264enc inits,
+    NVRTC-error=0, the wayland socket is created). The remaining live half is the
+    client/XWayland layer (the current gamescope build has NO `--backend wayland`
+    → rebuild with the wayland backend OR use sway as the Wayland client) + the
+    Selkies `build_video_pipeline` patch + the entrypoint `DPAD_COMPOSITOR` gate
+    + the full browser-stream (webrtcbin+coturn) validation. The probe knobs stay
     as a stopgap + a way to characterise the bug; the real fix is the new
     compositor. With the NVRTC fix + `DPAD_STORE_SHELL=lutris`, the
     video webrtcbin never adds a video m-line (`m=video: 0` vs `m=video: 2`
