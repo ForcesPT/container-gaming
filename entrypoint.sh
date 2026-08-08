@@ -925,7 +925,13 @@ start_wayland_display_session() {
     # Reused for the initial launch + the restart-on-death path in the health loop.
     _launch_gs_wayland() {
         local wl_name="$1"
-        as_user "cd ${USER_HOME}; unset DISPLAY; export WAYLAND_DISPLAY=${wl_name} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} ${LUTRIS_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend wayland -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}" >>/tmp/gamescope-steam.log 2>&1 &
+        # The entrypoint's Xvfb path exports __EGL_VENDOR_LIBRARY_FILENAMES=50_mesa.json
+        # (so Xvfb doesn't segfault on NVIDIA EGL GBM). gamescope --backend wayland +
+        # Steam's CEF use Mesa EGL/GBM glamor → with Mesa forced they hit 'pci id for fd
+        # N: 10de:27b8, driver (null)' → 'egl: failed to create dri2 screen' → gamescope
+        # aborts ('IWaitable hung up'). Force the NVIDIA EGL vendor instead (the open R580
+        # EGL/GBM glamor path works — §13.14 confirmed EGL init off the render node).
+        as_user "cd ${USER_HOME}; unset DISPLAY __EGL_VENDOR_LIBRARY_FILENAMES; export WAYLAND_DISPLAY=${wl_name} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} ${LUTRIS_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend wayland -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}" >>/tmp/gamescope-steam.log 2>&1 &
     }
 
     # --- health loop: poll for the compositor socket → launch gamescope-as-client ---
