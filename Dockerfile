@@ -436,6 +436,111 @@ RUN ln -sf /opt/dpadcloud/vgl-steam /usr/local/bin/vgl-steam && \
     ln -sf /opt/dpadcloud/proton-wined3d /usr/local/bin/proton-wined3d
 
 # =============================================================================
+# Stage: wayland-display-builder
+#   Builds the gst-wayland-display GStreamer plugin (with the `cuda` feature for
+#   CUDAMemory zero-copy output) — the compositor + capture layer for the
+#   DPAD_COMPOSITOR=wayland-display path (WAYLAND-ARCHITECTURE.md). A Smithay
+#   micro-compositor (games-on-whales/gst-wayland-display, commit b15285a2 = the
+#   stable head; ≥ the 2025-10 "dynamically link to CUDA" commit e89d9f5, §13.2)
+#   that initialises EGL off the DRM render node (NO DRM master → N-on-N
+#   preserved, §2.1) and emits CUDAMemory buffers directly to a GStreamer
+#   pipeline (no cudaupload/cudaconvert/NVRTC — §2.2).
+#
+#   SPIKE-VALIDATED 2026-08-08 (built + gst-inspect loads, all 5 properties + the
+#   CUDAMemory caps present). See WAYLAND-ARCHITECTURE.md §13 for the full build
+#   notes; the findings baked in here:
+#   - Build deps: gstreamer-cuda-1.0.pc's Requires pulls gstreamer-gl-1.0 +
+#     wayland-client/cursor/egl + x11/x11-xcb + glesv2/opengl (system dev libs;
+#     the /opt/gstreamer bundle has the GStreamer 1.24.6 bits but NOT the GL/
+#     Wayland/X libs). libclang-dev for Smithay's bindgen (drm/gbm/egl). libssl-dev
+#     for cargo-c (openssl-sys). libudev-dev + libinput-dev for Smithay's
+#     backend_libinput/backend_udev (the link needs -ludev -linput). libffi-dev +
+#     libxml2-dev + libexpat1-dev for the libwayland 1.23 meson build (scanner).
+#   - libgobject-2.0-dev / libgmodule-2.0-dev are NOT separate Ubuntu 24.04
+#     packages (part of libglib2.0-dev) — do not list them.
+#   - Rust ≥1.88 via rustup (apt rustc is too old for edition 2024; the plugin
+#     Cargo.toml rust-version = "1.88"). cargo-c via `cargo install cargo-c`.
+#   - gst-cuda-1.0 is ALREADY in the /opt/gstreamer bundle (§13.1) → COPY it,
+#     PKG_CONFIG_PATH = /usr/local (libwayland 1.23) + /opt/gstreamer. Do NOT
+#     apt-install libgstreamer*-dev (system 1.22 — version mismatch).
+#   - libwayland 1.23 from source → /usr/local: Ubuntu 24.04 ships 1.22, but
+#     wayland-display-core requires the wayland-server `libwayland_1_23` feature
+#     (set_default_max_buffer_size — actually CALLED in code, not just a decl,
+#     §13.9). Building 1.23.1 from source (meson, ~5 s) is the fix. vast-vm must
+#     SHIP /usr/local/lib/x86_64-linux-gnu/libwayland-*.so.0.23.1 (the apt 1.22
+#     client/cursor/egl stay; only the server needs 1.23 — but ship all 4 for a
+#     consistent set on LD_LIBRARY_PATH). §13.9.
+#   - The plugin's `cuda = []` feature does NOT forward to wayland-display-core
+#     (`cuda = ["dep:libloading"]`) → must pass `--features "cuda,wayland-
+#     display-core/cuda"` (§13.10). Build from the gst-plugin-wayland-display
+#     crate dir; cargo-cinstall's [package.metadata.capi.library] install_subdir
+#     = "gstreamer-1.0" → the .so lands at /out/lib/x86_64-linux-gnu/gstreamer-1.0/
+#     (Debian multiarch libdir, NOT /out/lib/gstreamer-1.0).
+#   - The c-bindings C API crate (libgstwaylanddisplay + the display_init input
+#     API, §13.5) is NOT built here — it's phase-A native-Wayland input work, not
+#     the spike (which validates Steam via gamescope-as-client, input via XTest).
+#
+#   ORPHAN STAGE (not referenced by vast-vm yet): BuildKit does NOT build
+#   unreferenced stages during a normal `docker build .` (target = vast-vm), so
+#   adding this stage is a no-op for the current image + the live-site flow. It's
+#   buildable explicitly via `docker build --target wayland-display-builder` (the
+#   spike validation path). Wiring it into vast-vm (COPY the plugin .so + the
+#   libwayland 1.23 .so + add the entrypoint DPAD_COMPOSITOR gate) happens AFTER
+#   the live spike validates the compositor→Selkies path on one VM (§8 step 2).
+FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS wayland-display-builder
+ARG DEBIAN_FRONTEND
+ARG GST_WAYLAND_DISPLAY_REF=b15285a2f1bb4dae5725b049915a4971664fafc6
+ARG LIBWAYLAND_VERSION=1.23.1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential pkg-config curl ca-certificates python3 \
+        meson ninja-build \
+        libglib2.0-dev \
+        libwayland-dev wayland-protocols \
+        libdrm-dev libgbm-dev libegl-dev libgles2-mesa-dev libgl-dev \
+        libxkbcommon-dev libx11-dev libx11-xcb-dev libxcb1-dev \
+        libclang-dev \
+        libssl-dev \
+        libudev-dev libinput-dev \
+        libffi-dev libxml2-dev libexpat1-dev \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --default-toolchain stable --profile minimal \
+    && rm -rf /var/lib/apt/lists/*
+ENV PATH=/root/.cargo/bin:${PATH}
+# The GStreamer 1.24.6 bundle (gstreamer-1.0/base/video/cuda/allocators .pc +
+# headers + .so) from the base stage. PKG_CONFIG_PATH below makes cargo-c find it.
+COPY --from=base /opt/gstreamer /opt/gstreamer
+# Build libwayland 1.23 from source → /usr/local. Ubuntu 24.04 only has 1.22;
+# gst-wayland-display requires 1.23 (the set_default_max_buffer_size API, gated
+# by the wayland-server `libwayland_1_23` feature, is CALLED in code, §13.9).
+# /usr/local/lib/x86_64-linux-gnu/pkgconfig/wayland-server.pc (1.23) is found
+# BEFORE the apt 1.22 one via PKG_CONFIG_PATH. vast-vm ships the built .so (§13.9).
+RUN set -e; \
+    curl -fsSL "https://gitlab.freedesktop.org/wayland/wayland/-/archive/${LIBWAYLAND_VERSION}/wayland-${LIBWAYLAND_VERSION}.tar.gz" \
+      | tar -xzf - -C /tmp \
+    && cd "/tmp/wayland-${LIBWAYLAND_VERSION}" \
+    && meson setup build --prefix=/usr/local --buildtype=release \
+         -Ddocumentation=false -Dtests=false -Dscanner=true \
+    && meson compile -C build \
+    && meson install -C build \
+    && ldconfig \
+    && rm -rf "/tmp/wayland-${LIBWAYLAND_VERSION}" \
+    && test -f /usr/local/lib/x86_64-linux-gnu/libwayland-server.so.0
+ENV PKG_CONFIG_PATH=/usr/local/lib/x86_64-linux-gnu/pkgconfig:/opt/gstreamer/lib/x86_64-linux-gnu/pkgconfig
+RUN cargo install cargo-c
+# Build the plugin with the cuda feature (CUDAMemory zero-copy output). The
+# `wayland-display-core/cuda` forwarding is REQUIRED (the plugin's `cuda = []`
+# doesn't forward to wayland-display-core's `cuda = ["dep:libloading"]`, §13.10).
+# install_subdir = "gstreamer-1.0" → /out/lib/x86_64-linux-gnu/gstreamer-1.0/.
+RUN set -e; \
+    curl -fsSL "https://github.com/games-on-whales/gst-wayland-display/archive/${GST_WAYLAND_DISPLAY_REF}.tar.gz" \
+      | tar -xzf - -C /tmp \
+    && mv "/tmp/gst-wayland-display-${GST_WAYLAND_DISPLAY_REF}" /tmp/gwd \
+    && cd /tmp/gwd/gst-plugin-wayland-display \
+    && cargo cinstall --features "cuda,wayland-display-core/cuda" --prefix=/out \
+    && test -f /out/lib/x86_64-linux-gnu/gstreamer-1.0/libgstwaylanddisplaysrc.so \
+    && rm -rf /tmp/gwd
+
+# =============================================================================
 # Stage: vast-docker  ->  :dpad-heroic
 #   Vast Docker: Heroic Games Launcher + XFCE desktop + Firefox (cloud desktop +
 #   non-Steam games). No Steam, no gamescope, no Proton baked in (Heroic

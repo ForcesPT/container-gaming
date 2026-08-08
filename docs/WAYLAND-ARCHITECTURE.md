@@ -514,8 +514,31 @@ confirmed.
    initialized! libSDL3.so.0` — so the libSDL3 fix is shipped regardless.)
 
 2. **Spike — build + 1 VM, ~1–2 days.**
-   - Add a `wayland-display-builder` stage; build `gst-wayland-display` (with
-     `cuda` feature) + `gst-cuda-1.0` + `inputtino` from source.
+   - **✅ BUILD HALF DONE + VALIDATED 2026-08-08** — the `wayland-display-builder`
+     stage is committed to `Dockerfile` (after the `base` stage, before
+     `vast-docker`) + builds clean (`docker build --target wayland-display-builder`):
+     libwayland 1.23.1 from source → `/usr/local`, the plugin via cargo-c with the
+     `cuda` feature → `/out/lib/x86_64-linux-gnu/gstreamer-1.0/libgstwaylanddisplaysrc.so`.
+     `gst-inspect-1.0 waylanddisplaysrc` loads it: all 5 properties
+     (`render-node`/`cuda-device-id`/`mouse`/`keyboard`/`disable-intel-workaround`)
+     + the `video/x-raw(memory:CUDAMemory)` caps present (the cuda feature is
+     compiled in). The "CUDA initialization failed" in the no-GPU builder is
+     EXPECTED — `libcuda.so` is dlopen'd at runtime (only on a GPU VM, §13.2).
+     See §13.9–§13.13 for the build notes. The stage is an ORPHAN (not referenced
+     by `vast-vm`) → a normal `docker build .` (target `vast-vm`) does NOT build
+     it → no regression to the live image. It builds `gst-cuda-1.0` from the
+     `/opt/gstreamer` bundle (§13.1, no separate build). `inputtino` is NOT in
+     this stage (phase-A input work, §13.5) — the spike validates Steam via
+     gamescope-as-client (XTest), not native-Wayland input.
+   - **REMAINING (the live half of the spike):** wire the stage into `vast-vm`
+     (`COPY --from=wayland-display-builder /out/.../libgstwaylanddisplaysrc.so`
+     + `/usr/local/lib/x86_64-linux-gnu/libwayland-*.so.0*` to a runtime dir on
+     `LD_LIBRARY_PATH`, §13.9) + add the entrypoint `DPAD_COMPOSITOR` gate
+     (default `gamescope` — no regression). New capture: `waylanddisplaysrc
+     render_node=$RENDER_NODE cuda-device-id=$CUDA_ID !
+     video/x-raw(memory:CUDAMemory),… ! nvh264enc ! webrtcbin` (Selkies transport
+     unchanged — wired via the same `patch_selkies_*.py` build_video_pipeline
+     pattern as `pipewiresrc`, §13.12).
    - Add `DPAD_COMPOSITOR=wayland-display` (default stays `gamescope` — no
      regression). New path: `waylanddisplaysrc render_node=$RENDER_NODE
      cuda-device-id=$CUDA_ID ! video/x-raw(memory:CUDAMemory),… ! nvh265enc !
@@ -618,28 +641,28 @@ cd dpadplay/container-gaming && git pull
 # DPAD_LUTRIS_DISABLE_GPU=1 did NOT fix §17.3 → the pivot is strictly necessary.
 # §17.4 (libSDL3) is SHIPPED (sdl3-builder, commit af5bda6, image b403937b on
 # Docker Hub) + live-validated (sdl_manager "SDL3 initialized! libSDL3.so.0").
-# START at §8 step 2 (the spike). Nothing else in the image changes until the
-# spike validates the compositor→Selkies path on one VM. The default stays
-# DPAD_COMPOSITOR=gamescope (no regression) until the parallel-run validation.
 #
-# Spike build:
-#   1. Add a wayland-display-builder stage (Rust + cargo-c, Smithay cuda feature).
-#      Build gst-wayland-display + gst-cuda-1.0 + inputtino from source.
-#   2. entrypoint: add DPAD_COMPOSITOR=wayland-display (default gamescope).
-#      New capture: waylanddisplaysrc cuda-device-id=$CUDA_ID !
-#        video/x-raw(memory:CUDAMemory) ! nvh264enc ! webrtcbin (Selkies unchanged).
-#   3. Run Steam via `gamescope --backend wayland -- steam -gamepadui` as a
-#      Wayland client of gst-wayland-display. Confirm stream + N-on-N (2 + 3
-#      on 1 GPU) + CUDAMemory zero-copy + NVRTC-error-count=0 without extraction.
-#   4. Confirm open-driver EGL init is clean under our CDI (no #379 panic).
+# §8 step 2 BUILD HALF — DONE + VALIDATED 2026-08-08: the wayland-display-builder
+# stage is committed to Dockerfile (orphan; after `base`, before `vast-docker`)
+# + `docker build --target wayland-display-builder` succeeds: libwayland 1.23.1
+# from source + the gst-wayland-display plugin (cuda feature) compile + the .so
+# loads (gst-inspect shows all 5 properties + the CUDAMemory caps). See §13.9–13.13.
 #
-# Probe (parallel, cheap):
-#   DPAD_STORE_SHELL=lutris DPAD_LUTRIS_DISABLE_GPU=1 on a live L4 → m=video:2?
-#   Characterises the §17.3 bug; does not change the decision.
+# §8 step 2 LIVE HALF — NEXT: wire the stage into vast-vm (COPY the plugin .so +
+# the libwayland 1.23 .so to a runtime dir on LD_LIBRARY_PATH) + add the entrypoint
+# DPAD_COMPOSITOR=wayland-display gate (default gamescope = no regression) + the
+# selkies build_video_pipeline patch (the waylanddisplaysrc branch, mirroring
+# patch_selkies_pipewire.py) + a bus watch for the `wayland.src` Application msg
+# (→ WAYLAND_DISPLAY for the gamescope-as-client launch). Then provision a fresh
+# OVH L4 + validate: Steam via `gamescope --backend wayland -- steam -gamepadui`
+# streams; N-on-N (2+3 on 1 GPU); CUDAMemory zero-copy engages; NVRTC-error=0
+# WITHOUT extract-nvrtc.sh (validates the §7 NVRTC-moot hypothesis); open-driver
+# EGL init clean (no #379 panic). Default stays DPAD_COMPOSITOR=gamescope until the
+# parallel-run validation.
 #
-# Then: Lutris shell (native Wayland, --ozone-platform=wayland) + the
-#   sdl3-builder stage for gamepad nav → store launchers via gamescope-as-client
-#   gamescope-as-client (XWayland) → flip default → inputtino migration (last).
+# Then: Lutris shell (native Wayland, --ozone-platform=wayland) for gamepad nav
+#   (sdl3-builder already ships libSDL3) → store launchers via gamescope-as-client
+#   (XWayland) → flip default → inputtino migration (last).
 ```
 
 ## 12. Reproducible test-VM provisioning (OVH API, no website)
@@ -830,3 +853,116 @@ into the existing `/opt/gstreamer/lib/x86_64-linux-gnu/gstreamer-1.0/`).
 - **Multi-NVIDIA-GPU** — fixed Nov 2025 (PR #287, the render-node→CUDA-device-id
   mapping). Our N-on-N is one-GPU-per-container (CDI), so this is less relevant,
   but `cuda-device-id=$CUDA_ID` must match the CDI-assigned GPU.
+
+### 13.9 libwayland 1.23 is REQUIRED (build it from source) — VALIDATED
+The plugin's `wayland-display-core` depends on `wayland-server` (Rust) with the
+`libwayland_1_23` feature, which gates the `set_default_max_buffer_size` /
+`wl_client_set_max_buffer_size` APIs. **These are CALLED in code** (not just
+extern decls) — confirmed by the `E0599: no method named
+set_default_max_buffer_size found for struct DisplayHandle` compile error when
+the feature is dropped. So the plugin genuinely needs **libwayland ≥ 1.23**
+(those C APIs are `Since: 1.22.90`, released in 1.23.0).
+
+**Ubuntu 24.04 (noble) ships libwayland 1.22 only** (client/cursor/egl; no
+`libwayland-server0` installed at all in the base image). So the
+`wayland-display-builder` stage builds **libwayland 1.23.1 from source** (meson,
+~5 s) → `/usr/local/lib/x86_64-linux-gnu/` (SONAME `libwayland-server.so.0`, real
+file `libwayland-server.so.0.23.1`). `PKG_CONFIG_PATH` puts `/usr/local`'s
+`wayland-server.pc` (1.23) BEFORE the apt 1.22 one → the plugin links 1.23.
+`meson` deps: `libffi-dev` + `libxml2-dev` + `libexpat1-dev` (the scanner uses
+expat — the build errors `Dependency "expat" not found` without it) +
+`wayland-protocols` (apt noble 1.36 is fine).
+
+**vast-vm runtime:** the image must SHIP the built libwayland 1.23 `.so` (the
+apt 1.22 server lacks the symbols → the plugin fails to load with `undefined
+symbol: wl_client_set_max_buffer_size`). Ship `/usr/local/lib/x86_64-linux-gnu/
+libwayland-{server,client,cursor,egl}.so.0*` (all 4, for a consistent 1.23 set)
+to a dedicated runtime dir (e.g. `/opt/wayland-display/lib`) + put it FIRST on
+`LD_LIBRARY_PATH` so it overrides the apt 1.22 set. gamescope bundles its own
+wayland so this override is safe; mesa's wayland-egl is backwards-compatible with
+1.23. The apt 1.22 `libwayland-client0`/`cursor0`/`egl1` can stay (deps of
+other packages) — just shadowed. (Only the server is strictly needed by the
+plugin, but a mixed 1.23-server/1.22-client is untested → ship all 4.)
+
+### 13.10 The `cuda` feature must be FORWARDED to wayland-display-core
+The plugin crate's `[features] cuda = []` is EMPTY — it does NOT forward to
+`wayland-display-core` (whose `cuda = ["dep:libloading"]` enables the CUDA
+allocator + the `Command::UpdateCUDABufferPool` / `GstVideoInfo::CUDA` variants
+the plugin's `#[cfg(feature="cuda")]` code references). Building the plugin alone
+with `--features cuda` → `E0599: no variant UpdateCUDABufferPool` /
+`no variant CUDA` compile errors.
+
+**Fix:** `cargo cinstall --features "cuda,wayland-display-core/cuda"` (the
+`<dep>/<feature>` syntax activates the dependency's feature). Wolf's own build
+(`wolf.Dockerfile`) runs `cargo cinstall --features="cuda"` from the WORKSPACE
+ROOT, where cargo feature-unification across the workspace members handles it;
+building from the crate dir in isolation requires the explicit forwarding. The
+committed stage builds from `gst-plugin-wayland-display/` with the forwarded
+feature (validated). The `c-bindings` C-API crate is NOT built (phase-A input,
+§13.5).
+
+### 13.11 The exact build deps (the gotchas the spike found)
+The `wayland-display-builder` apt line (all `--no-install-recommends`):
+- `build-essential pkg-config curl ca-certificates python3 meson ninja-build`
+- `libglib2.0-dev` — provides glib/gobject/gmodule (the plugin's `Requires.private`).
+  **`libgobject-2.0-dev` / `libgmodule-2.0-dev` are NOT separate Ubuntu 24.04
+  packages** — listing them fails `Unable to locate package`.
+- `libwayland-dev wayland-protocols` — the wayland-server headers (1.22, for
+  the apt fallback) + the protocol XML.
+- `libdrm-dev libgbm-dev libegl-dev libgles2-mesa-dev libgl-dev` — Smithay's
+  `backend_drm`/`backend_egl`/`backend_gbm` + the `gstreamer-cuda-1.0.pc`
+  `Requires` (wayland-client/cursor/egl, x11, glesv2, opengl).
+- `libxkbcommon-dev libx11-dev libx11-xcb-dev libxcb1-dev` — Smithay's keyboard/
+  X11 paths.
+- `libclang-dev` — Smithay's bindgen (drm/gbm/egl FFI).
+- `libssl-dev` — **cargo-c links openssl-sys** (without it: `Could not find
+  directory of OpenSSL installation` → cargo-c fails to compile).
+- `libudev-dev libinput-dev` — Smithay's `backend_libinput`/`backend_udev`; the
+  link needs `-ludev -linput` (without libinput-dev: `rust-lld: error: unable to
+  find library -linput` at the wayland-display-core link).
+- `libffi-dev libxml2-dev libexpat1-dev` — the libwayland 1.23 meson build (§13.9).
+
+Rust: `rustup --default-toolchain stable --profile minimal` (apt rustc is too
+old for edition 2024 / rust-version 1.88). `cargo install cargo-c` (latest;
+Wolf pins `cargo-c@0.10.23 --locked` + Rust 1.96.0 — both work; the committed
+stage uses stable + latest for simplicity, validated).
+
+### 13.12 The install path + the Selkies integration + the socket-discovery bus msg
+- **Install path:** cargo-c's `[package.metadata.capi.library] install_subdir =
+  "gstreamer-1.0"` puts the plugin at `/out/lib/x86_64-linux-gnu/gstreamer-1.0/
+  libgstwaylanddisplaysrc.so` (Debian multiarch `lib/x86_64-linux-gnu`, NOT
+  `/out/lib/gstreamer-1.0/`). vast-vm COPYs it to its `gstreamer-1.0/` plugin
+  dir + sets `GST_PLUGIN_PATH`.
+- **Selkies integration:** mirror the existing `scripts/patch_selkies_pipewire.py`
+  (which patches `gstwebrtc_app.py`'s `build_video_pipeline` to add the
+  `pipewiresrc` branch gated on `DPAD_VIDEO_SRC=pipewiresrc`). A new
+  `patch_selkies_waylanddisplay.py` adds a `waylanddisplaysrc` branch gated on
+  `DPAD_COMPOSITOR=wayland-display` (or `DPAD_VIDEO_SRC=waylanddisplaysrc`):
+  `waylanddisplaysrc cuda-device-id=$CUDA_ID !
+  video/x-raw(memory:CUDAMemory),width=1920,height=1080,framerate=60/1 !
+  nvh264enc` — directly into the encoder (no `cudaupload`/`cudaconvert`/NVRTC,
+  §2.2). Same idempotent-patch pattern, applied at build time in the Dockerfile.
+- **Socket discovery (the §13.6 answer):** `waylanddisplaysrc`'s `start()` posts
+  an **`Application` message named `"wayland.src"`** to the GStreamer bus,
+  carrying fields from `display.env_vars()` — i.e. `WAYLAND_DISPLAY=wayland-N`
+  + the device paths the compositor needs. A bus watch (a small sidecar, or a
+  hook in the selkies patch) reads that message → writes `WAYLAND_DISPLAY` to a
+  known file (e.g. `/tmp/dpad-wayland-display`) → the entrypoint polls it →
+  launches `gamescope --backend wayland -- steam -gamepadui` (or `lutris-shell`)
+  as a Wayland client of THAT compositor's socket. (The element has no
+  socket-name property — the socket is auto-assigned; the bus message is the
+  only way to discover it when the compositor runs inside the selkies pipeline.)
+
+### 13.13 Spike build — VALIDATED 2026-08-08
+`docker build --target wayland-display-builder .` (in `container-gaming`) succeeds:
+libwayland 1.23.1 (meson, ~5 s) + the plugin (cargo-c, ~3 min for
+wayland-display-core + ~1 min for the plugin) compile + install. `gst-inspect-1.0
+waylanddisplaysrc` loads the `.so` against libwayland 1.23 + the /opt/gstreamer
+1.24.6 bundle: `Long-name "Wayland display source"`, `Klass "Source/Video"`, all
+5 properties present (`render-node`/`cuda-device-id`/`mouse`/`keyboard`/
+`disable-intel-workaround`), + the `video/x-raw(memory:CUDAMemory)` caps (the cuda
+feature is compiled in). The `CUDA initialization failed: Failed to load CUDA
+library` log line is EXPECTED in the no-GPU builder (`libcuda.so` is dlopen'd at
+runtime, only on a GPU VM via the nvidia container toolkit, §13.2). The stage is
+an orphan (not referenced by `vast-vm`) → no regression to the live image until
+it's wired in (the §8 step 2 live half).
