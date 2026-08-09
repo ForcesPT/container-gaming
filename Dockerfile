@@ -794,6 +794,24 @@ RUN set -e; \
 COPY scripts/lutris-shell /opt/dpadcloud/lutris-shell
 RUN sed -i 's/\r$//' /opt/dpadcloud/lutris-shell && chmod +x /opt/dpadcloud/lutris-shell
 
+#    (c) dpad-launcher — the 10-foot Electron store-picker shell (replaces
+#        lutris-gamepad-ui; the entrypoint's DPAD_STORE_SHELL=picker gate execs
+#        launcher-shell). Shipped as the forcespt/dpadcloud-launcher Docker image
+#        (a FROM-scratch file bundle holding the Linux Electron AppDir at
+#        /opt/dpadcloud/launcher, built locally via launcher/scripts/build.sh +
+#        launcher/Dockerfile). The AppDir bundles koffi (native, unpacked) for
+#        the SDL3 gamepad poll. The Electron runtime libs (libnss/libgtk/
+#        libasound/libxss/...) are already present (lutris-gamepad-ui is also
+#        Electron); libSDL3.so.0 below is shared with lutris-gamepad-ui's koffi
+#        path. See launcher/README + WAYLAND-ARCHITECTURE.md.
+COPY --from=forcespt/dpadcloud-launcher:0.1.0 /opt/dpadcloud/launcher /opt/dpadcloud/launcher
+RUN chmod +x /opt/dpadcloud/launcher/dpad-launcher
+#    launcher-shell wrapper — the entrypoint's DPAD_STORE_SHELL=picker gate
+#    execs this instead of `steam -gamepadui` / `lutris-shell` (--no-sandbox;
+#    inherits the session's SDL3/interposer env).
+COPY scripts/launcher-shell /opt/dpadcloud/launcher-shell
+RUN sed -i 's/\r$//' /opt/dpadcloud/launcher-shell && chmod +x /opt/dpadcloud/launcher-shell
+
 #    (d) libSDL3 for lutris-gamepad-ui's gamepad input (koffi FFI dlopen). SDL3
 #        is NOT in Noble repos; the oracular libsdl3-0 .deb churns the pinned
 #        GStreamer/PipeWire stack → built from source in the sdl3-builder stage
