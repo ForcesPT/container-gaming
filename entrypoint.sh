@@ -814,6 +814,25 @@ start_wayland_display_session() {
     fi
     bash /opt/dpadcloud/patch_gst_web_cursors.sh "${SELKIES_WEB_ROOT}/input.js" "${DPAD_DEFAULT_GAMING_MODE:-0}" 2>/dev/null || true
 
+    # --- live-resolution overlay (§18.7) ---
+    # The in-stream Resolution dropdown (web client) + the _arg_res data-channel
+    # handler (selkies) are NOT baked in the image (the rebuild + Docker Hub push
+    # is the blocked owner step). Fetch the idempotent patcher from repo main to
+    # /opt/dpadcloud (bind-mountable hotfix path) + run it so a fresh `docker
+    # run` / new VM bootstrap gets the live-resolution feature with NO image
+    # rebuild. Best-effort (network failure falls back to the image's baked web
+    # client + pip package — no dropdown, but the stream still works at the
+    # DPAD_WD_* default). Only on the wayland-display path (the compositor caps
+    # + sway output mode are what the dropdown drives).
+    local _hb_res="https://raw.githubusercontent.com/ForcesPT/container-gaming/main/scripts"
+    if curl -fsSL "${_hb_res}/patch_live_resolution.py" -o /opt/dpadcloud/patch_live_resolution.py 2>/dev/null; then
+        chmod +x /opt/dpadcloud/patch_live_resolution.py 2>/dev/null || true
+        python3 /opt/dpadcloud/patch_live_resolution.py >/tmp/patch_live_resolution.log 2>&1 || true
+        echo "    live-resolution overlay applied (see /tmp/patch_live_resolution.log)"
+    else
+        echo "    live-resolution overlay: fetch failed — using the image's baked web client (no dropdown)"
+    fi
+
     # --- resolution + shell app (mirrors start_gamescope_session) ---
     local GS_W GS_H STEAM_ARGS
     GS_W="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f1)"; [ -z "$GS_W" ] && GS_W=1920
@@ -1066,24 +1085,6 @@ start_gamescope_session() {
     fi
     bash /opt/dpadcloud/patch_gst_web_cursors.sh "${SELKIES_WEB_ROOT}/input.js" "${DPAD_DEFAULT_GAMING_MODE:-0}" 2>/dev/null || true
 
-    # --- live-resolution overlay (§18.7) ---
-    # The in-stream Resolution dropdown (web client) + the _arg_res data-channel
-    # handler (selkies) are NOT baked in the image (the rebuild + Docker Hub push
-    # is the blocked owner step). Fetch the idempotent patcher from repo main to
-    # /opt/dpadcloud (bind-mountable hotfix path) + run it so a fresh `docker
-    # run` gets the live-resolution feature on the next bootstrap with NO image
-    # rebuild. Best-effort (network failure falls back to the image's baked web
-    # client + pip package — no dropdown, but the stream still works at the
-    # DPAD_WD_* default). Only on the wayland-display path (the compositor caps
-    # + sway output mode are what the dropdown drives).
-    local _hb_res="https://raw.githubusercontent.com/ForcesPT/container-gaming/main/scripts"
-    if curl -fsSL "${_hb_res}/patch_live_resolution.py" -o /opt/dpadcloud/patch_live_resolution.py 2>/dev/null; then
-        chmod +x /opt/dpadcloud/patch_live_resolution.py 2>/dev/null || true
-        python3 /opt/dpadcloud/patch_live_resolution.py >/tmp/patch_live_resolution.log 2>&1 || true
-        echo "    live-resolution overlay applied (see /tmp/patch_live_resolution.log)"
-    else
-        echo "    live-resolution overlay: fetch failed — using the image's baked web client (no dropdown)"
-    fi
     local GS_W GS_H STEAM_ARGS
     GS_W="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f1)"
     GS_H="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f2)"
