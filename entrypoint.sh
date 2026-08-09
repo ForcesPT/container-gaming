@@ -907,7 +907,7 @@ start_wayland_display_session() {
     # --backend wayland as a Wayland client of it.
     local enc="${DPAD_GAMESCOPE_ENCODER:-nvh264enc}"
     local video_src="waylanddisplaysrc"
-    local selkies_cmd="export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_STREAM_WIDTH=${DPAD_WD_WIDTH:-1280} DPAD_STREAM_HEIGHT=${DPAD_WD_HEIGHT:-720} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
+    local selkies_cmd="export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_STREAM_WIDTH=${DPAD_WD_WIDTH:-1920} DPAD_STREAM_HEIGHT=${DPAD_WD_HEIGHT:-1080} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
     echo "[*] Launching selkies (wayland-display compositor; video_src=${video_src}, encoder=${enc})..."
     as_user "${selkies_cmd}" >>/tmp/selkies.log 2>&1 &
     sleep 6
@@ -954,6 +954,11 @@ start_wayland_display_session() {
             # to /tmp/sway-client.log (the spike diagnostics for the §16.3 drop).
             cat > /tmp/dpad-sway.config <<SWAYCFG
 # dpad sway config — nested Wayland client of gst-wayland-display (§16.4)
+# Force the output mode: sway's nested wayland backend ignores the compositor's
+# wl_output.mode (modes: [] -> defaults to 720p) so we must set it explicitly to
+# match the compositor (DPAD_WD_WIDTH/HEIGHT, same as the selkies caps). Without
+# this the stream is letterboxed (§17.3). §18.6 fix.
+output * mode --custom ${DPAD_WD_WIDTH:-1920}x${DPAD_WD_HEIGHT:-1080}
 for_window [app_id=".*"] fullscreen enable
 for_window [class=".*"] fullscreen enable
 exec ${SHELL_APP}
