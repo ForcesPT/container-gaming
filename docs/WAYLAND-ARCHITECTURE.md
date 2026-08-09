@@ -35,11 +35,12 @@
 > - **`sdl3-builder` SHIPPED** (§5.6, commit `af5bda6`, image `b403937b`) —
 >   `libSDL3.so.0` on the system lib path, live-validated.
 > - **Still open (the §8 phasing tail):** Lutris shell + store launchers under
->   sway, N-on-N on the sway path, the `--device /dev/dri` CDI-perm fix for prod
->   multi-GPU hosts (§14), selkies audio-peer reconnect robustness (§16.7), + the
->   1080p/1440p + dynamic-resize compositor-mode fix (§17.3 — **DONE 2026-08-09
->   §18.6**: a sway `output * mode --custom` config line, NOT a plugin-source
->   change; default bumped to 1080p), then the default flip. **Mouse/keyboard under sway are now RESOLVED** (§17.2, the lazy
+>   sway, the `--device /dev/dri` CDI-perm fix for prod multi-GPU hosts (§14),
+>   selkies audio-peer reconnect robustness (§16.7), + the 1080p/1440p +
+>   dynamic-resize compositor-mode fix (§17.3 — **DONE 2026-08-09 §18.6**: a sway
+>   `output * mode --custom` config line, NOT a plugin-source change; default
+>   bumped to 1080p), then the default flip. **N-on-N on the sway path is DONE
+>   2026-08-09 (§16.8): 2:1 + 3:1 compositor gate validated.** **Mouse/keyboard under sway are now RESOLVED** (§17.2, the lazy
 >   `DPAD_INPUT_DISPLAY` open) + gamepad already worked. The spec sections
 >   §2.2/§4/§5.2/§5.3/§5.6/§13.3/§13.9/§13.12 carry `⚠️ SUPERSEDED` markers where
 >   the live results changed the design — trust those over the original prose.
@@ -761,7 +762,11 @@ cd dpadplay/container-gaming && git pull
 #      6-layer interposer is compositor-agnostic → the user navigated the Lutris
 #      UI with a real controller (SDL3 saw the pads). inputtino migration (§8
 #      step 6) is the last, cleaner-but-not-blocking step.
-#   4. N-on-N on the sway path (§16.5) — 2 sway compositors on 1 L4 via MPS.
+#   4. ✅ DONE 2026-08-09 (§16.8) — N-on-N on the sway path: 2:1 + 3:1 compositor
+#      gate validated (3 concurrent sway/wayland-display compositors on 1 L4, all
+#      streaming video+audio, 48% GPU / 1.9 GB of 23 GB; raw render-node
+#      time-slice, no MPS). The raster cliff (3 active games) is the remaining
+#      human-play gate.
 #   5. --device /dev/dri CDI-perm fix for prod multi-GPU hosts (§14) — the
 #      spike mounts ALL GPUs' /dev/dri; prod needs a scoped render-node mount.
 #   6. selkies audio-peer reconnect robustness (§16.7) — stale uid in
@@ -1689,7 +1694,11 @@ cd dpadplay/container-gaming && git pull
 # 4. §8 step 5: flip the control-plane default to DPAD_COMPOSITOR=wayland-display
 #    after a parallel-run period (the image is ready; the default is still
 #    gamescope-headless = no regression).
-# 5. Re-verify N-on-N on the sway path (2 sway compositors on 1 L4 via MPS).
+# 5. ✅ DONE 2026-08-09 (§16.8) — N-on-N on the sway path: 2:1 + 3:1 compositor
+#    gate validated (3 concurrent sway compositors on 1 L4, all streaming video+
+#    audio, 48% GPU / 1.9 GB / load 4.45 on 22 cores, 3 coturn relays
+#    3478/3479/3480 forwarding; raw time-slice, no MPS). Remaining: the raster
+#    cliff (3 active games, human-play).
 #
 # Audio caveat (§16.7): the selkies AUDIO peer (SESSION 3, the separate-audio-
 #   webrtcbin architecture, PR #96) is flaky on reconnect — a stale uid in the
@@ -1796,6 +1805,76 @@ sway path, then flip the control-plane default.
 (`:dpad-SteamOS` now bakes sway + the gate, or the `:dpad-SteamOS-wd-spike` tag),
 open the browser (do NOT run sdp-probe first), connect. VM torn down after
 validation (`adapter.destroyVm`, 0 orphans, billing stopped).
+
+## 16.8 ✅ LIVE-VALIDATED 2026-08-09 — N-on-N on the sway path (2:1 + 3:1 compositor gate)
+
+> **Closes the §16.5 open item** ("Re-verify N-on-N on the sway path — 2 sway
+> compositors on 1 L4"), extended to **3:1** (the actual Casual/Enthusiast tier
+> slice ratio). The new `gst-wayland-display` compositor **preserves the
+> no-DRM-master render-node property** that makes v2 oversubscription economics
+> work: N compositors share `/dev/dri/renderD128` via EGL, all init, all
+> capture, all stream — **raw render-node time-slice, no MPS needed** even at
+> 3:1 idle.
+
+Validated on the §17 OVH Gravelines L4 (`e6d4b0ca-…` @ `79.137.11.29`, open R580
+`580.178.04`, prod `:dpad-SteamOS` tag) — the same warm VM as §17/§18, with the
+1st container (`wd-probe`) already streaming. Launched 2 more identical
+`DPAD_COMPOSITOR=wayland-display DPAD_WAYLAND_CLIENT=sway DPAD_STORE_SHELL=steam`
+containers on the **same GPU** (`NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=0`), each
+with its own coturn/selkies port (`wd-probe-2`: 3479/16101, `wd-probe-3`:
+3480/16102, `testpass2`/`testpass3`). A real browser connected to each as the
+first peer.
+
+**Results — 3 concurrent compositors on 1 L4, all streaming video + audio:**
+- **Compositor gate holds at 3:1.** Each container's `waylanddisplaysrc` inits
+  EGL off the shared `/dev/dri/renderD128` while the others are active (no DRM
+  master → no singleton contention); the 2nd/3rd compositor's `wayland-N` socket
+  appears + `m=video:9` is negotiated (the §15 sdp-probe on wd-probe-2: `GATE
+  PASSED: m=video:9`). **The N-on-N linchpin (§2.1) holds on the new compositor.**
+- **GPU headroom is large:** 3 compositors + 3 Steam Big Picture = **48% util,
+  1942 MiB / 23034 MiB (8%)**, 3 `nvidia-smi` compute apps (328+254+254 MiB).
+  ~21 GB free at 3:1 idle.
+- **CPU is light:** load avg 4.45 on 22 cores (the `l4-90` flavor is 22 vCPU,
+  not 12 — comfortably above the ~3 cores/session rule at 3:1 idle).
+- **UDP coturn scales:** all three relay ports forward media (nft counters:
+  3478, 3479, 3480 all > 0). **OVH does NOT block 3480** — the OVH SG (or its
+  default) allows the additional coturn ports; the docs' "open UDP 3478" was
+  sufficient (no per-port rule needed for N>1). So prod N-on-N with N coturn
+  ports is not SG-blocked.
+- **NVRTC errors = 0** on each compositor (the `cudaconvert` JIT on the
+  system-memory RGBx capture tail, covered by `extract-nvrtc.sh`).
+- **Bonus:** `wd-probe-2` streamed at **3840×2160** — the user picked 4K from the
+  live Resolution dropdown (§18.7), so live-resize works on a 2nd compositor
+  concurrently.
+
+**Methodology note (the first attempt was a red herring):** the first peer test
+on `wd-probe-2` "didn't connect" — NOT an N-on-N or an OVH-SG failure. Two
+stacked causes: (a) a headless `scripts/selkies-sdp-probe.py` run against
+`wd-probe-2` (to capture the §15 `m=video:9` gate headlessly) polluted selkies'
+`self.peers` with a stale peer-1 uid (the §16.7 quirk) → the browser's later
+`HELLO 1` was rejected → no session → empty logs; (b) the browser-stripped
+`http://user:pass@host` URL form (modern browsers drop the userinfo) → no
+basic-auth. Fix: kill + relaunch a **fresh** `wd-probe-2` (no sdp-probe) + open
+the bare URL (`http://79.137.11.29:16101`) + use the browser's basic-auth popup
+(`dpad`/`testpass2`). All three then streamed immediately. **Lesson:** to visually
+validate an Nth compositor, do NOT run `selkies-sdp-probe.py` on it first — the
+browser must be the first peer (the §16.7 caveat, now confirmed to apply to the
+video peer too, not just audio).
+
+**What is NOT proven by this (the remaining gate):** the **raster cliff** —
+3 concurrent *active* games (real raster load), not 3 idle Steam Big Pictures.
+The compositor N-on-N at 3:1 is proven (the economics linchpin), but whether
+3 simultaneous AAA playthroughs hold frame-time (or need MPS / vGPU) is the
+§8 "UpCloud L4 oversub active-gameplay + 3:1" human-play gate. MPS remains
+optional (raw time-slice sufficed at 3:1 idle); it becomes relevant only if
+active 3:1 stutters.
+
+**Reproduce:** on a warm wayland-display VM (§12), launch N identical
+`DPAD_COMPOSITOR=wayland-display DPAD_WAYLAND_CLIENT=sway` containers on
+`nvidia.com/gpu=0` with distinct coturn/selkies ports (`-p 3478+i:3478/udp -p
+16100+i:16100/tcp`, `DPAD_TURN_UDP_EXTERNAL_PORT=3478+i`), open each in a browser
+as the first peer. `nvidia-smi` shows N compute apps; `nft list ruleset | grep
+"udp dport 347"` shows all N relay counters > 0.
 
 ## 17. Prod-tag re-validation + the input & resolution fixes (2026-08-09)
 
@@ -2016,9 +2095,13 @@ picker + the store-launcher rendering path.
 1. **The FULL store validation** (the execution tail of §8 step 4): Battle.net
    install + login + a game, OR Epic/GOG via Lutris sources (Legendary/gogdl —
    no Windows launcher, lighter). Needs store creds + a download.
-2. **N-on-N on the sway path** (§16.5) — 2 sway compositors on 1 L4 (raw
-   render-node time-slice; MPS optional for loaded 3:1). Confirms the oversub
-   economics hold on the new compositor.
+2. **✅ DONE 2026-08-09 (§16.8) — N-on-N on the sway path.** 2:1 + 3:1 compositor
+   gate validated: 3 concurrent sway/wayland-display compositors on 1 L4, all
+   streaming video+audio (48% GPU / 1.9 GB of 23 GB, load 4.45/22 cores, 3 coturn
+   relays 3478/3479/3480 all forwarding; raw render-node time-slice, no MPS). The
+   oversub economics hold on the new compositor. **Remaining:** the raster cliff
+   (3 concurrent *active* games, human-play) — the §8 UpCloud L4 active-gameplay
+   gate.
 3. **✅ DONE 2026-08-09 (§18.6)** — 1080p/1440p fix: a one-line sway config
    (`output * mode --custom WxH`), NOT a plugin-source change. sway's nested
    Wayland backend ignored the compositor's `wl_output.mode` (defaulted to
