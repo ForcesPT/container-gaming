@@ -1,12 +1,19 @@
-# dpad_input_patch.py — Stage 3a input router for the gamescope path.
+# dpad_input_patch.py — Stage 3a input router for the gamescope + wayland paths.
 #
 # Auto-loaded at Python startup via dpad_input_patch.pth in site-packages.
-# When DPAD_INPUT_DISPLAY is set (e.g. ":0" = gamescope's headless Xwayland),
-# it makes Selkies' WebRTCInput connect its X display to DPAD_INPUT_DISPLAY
-# (gamescope's Xwayland) instead of the capture display (:2), and switches
-# send_x11_keypress()/send_mouse() from pynput to XTest on that display — so
-# keyboard/mouse reach gamescope -> Steam. Capture (ximagesrc on :2) reads
+# When DPAD_INPUT_DISPLAY is set (e.g. ":0" = gamescope's headless Xwayland OR
+# sway's nested-Xwayland :0 under gst-wayland-display), it makes Selkies'
+# WebRTCInput connect its X display to DPAD_INPUT_DISPLAY instead of the
+# capture display, and switches send_x11_keypress()/send_mouse() from pynput
+# to XTest on that display — so keyboard/mouse reach Steam. Capture reads
 # DISPLAY directly and is unaffected.
+#
+# LAZY OPEN (2026-08-09, wayland-display path): the gamescope path has :0 up
+# before selkies starts, but the wayland-display path inverts the boot order
+# (selkies first → peer connects → compositor → sway → Xwayland :0). So we
+# install the overrides at import but OPEN DPAD_INPUT_DISPLAY LAZILY on the
+# first input event (retrying until :0 appears), instead of once at import
+# (which would fail + leave input dead). A no-op until :0 is up.
 #
 # Includes a monkey-patch for a python-xlib 0.33 bug (add_extension_event) that
 # otherwise crashes display.Display() with "type object does not support item
@@ -84,21 +91,34 @@ def _patch():
         _log("no WebRTCInput class found")
         return
 
-    # Create the :0 display now (after the bug fix) and reuse it for the
-    # whole session (a second display would re-trigger the bug class-level).
-    try:
-        _gs_dpy = display.Display(dpy)
-        _log("opened %s OK" % dpy)
-    except Exception as e:
-        _log("could not open %s: %r" % (dpy, e))
-        return
+    # --- LAZY display open ------------------------------------------------
+    # Open DPAD_INPUT_DISPLAY on demand + cache. The wayland-display path
+    # starts selkies before sway's Xwayland :0 is up; opening at import would
+    # fail + leave input dead. Retry on each input event until :0 appears.
+    _gs_dpy = [None]  # mutable holder so the nested fns can reassign
+    _last_err = [None]
+    def _get_dpy():
+        if _gs_dpy[0] is not None:
+            return _gs_dpy[0]
+        try:
+            d = display.Display(dpy)
+            _gs_dpy[0] = d
+            _last_err[0] = None
+            _log("opened %s OK (lazy)" % dpy)
+            return d
+        except Exception as e:
+            # Only log the error once per distinct message to avoid spam.
+            if _last_err[0] != str(e):
+                _last_err[0] = str(e)
+                _log("waiting for %s (will retry on input): %r" % (dpy, e))
+            return None
 
     XBTN = {M.MOUSE_BUTTON_LEFT: 1, M.MOUSE_BUTTON_MIDDLE: 2, M.MOUSE_BUTTON_RIGHT: 3}
     W = next(iter(classes.values()))
 
     _orig_connect = W.connect
     async def connect(self):
-        self.xdisplay = _gs_dpy
+        self.xdisplay = _get_dpy()  # may be None if :0 not up yet; send fns retry
         try:
             self._WebRTCInput__keyboard_connect()
         except Exception:
@@ -108,16 +128,16 @@ def _patch():
             self._WebRTCInput__mouse_connect()
         except Exception:
             pass
-        _log("connect: xdisplay -> %s (reused)" % dpy)
+        _log("connect: xdisplay -> %s (lazy)" % dpy)
 
     _orig_key = W.send_x11_keypress
     def send_x11_keypress(self, keysym, down=True):
-        # Inject via XTest on the gamescope Xwayland display. Do NOT fall back to
-        # the original pynput path: pynput's X keyboard backend touches RANDR modes
-        # (BadRRModeError) on gamescope's rootless Xwayland and fails noisily.
-        # keysym_to_keycode covers every standard key; if it returns 0 the key
-        # isn't in the keymap and pynput wouldn't help anyway.
-        d = getattr(self, "xdisplay", None) or _gs_dpy
+        # Inject via XTest on the DPAD_INPUT_DISPLAY Xwayland. Do NOT fall back
+        # to the original pynput path: pynput's X keyboard backend touches RANDR
+        # modes (BadRRModeError) on rootless Xwayland and fails noisily.
+        d = _get_dpy() or getattr(self, "xdisplay", None)
+        if d is None:
+            return  # :0 not up yet; drop the event (retry on the next one)
         try:
             kc = d.keysym_to_keycode(keysym)
             if kc:
@@ -129,12 +149,16 @@ def _patch():
             if dbg:
                 _log("key keysym=%s -> no keycode (dropped)" % keysym)
         except Exception as e:
+            # The display may have died (sway restarted) -> drop + reopen next time.
+            _gs_dpy[0] = None
             if dbg:
                 _log("key XTest FAILED keysym=%s %r (dropped)" % (keysym, e))
 
     _orig_mouse = W.send_mouse
     def send_mouse(self, action, data):
-        d = getattr(self, "xdisplay", None) or _gs_dpy
+        d = _get_dpy() or getattr(self, "xdisplay", None)
+        if d is None:
+            return  # :0 not up yet; drop the event (retry on the next one)
         try:
             if action == M.MOUSE_POSITION:
                 x, y = data
@@ -171,6 +195,7 @@ def _patch():
             else:
                 _orig_mouse(self, action, data)
         except Exception:
+            _gs_dpy[0] = None  # display may have died -> reopen next time
             try: _orig_mouse(self, action, data)
             except Exception: pass
 
@@ -188,6 +213,10 @@ def _patch():
         cls.send_mouse = send_mouse
         cls.on_message = on_message
 
-    _log("Selkies input -> X display %s (XTest, patched %d class(es))" % (dpy, len(classes)))
+    # Try an initial open (succeeds on the gamescope path where :0 is already up;
+    # no-op on the wayland-display path until sway launches). Either way the
+    # overrides are installed + _get_dpy() retries until :0 appears.
+    _get_dpy()
+    _log("Selkies input -> X display %s (XTest lazy-open, patched %d class(es))" % (dpy, len(classes)))
 
 _patch()

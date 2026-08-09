@@ -12,10 +12,37 @@
 > (N-on-N, Selkies+coturn transport, volumes, the control plane, billing) and
 > fixes what gamescope-headless structurally cannot.
 >
-> **Status: DECISION (not yet implemented).** The phased plan (§8) starts with a
-> cheap live probe (already-wired env knobs) + a build spike, then layers the
-> shell + store launchers on top. Nothing in the image changes until the spike
-> validates the compositor→Selkies path on one VM.
+> **Status: DECISION + LIVE-VALIDATED through §16.7 (2026-08-09).** The phased
+> plan (§8) started with a cheap probe + a build spike and has validated the
+> compositor→Selkies path on a real OVH L4. See the **Current validated state**
+> banner below for what's proven vs. what's still open.
+>
+> **Current validated state (as of §16.7, 2026-08-09):**
+> - **Compositor + capture PROVEN** — `gst-wayland-display` runs off the DRM
+>   render node (no DRM master → N-on-N linchpin holds), EGL/GBM glamor works on
+>   the open R580, `waylanddisplaysrc` engages inside selkies' `webrtcbin` at
+>   runtime (§13.14, §15: the `m=video:9` gate PASSED → the §17.3 Lutris-capture
+>   blocker is RETIRED).
+> - **sway is the XWayland client (NOT gamescope-wayland).** `gamescope --backend
+>   wayland` drops the connection once Steam's CEF commits surfaces (§16.3);
+>   `DPAD_WAYLAND_CLIENT=sway` (`WLR_BACKENDS=wayland`) is validated end-to-end
+>   — video + audio + interaction (§16.7).
+> - **Capture tail is system-memory RGBx → cudaupload → cudaconvert → nvh264enc**
+>   (NVRTC JIT runs, `nvrtc: error`=0, covered by `extract-nvrtc.sh`), NOT
+>   CUDAMemory-direct — selkies' static `Gst.Element.link()` can't negotiate
+>   CUDAMemory-BGRA→nvh264enc (§15.2 Bug 2). CUDAMemory zero-copy is a §13.3
+>   *follow-up*, not the default.
+> - **`sdl3-builder` SHIPPED** (§5.6, commit `af5bda6`, image `b403937b`) —
+>   `libSDL3.so.0` on the system lib path, live-validated.
+> - **Still open (the §8 phasing tail):** Lutris shell + store launchers under
+>   sway, N-on-N on the sway path, the `--device /dev/dri` CDI-perm fix for prod
+>   multi-GPU hosts (§14), selkies audio-peer reconnect robustness (§16.7), + the
+>   1080p/1440p + dynamic-resize compositor-mode fix (§17.3 — a plugin-source
+>   change; the wayland-display path is 720p-capped until it lands), then the
+>   default flip. **Mouse/keyboard under sway are now RESOLVED** (§17.2, the lazy
+>   `DPAD_INPUT_DISPLAY` open) + gamepad already worked. The spec sections
+>   §2.2/§4/§5.2/§5.3/§5.6/§13.3/§13.9/§13.12 carry `⚠️ SUPERSEDED` markers where
+>   the live results changed the design — trust those over the original prose.
 >
 > **Companion:** `STORES-PLAN.md` (the multi-store plan this unblocks — §17.3 is
 > the live-test blocker this retires), `PROJECT_STATE.md` §6 #10/#11/#12 (the
@@ -27,8 +54,8 @@
 
 | | Today (gamescope-headless) | After (`gst-wayland-display`) |
 |---|---|---|
-| **Compositor + capture** | `gamescope --backend headless` renders → PipeWire node → `pipewiresrc` (system-memory BGRx) → `cudaupload` → `cudaconvert` (NVRTC JIT) → `nvh264enc` | `waylanddisplaysrc render_node=$RENDER_NODE` → `video/x-raw(memory:CUDAMemory)` → `nvh264enc` (true zero-copy, no cudaconvert/NVRTC) |
-| **XWayland / legacy apps** (Steam CEF, Wine/Proton store launchers) | gamescope *is* the compositor + the XWayland provider | gamescope runs **as a Wayland client** of gst-wayland-display; it provides XWayland to the app; gamescope's output is captured by gst-wayland-display |
+| **Compositor + capture** | `gamescope --backend headless` renders → PipeWire node → `pipewiresrc` (system-memory BGRx) → `cudaupload` → `cudaconvert` (NVRTC JIT) → `nvh264enc` | `waylanddisplaysrc render_node=$RENDER_NODE` → system-memory **RGBx** → `cudaupload` → `cudaconvert` (NVRTC JIT, covered by `extract-nvrtc.sh`) → `nvh264enc` (**validated** §15.2/§16.7). CUDAMemory zero-copy is a §13.3 *follow-up*, not the default — selkies' static `Gst.Element.link()` can't negotiate CUDAMemory-BGRA → nvh264enc (§15.2 Bug 2). |
+| **XWayland / legacy apps** (Steam CEF, Wine/Proton store launchers) | gamescope *is* the compositor + the XWayland provider | **sway** runs as a Wayland client of gst-wayland-display (`WLR_BACKENDS=wayland`, no DRM master) + provides XWayland to the app — **validated live §16.7** (video+audio+interaction). `gamescope --backend wayland` was the planned client but **drops the connection once Steam's CEF commits surfaces** (§16.3); the `DPAD_WAYLAND_CLIENT` gate selects the client (sway is the working one). |
 | **Native-Wayland apps / full desktop** (Electron `--ozone-platform=wayland`, sway, OpenGamepadUI/Godot) | not reliably captured (the §17.3 bug) | render **directly** into gst-wayland-display → captured |
 | **Transport** | Selkies `webrtcbin` + coturn + Opus inband FEC + ULP_RED video FEC + NACK rtx | **unchanged** |
 | **N-on-N** | shared GPU via MPS daemon (or raw time-slice) | shared render-node EGL contexts (raw time-slice, no DRM master) — MPS still optional for loaded 3:1 |
@@ -36,10 +63,10 @@
 | **Gamepad** | 6-layer chain + evdev interposer (working, validated) | inputtino virtual pads (cleaner, same outcome) — or keep the existing chain initially |
 
 **Net:** one new build stage (`wayland-display-builder`), one GStreamer source
-element swap (`pipewiresrc` → `waylanddisplaysrc`), gamescope demoted from
-compositor to client, plus the input-side rework. Everything downstream
-(encode, coturn, FEC, the web client, the control plane, billing, volumes) is
-untouched.
+element swap (`pipewiresrc` → `waylanddisplaysrc`), sway (or gamescope) demoted
+to a Wayland client of the compositor, plus the input-side rework. Everything
+downstream (encode, coturn, FEC, the web client, the control plane, billing,
+volumes) is untouched.
 
 ## 1. The problem (why gamescope-headless can't get there)
 
@@ -134,6 +161,16 @@ not required for correctness.)
 This is the same property gamescope-headless gives us. We lose nothing.
 
 ### 2.2 The capture is genuinely better than what we have
+
+> ⚠️ **SUPERSEDED by §15.2 Bug 2 (live, 2026-08-08).** The CUDAMemory zero-copy
+> path below does **not** work through selkies' *static* `Gst.Element.link()`
+> (nvh264enc narrows CUDAMemory to NV12/Y444 at static query_caps → no common
+> format with the compositor's BGRA). The **validated** path is system-memory
+> **RGBx** → `cudaupload` → `cudaconvert` (NVRTC JIT, covered by
+> `extract-nvrtc.sh`, `nvrtc: error`=0) → `nvh264enc` — the *same* encode tail
+> as `pipewiresrc`, with a different source. CUDAMemory zero-copy is retained
+> below as a §13.3 *follow-up* (`link_pads_full(NO_CAPS_CHECK)` or PR #35 NV12
+> DMABuf→CUDAMemory), not the default.
 
 Today's pipeline (system-memory round-trip + a JIT we had to patch):
 
@@ -230,6 +267,15 @@ the input rework. Everything downstream is untouched.
 
 ## 4. The new pipeline
 
+> ⚠️ **PARTIALLY SUPERSEDED (live, 2026-08-08/09):** (1) The capture tail is
+> **system-memory RGBx → cudaupload → cudaconvert → nvh264enc**, NOT the
+> CUDAMemory-direct path shown below (§15.2 Bug 2 — selkies' static link can't
+> negotiate CUDAMemory-BGRA→nvh264enc). CUDAMemory zero-copy is a §13.3 follow-up.
+> (2) The XWayland client is **sway** (`WLR_BACKENDS=wayland`), not `gamescope
+> --backend wayland` — gamescope-wayland drops the connection once Steam's CEF
+> commits surfaces (§16.3); sway is validated end-to-end (§16.7). The diagram
+> below shows the *intended* design; read it with those two corrections.
+
 ```
 ┌─ gst-wayland-display (compositor + capture) ──────────────────────────────┐
 │  EGL display off /dev/dri/renderD128 (render node, NO DRM master)          │
@@ -291,6 +337,17 @@ CUDA toolkit headers (already in the image).
 
 ### 5.2 Entrypoint: a new `DPAD_COMPOSITOR` gate
 
+> ⚠️ **UPDATED by §14 (implementation) + §16.3/§16.4/§16.7 (live).** The gate as
+> built adds a second knob `DPAD_WAYLAND_CLIENT=gamescope|sway` (default
+> `gamescope` = no regression) selecting the XWayland-providing *client* of the
+> compositor. **sway is the validated path** (§16.7 — video+audio+interaction);
+> `gamescope --backend wayland` drops the connection once Steam's CEF commits
+> surfaces (§16.3) → kept as a fallback env, not the working path. The capture
+> tail is system-memory **RGBx → cudaupload → cudaconvert → nvh264enc** (§15.2),
+> NOT the CUDAMemory-direct pipeline in step 3 below. The inverted boot order
+> (selkies first → peer connects → compositor starts → client launches) + the
+> `--device /dev/dri` + dummy-Xvfb-for-pynput + `/tmp/.X11-unix` fixes are in §14.
+
 Add `DPAD_COMPOSITOR` (default `gamescope` = the **current, unchanged, no-
 regression** path; `wayland-display` = the new path). The new path:
 
@@ -327,6 +384,15 @@ client, orthogonal to *which compositor*. Under `DPAD_COMPOSITOR=wayland-display
   `--ozone-platform=wayland` direct (native Wayland — the §17.3 fix).
 
 ### 5.3 The `DPAD_VIDEO_SRC` semantics change
+
+> ⚠️ **SUPERSEDED by §15.2 (live).** The `cuda`/CUDAMemory-zero-copy default
+> does **not** work through selkies' static link. The **validated** capture is
+> system-memory **RGBx** → `cudaupload` → `cudaconvert` → `nvh264enc` (the
+> selkies patch's `waylanddisplaysrc` branch uses waylanddisplaysrc's
+> system-memory src-pad template, not the CUDAMemory one — §15.2 Bug 2). So
+> under `DPAD_COMPOSITOR=wayland-display`, `DPAD_VIDEO_SRC=waylanddisplaysrc`
+> selects the compositor source with a **system-memory RGBx** output; CUDAMemory
+> zero-copy is a §13.3 follow-up, not a `DPAD_VIDEO_SRC` mode today.
 
 Today `DPAD_VIDEO_SRC` (`pipewiresrc` default, `ximagesrc` = the `:2` Xvfb
 fallback) selects the capture source for the gamescope-headless path. Under
@@ -373,6 +439,13 @@ render node via EGL — no DRM master, no modesetting contention. The
 it for loaded 3:1. Validate 2:1 + 3:1 on the new path in the spike (§8 step 2).
 
 ### 5.6 `libSDL3` for the Lutris shell (the §17.4 item — now on the critical path)
+
+> ✅ **DONE + LIVE-VALIDATED 2026-08-08** (commit `af5bda6`, image `b403937b`).
+> The `sdl3-builder` stage (SDL3 3.2.28 from source, minimal backends →
+> `libSDL3.so.0` on the system lib path) is shipped in the public `:dpad-SteamOS`
+> image + live-validated on an OVH L4 (`lutris-shell.log` → `[sdl_manager] SDL3
+> initialized! libSDL3.so.0` vs the old `Unable to load`). Retires §17.4. The
+> spec text below is the design record.
 
 With Lutris as the primary shell (§6), the `libSDL3.so.0`-unfindable-by-
 `lutris-gamepad-ui` bug (`PROJECT_STATE.md` §6 #12 / `STORES-PLAN.md` §17.4) is
@@ -467,14 +540,16 @@ confirmed.
   new compositor), but it tells us whether the new architecture is *strictly
   necessary now* or *the right direction + the current path is recoverable*.
   Either way we proceed to the spike.
-- **gamescope-as-Wayland-client stability.** gamescope's `--backend wayland`
-  (run as a Wayland client instead of owning the scanout) is less battle-tested
-  than `--backend headless`. The games-on-whales maintainers note gamescope
-  "may be unstable with some Nvidia driver versions" (their config docs) and
-  default to sway. **Mitigation:** the spike validates `gamescope --backend
-  wayland -- steam -gamepadui` under gst-wayland-display on an L4 first; if it's
-  flaky, the fallback for XWayland apps is sway-as-client + XWayland (sway
-  provides XWayland too) — same capture, different XWayland provider.
+- **gamescope-as-Wayland-client stability — CONFIRMED BROKEN; sway is the
+  workaround (§16.3/§16.7, live 2026-08-09).** gamescope's `--backend wayland`
+  inits fine but **drops the connection** to gst-wayland-display once Steam's
+  CEF commits surfaces (`IWaitable hung up` / `Connection reset by peer`,
+  §16.3). The games-on-whales caveat ("may be unstable with some Nvidia driver
+  versions") is confirmed on R580-open. **Resolution (validated):** sway as the
+  Wayland client (`WLR_BACKENDS=wayland` → no DRM master → N-on-N preserved) +
+  XWayland, gated by `DPAD_WAYLAND_CLIENT=gamescope|sway` — sway stays up
+  (self-heals on drop via the health loop), Steam renders, audio plays,
+  clickable (§16.7). gamescope-wayland is kept as a fallback env, not the path.
 - **Driver-variant sensitivity.** gst-wayland-display uses EGL/GBM glamor —
   the same path that **requires the OPEN Nvidia driver variant**
   (`PROJECT_STATE.md` §5 — the proprietary 580.126.20 → black screen on
@@ -514,6 +589,14 @@ confirmed.
    initialized! libSDL3.so.0` — so the libSDL3 fix is shipped regardless.)
 
 2. **Spike — build + 1 VM, ~1–2 days.**
+   > ⚠️ **Live results (§15 m=video:9 gate PASSED + §16.7 sway validated) supersede
+   > several bullets below:** the capture tail is system-memory RGBx → cudaconvert
+   > (NOT CUDAMemory-direct — §15.2 Bug 2); the XWayland client is **sway**
+   > (gamescope `--backend wayland` drops the connection, §16.3); NVRTC JIT *does*
+   > run (`nvrtc: error`=0, covered by `extract-nvrtc.sh` — the "NVRTC moot on this
+   > path" hypothesis is FALSE on the validated system-memory path). N-on-N on the
+   > sway path + the `--device /dev/dri` CDI-perm fix for multi-GPU hosts remain
+   > open (§16.5, §14).
    - **✅ BUILD HALF DONE + VALIDATED 2026-08-08** — the `wayland-display-builder`
      stage is committed to `Dockerfile` (after the `base` stage, before
      `vast-docker`) + builds clean (`docker build --target wayland-display-builder`):
@@ -556,23 +639,27 @@ confirmed.
      our CDI setup.
 
 3. **Lutris shell under the new compositor + the libSDL3 fix — ~1 day.**
-   - Add the `sdl3-builder` stage (§5.6): build SDL3 from source with minimal
+   > ✅ `sdl3-builder` is **DONE + shipped** (§5.6, 2026-08-08). The remaining
+   > work is the Lutris-under-**sway** validation (the §5.2 client is sway, not
+   > gamescope-wayland). NOT yet validated live.
+   - ~~Add the `sdl3-builder` stage (§5.6): build SDL3 from source with minimal
      backends (joystick/hidapi/events), install `libSDL3.so.0` to
-     `/usr/lib/x86_64-linux-gnu/` + `ldconfig`. Retires §17.4.
+     `/usr/lib/x86_64-linux-gnu/` + `ldconfig`. Retires §17.4.~~ ✅ DONE (§5.6).
    - `DPAD_STORE_SHELL=lutris` → `lutris-shell` as a Wayland client of
      gst-wayland-display (try `--ozone-platform=wayland` direct first; fall back
-     to `gamescope --backend wayland` if the Electron app needs X).
+     to **sway's XWayland** if the Electron app needs X — NOT `gamescope --backend
+     wayland`, which drops the connection, §16.3).
    - Validate gamepad navigation of the Lutris UI end-to-end with a real
      controller (the bar the evdev path cleared 2026-08-04). Keyboard/mouse via
      Selkies Desktop mode is the fallback while the SDL3 fix lands.
 
-4. **Store launchers via gamescope-as-client (XWayland) — ~1 day.** Battle.net /
-   Epic under GE-Proton11-3 via `gamescope --backend wayland -- <launcher>`.
-   Validate the §5 Xwayland path captures the launcher window + the game. (This
-   is the real multi-store validation — the launchers rendering is the thing
-   gamescope-headless could not do.) This is the step that proves multi-store;
-   the Lutris shell from step 3 is the picker that gets the user *to* the
-   launcher.
+4. **Store launchers under sway (XWayland) — ~1 day.** Battle.net /
+   Epic under GE-Proton11-3 via **sway's XWayland** (NOT `gamescope --backend
+   wayland -- <launcher>`, which drops the connection, §16.3). Validate the
+   §5 Xwayland path captures the launcher window + the game. (This is the real
+   multi-store validation — the launchers rendering is the thing gamescope-headless
+   could not do.) This is the step that proves multi-store; the Lutris shell from
+   step 3 is the picker that gets the user *to* the launcher.
 
 5. **Flip the default — after a parallel-run validation period.**
    `DPAD_COMPOSITOR=wayland-display` becomes the default; `gamescope` (headless)
@@ -637,43 +724,52 @@ confirmed.
 
 ```bash
 cd dpadplay/container-gaming && git pull
-# This doc = the decision. §8 step 1 (the probe) is DONE (2026-08-08, OVH L4):
-# DPAD_LUTRIS_DISABLE_GPU=1 did NOT fix §17.3 → the pivot is strictly necessary.
-# §17.4 (libSDL3) is SHIPPED (sdl3-builder, commit af5bda6, image b403937b on
-# Docker Hub) + live-validated (sdl_manager "SDL3 initialized! libSDL3.so.0").
+# This doc = the decision + the live-validation log (§13–§16). Current state as
+# of §16.7 (2026-08-09): the compositor pivot is LIVE-VALIDATED end-to-end via
+# the sway-as-client fallback — video + audio + interaction on an OVH L4.
 #
-# §8 step 2 BUILD + COMPOSITOR-CAPTURE HALVES — DONE + LIVE-VALIDATED 2026-08-08:
-# the wayland-display-builder stage is committed to Dockerfile (orphan) + builds;
-# on a real OVH L4 (open R580) the compositor starts on the render node (NO DRM
-# master → N-on-N), EGL/GBM glamor works, CUDAMemory zero-copy engages, nvh264enc
-# inits, NVRTC-error=0 (extract-nvrtc.sh redundant here), + the wayland socket is
-# created (client-discovery via polling works). See §13.13–§13.14. The prod image
-# already has libwayland 1.24.0 → vast-vm needs only the plugin .so COPY'd.
+# DONE + validated:
+#  - §8 step 1 probe: DPAD_LUTRIS_DISABLE_GPU=1 did NOT fix §17.3 → pivot
+#    strictly necessary.
+#  - §5.6 sdl3-builder: SHIPPED (commit af5bda6, image b403937b) + live-validated
+#    (sdl_manager "SDL3 initialized! libSDL3.so.0").
+#  - §13.14 compositor + EGL + CUDAMemory-capable build: proven on a real L4
+#    (render node, no DRM master → N-on-N linchpin holds).
+#  - §15 m=video:9 GATE PASSED — waylanddisplaysrc engages inside selkies'
+#    webrtcbin at runtime (the §17.3 Lutris-capture blocker is RETIRED).
+#  - §16.7 sway-as-client: video + audio + clickable, end-to-end. gamescope
+#    --backend wayland DROPS the connection (§16.3) → sway is the path.
 #
-# §8 step 2 REMAINING (the Selkies + browser-stream half) — NEXT:
-#   1. gamescope `--backend wayland` is AVAILABLE (live-confirmed: "Post-Initted
-#      Wayland backend"; auto-selects when WAYLAND_DISPLAY set). No rebuild/sway.
-#   2. Wire vast-vm: COPY --from=wayland-display-builder the plugin .so to the
-#      gstreamer plugin dir (DONE — committed; the prod libwayland 1.24.0
-#      suffices, no libwayland COPY). Add `--device /dev/dri` to the container
-#      launch (the CDI /dev/dri group perms block the compositor's raw
-#      render-node open, §13.14). DONE: the patch_selkies_waylanddisplay.py
-#      (the waylanddisplaysrc branch) is written + applied in vast-vm.
-#   3. patch_selkies_waylanddisplay.py (mirror patch_selkies_pipewire.py): DONE —
-#      the waylanddisplaysrc cuda-device-id=$CUDA_ID ! CUDAMemory ! nvh264enc
-#      branch in build_video_pipeline (gated on DPAD_VIDEO_SRC=waylanddisplaysrc).
-#   4. entrypoint DPAD_COMPOSITOR=wayland-display gate (default gamescope = no
-#      regression): start selkies (waylanddisplaysrc) [needs a dummy Xvfb for
-#      pynput to import, §13.14], poll $XDG_RUNTIME_DIR/wayland-* for the socket,
-#      launch gamescope --backend wayland -- <shell> with WAYLAND_DISPLAY (pre-
-#      create /tmp/.X11-unix root-owned 1777, §13.14).
-#   5. Live selkies webrtcbin peer test: provision an OVH L4, run with
-#      DPAD_COMPOSITOR=wayland-display, connect a WebRTC peer (aiortc headless
-#      client OR a browser) → confirm m=video:2 (the §17.3 metric) + N-on-N.
+# CORRECTIONS to the original spec (the validated path differs from §2.2/§4/§5):
+#  - Capture tail = system-memory RGBx → cudaupload → cudaconvert (NVRTC JIT
+#    runs, nvrtc: error=0, covered by extract-nvrtc.sh) → nvh264enc. NOT
+#    CUDAMemory-direct (§15.2 Bug 2 — selkies' static link can't negotiate
+#    CUDAMemory-BGRA→nvh264enc). CUDAMemory zero-copy is a §13.3 follow-up.
+#  - XWayland client = SWAY (WLR_BACKENDS=wayland), not gamescope-wayland.
+#    DPAD_WAYLAND_CLIENT=gamescope|sway gates it (sway is the working one).
 #
-# Then: Lutris shell (native Wayland, --ozone-platform=wayland) for gamepad nav
-#   (sdl3-builder already ships libSDL3) → store launchers via gamescope-as-client
-#   (XWayland) → flip default → inputtino migration (last).
+# NEXT — the remaining §8 phasing (priority order, see §16.5 resume):
+#   1. Lutris shell under sway (§8 step 3) — DPAD_STORE_SHELL=lutris +
+#      --ozone-platform=wayland OR sway-XWayland. Decisive: render + clickable?
+#   2. Store launchers under sway (§8 step 4) — Battle.net/Epic via
+#      GE-Proton11-3 under sway's XWayland. THE real multi-store validation.
+#   3. Gamepad input under sway (§5.4) — keyboard/mouse reach Steam (§16.7);
+#      the evdev interposer was for gamescope's XWayland → real-controller test
+#      under sway needed (or inputtino migration, §8 step 6, last).
+#   4. N-on-N on the sway path (§16.5) — 2 sway compositors on 1 L4 via MPS.
+#   5. --device /dev/dri CDI-perm fix for prod multi-GPU hosts (§14) — the
+#      spike mounts ALL GPUs' /dev/dri; prod needs a scoped render-node mount.
+#   6. selkies audio-peer reconnect robustness (§16.7) — stale uid in
+#      self.peers; validate browser-refresh / network-blip audio recovery.
+#   7. CUDAMemory zero-copy (§13.3 follow-up, non-blocking) — link_pads_full
+#      (NO_CAPS_CHECK) or PR #35 NV12 DMABuf→CUDAMemory.
+#   8. Flip the control-plane default to DPAD_COMPOSITOR=wayland-display after
+#      a parallel-run on all 5 regions (§8 step 5). Keep gamescope-headless as
+#      a fallback env. Vendor gst-wayland-display (§8 step 7).
+#
+# Reproducible test: §12 (provision an OVH L4 via createOvhAdapter) + §16.7
+# (DPAD_COMPOSITOR=wayland-display DPAD_WAYLAND_CLIENT=sway, browser as the
+# FIRST peer — do NOT run selkies-sdp-probe.py first, it pollutes self.peers).
 ```
 
 ## 12. Reproducible test-VM provisioning (OVH API, no website)
@@ -784,6 +880,15 @@ builder` stage just COPYs `/opt/gstreamer` from the `base` stage + builds with
 `cuda` feature. Pin a commit/tag in the builder (vendor-risk mitigation, §7).
 
 ### 13.3 The exact CUDAMemory pipeline (confirmed from the README + Wolf PR #156)
+
+> ⚠️ **SUPERSEDED by §15.2 Bug 2 (live).** This CUDAMemory-direct pipeline does
+> **not** work through selkies' static `Gst.Element.link()` (nvh264enc narrows
+> CUDAMemory to NV12/Y444 at static query_caps → no common format with the
+> compositor's BGRA). The **validated** capture is system-memory **RGBx** →
+> `cudaupload` → `cudaconvert` (NVRTC JIT runs; `nvrtc: error`=0, covered by
+> `extract-nvrtc.sh`) → `nvh264enc`. Retained below as the CUDAMemory-zero-copy
+> *follow-up* (`link_pads_full(NO_CAPS_CHECK)` or PR #35 NV12 DMABuf→CUDAMemory).
+
 ```
 waylanddisplaysrc cuda-device-id=$CUDA_ID
   ! video/x-raw(memory:CUDAMemory),width=1920,height=1080,framerate=60/1
@@ -884,6 +989,12 @@ file `libwayland-server.so.0.23.1`). `PKG_CONFIG_PATH` puts `/usr/local`'s
 expat — the build errors `Dependency "expat" not found` without it) +
 `wayland-protocols` (apt noble 1.36 is fine).
 
+> ⚠️ **SUPERSEDED by §13.14 (live):** the prod `:dpad-SteamOS` image already
+> ships **libwayland 1.24.0** (a noble backport), so the runtime does **not**
+> need the builder's 1.23 `.so` — the 1.23 build is needed only in the BUILDER
+> (cuda-base has 1.22). vast-vm needs only the plugin `.so` COPY'd. The text
+> below was the pre-validation requirement.
+
 **vast-vm runtime:** the image must SHIP the built libwayland 1.23 `.so` (the
 apt 1.22 server lacks the symbols → the plugin fails to load with `undefined
 symbol: wl_client_set_max_buffer_size`). Ship `/usr/local/lib/x86_64-linux-gnu/
@@ -963,6 +1074,11 @@ stage uses stable + latest for simplicity, validated).
   as a Wayland client of THAT compositor's socket. (The element has no
   socket-name property — the socket is auto-assigned; the bus message is the
   only way to discover it when the compositor runs inside the selkies pipeline.)
+  ⚠️ **SUPERSEDED by §13.14 (live):** a simpler path won — **polling
+  `$XDG_RUNTIME_DIR/wayland-*`** for the auto-assigned socket works (the
+  compositor creates `wayland-N` + `.lock` there); the entrypoint health loop
+  uses polling, not the bus message. The bus-message approach above is retained
+  as the alternative.
 
 ### 13.13 Spike build — VALIDATED 2026-08-08
 `docker build --target wayland-display-builder .` (in `container-gaming`) succeeds:
@@ -1675,3 +1791,151 @@ sway path, then flip the control-plane default.
 (`:dpad-SteamOS` now bakes sway + the gate, or the `:dpad-SteamOS-wd-spike` tag),
 open the browser (do NOT run sdp-probe first), connect. VM torn down after
 validation (`adapter.destroyVm`, 0 orphans, billing stopped).
+
+## 17. Prod-tag re-validation + the input & resolution fixes (2026-08-09)
+
+> **Followed up the §16.7 spike-tag validation by re-running the full sway path
+> on the freshly-rebuilt + pushed public `:dpad-SteamOS` tag (no shortcut build),
+> then fixed the two issues it surfaced — mouse/keyboard input + the 720p
+> letterbox — both live-validated. The prod image is now CONFIRMED end-to-end on
+> the real tag; the fixes are committed to `main` + ship via the entrypoint/
+> `dpad_input_patch.py` bind-mount hotfix path until the next image rebuild bakes
+> them.**
+
+### 17.1 The prod-tag gate (the §8 step-2 "remaining" half, closed)
+
+Provisioned a fresh OVH Gravelines L4 (`e6d4b0ca-…` @ `79.137.11.29`) via the
+§12 `createOvhAdapter` pattern. `vm-bootstrap.sh install` ran the §16.6 driver
+swap (plain proprietary `nvidia-driver-580` 580.159.03 → open
+`nvidia-driver-580-open` 580.178.04, one cold-boot reboot) + pulled the user's
+fresh rebuild of `forcespt/dpadcloud-gaming:dpad-SteamOS` (digest
+`sha256:7d6a840e…`) + reached `DPAD_VM_READY` (0 containers, `DPAD_MAX_SESSIONS=0`).
+
+**#prereq gate PASSED on the real prod tag** (no `:dpad-SteamOS-wd-spike`
+shortcut): `command -v sway` (1.9), `gst-inspect-1.0 waylanddisplaysrc` (all 5
+properties + the `video/x-raw(memory:CUDAMemory)` caps), `libSDL3.so.0.2.28`,
+the entrypoint `DPAD_COMPOSITOR` gate + `start_wayland_display_session` — all
+baked into the public tag. The §16.7 ambiguity (spike vs prod) is resolved: the
+shippable image has the full wayland-display stack.
+
+Launched `DPAD_COMPOSITOR=wayland-display DPAD_WAYLAND_CLIENT=sway
+DPAD_STORE_SHELL=steam` → browser as the first peer → **video + audio + gamepad
+all work end-to-end on the real prod tag.** The §17.3 Lutris-capture blocker is
+retired on the shippable image, not just the spike. Two issues found + fixed
+live (below).
+
+### 17.2 FIX — mouse/keyboard now work under sway (the §5.4 phase-A gap, closed)
+
+**Symptom:** gamepad worked (the classic/evdev interposer is compositor-agnostic
+— browser → `/dev/input/jsN` → SDL3 → Steam, never touches X), but mouse +
+keyboard did NOT reach Steam.
+
+**Root cause (confirmed in the entrypoint):** `start_wayland_display_session`
+launches selkies with `DISPLAY=:99` (the dummy Xvfb, needed for pynput to import)
+and did **not** set `DPAD_INPUT_DISPLAY` — so selkies' XTest injected into the
+dummy `:99`, never reaching sway's `Xwayland :0` (which the ps confirmed was up
++ running Steam). The gamescope-headless path sets `DPAD_INPUT_DISPLAY=:0`
+(line 244/488) because gamescope's `:0` is up *before* selkies starts; the
+wayland-display path inverts the boot order (selkies first → peer connects →
+compositor → sway → `:0`), so `:0` is NOT up when selkies starts.
+
+**The blocker:** `dpad_input_patch.py` (the baked-in selkies input router,
+auto-loaded via `dpad_input_patch.pth`) opened `DPAD_INPUT_DISPLAY` **at import
+time** (`_gs_dpy = display.Display(dpy)`). With the inverted boot order, that
+open fails (`:0` not up yet) → the patch returns → XTest is dead for the whole
+session, even after sway's `:0` later appears. So simply adding
+`DPAD_INPUT_DISPLAY=:0` to the selkies env would NOT work.
+
+**Fix (2 files, committed to `main`):**
+1. **`scripts/dpad_input_patch.py` — lazy open.** Reworked the display open into
+   a cached `_get_dpy()` that opens `DPAD_INPUT_DISPLAY` **on the first input
+   event** + retries until `:0` is up (logs `waiting for :0 (will retry on
+   input): DisplayConnectionError` at start, then `opened :0 OK (lazy)` once
+   sway's Xwayland is up). The overrides (`connect`/`send_x11_keypress`/
+   `send_mouse`) are installed at import regardless; `send_*` drop events until
+   `_get_dpy()` succeeds, then XTest into `:0`. Also drops + reopens the display
+   if it dies (sway restart). No-op when `DPAD_INPUT_DISPLAY` is unset (the
+   gamescope-headless path's behavior unchanged — `:0` is already up there, so
+   the lazy open succeeds immediately).
+2. **`entrypoint.sh` `start_wayland_display_session` (line 910)** — added
+   `DPAD_INPUT_DISPLAY=:0` to the selkies env (route XTest to sway's
+   `Xwayland :0`), matching the gamescope path's pattern.
+
+**✅ VALIDATED LIVE 2026-08-09:** relaunched the probe with both fixes
+bind-mounted (entrypoint + the lazy `dpad_input_patch.py` over the image's
+site-packages copy) → selkies logged `waiting for :0 ... Connection refused` at
+start (expected) → on the browser connecting, the compositor started → sway
+launched → `Xwayland :0` came up → the user's mouse + keyboard reached Steam
+Big Picture. **This retires §5.4 phase A for the sway path** (keyboard/mouse
+under sway); gamepad was already working. The remaining §5.4 work is the
+inputtino migration (§8 step 6, last) — a cleaner path, not a blocker.
+
+### 17.3 FIX — the 720p letterbox (interim) + the 1080p/1440p follow-up
+
+**Symptom:** the stream had **black bars** around the video (letterboxed).
+
+**Root cause (confirmed via `xrandr` on sway's `Xwayland :0`):** the
+`waylanddisplaysrc` compositor's `wl_output` (WL-1) advertises a fixed
+**1280×720** mode (the Smithay headless default). sway/Xwayland/Steam Big
+Picture render at 1280×720. selkies, however, requested 1920×1080 capture caps
+(`DPAD_STREAM_WIDTH/HEIGHT` defaulted to `GS_W/GS_H` = 1920/1080) → the
+compositor's 1280×720 output was composited onto a 1920×1080 framebuffer,
+centered → black bars. The `waylanddisplaysrc` element exposes **no size/mode
+property** (only `render-node`/`cuda-device-id`/`mouse`/`keyboard`/
+`disable-intel-workaround`), so the `wl_output` mode is not settable from the
+pipeline; it does not follow the negotiated caps.
+
+**Interim fix (committed to `main`):** `entrypoint.sh` line 910 now uses
+`DPAD_STREAM_WIDTH=${DPAD_WD_WIDTH:-1280} DPAD_STREAM_HEIGHT=${DPAD_WD_HEIGHT:-720}`
+for the wayland-display path (overridable via `DPAD_WD_WIDTH/HEIGHT`), matching
+the compositor's native 1280×720 mode → no letterbox. The gamescope-headless
+path is unaffected (still `GS_W/GS_H` = 1920/1080). **✅ VALIDATED LIVE
+2026-08-09:** the black bars are gone; the stream is a clean 1280×720.
+
+**The real fix (backlog — a plugin-source change, not a live hotfix):** make
+the `gst-wayland-display` compositor set its `wl_output` mode from the
+negotiated caps (or expose a size property), so the output can be 1920×1080 /
+2560×1440 / arbitrary. Then:
+- Set `DPAD_WD_WIDTH/HEIGHT` (or the caps) to the target res (1080p/1440p).
+- Turn on selkies `--enable_resize=true` (currently `false`) so the browser
+  reports its window size + the server resizes the stream to match the client
+  (the "the host/VM catches the client resolution" UX — the user's 1440p client
+  would drive a 1440p stream).
+- This needs a rebuild of the `wayland-display-builder` stage (a Rust source
+  change to the Smithay compositor's output creation) + an image rebuild/push.
+- The gamescope-headless path already does 1080p (its compositor output is set
+  via `gamescope -W -H`); the wayland-display path's ceiling is 720p until this
+  lands.
+
+### 17.4 The live result + the resume
+
+**Net (2026-08-09, prod tag):** video + audio + gamepad + **mouse + keyboard**
+all work end-to-end on the freshly-rebuilt `:dpad-SteamOS` via the sway-as-client
+wayland-display path — no shortcut build. The pivot is shippable; the remaining
+gaps are (a) the 1080p/1440p + dynamic-resize compositor-mode fix (§17.3, a
+plugin-source change) + (b) the §8 phasing tail (Lutris shell + store launchers
+under sway, N-on-N on sway, the `--device /dev/dri` CDI-perm fix for multi-GPU
+hosts, selkies audio-peer reconnect, then the default flip).
+
+**Shipped to `main` (this session):**
+- `scripts/dpad_input_patch.py` — lazy `DPAD_INPUT_DISPLAY` open (§17.2).
+- `entrypoint.sh` line 910 — `DPAD_INPUT_DISPLAY=:0` + `DPAD_WD_WIDTH/HEIGHT`
+  (1280×720 default, §17.2 + §17.3).
+- `scripts/relaunch-probe.sh` — a probe-relaunch helper (the extra
+  `dpad_input_patch.py` bind-mount the probe script doesn't add).
+- this §17.
+
+**Until the next image rebuild bakes them**, the two fixes ship to existing VMs
+via the entrypoint bind-mount hotfix path (vm-bootstrap fetches `entrypoint.sh`
+from `main`) **+** a new `dpad_input_patch.py` bind-mount (the probe /
+`dpad-launch-session` must mount `/opt/dpadcloud/dpad_input_patch.py` over
+`/usr/local/lib/python3.12/dist-packages/dpad_input_patch.py` — `relaunch-probe.sh`
+shows the pattern; `dpad-launch-session` needs the same `-v` added for prod
+sessions). The next `:dpad-SteamOS` rebuild + push bakes both → no bind-mount
+needed.
+
+**Reproducible test:** §12 (provision an OVH L4 via `createOvhAdapter`) +
+`vm-bootstrap.sh install` + `sudo bash /tmp/relaunch-probe.sh` (or the probe
+script + the `dpad_input_patch.py` bind-mount) → browser as the first peer at
+`http://$IP:16100` → Steam Big Picture (1280×720, no bars) + mouse/keyboard +
+gamepad.
