@@ -116,10 +116,17 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # VARIANT issue, NOT a version issue (R580 LTS is the deliberate choice —
 # longest support to Aug 2028; R595 causes severe L4 flicker; R610 is NFB).
 # Scaleway's "Ubuntu Noble GPU OS 12 passthrough" image ships the PROPRIETARY
-# `nvidia-dkms-580-server` (580.126.20) → must swap to open. Gated on the
-# proprietary variant so UpCloud (already open after its 595->580 downgrade)
-# + OVH (open, validated working) are untouched. See cloud/docs/STATUS.md
-# §4 #42 + the Paris session note + cloud/docs/DEPLOY-RUNBOOK.md §5.
+# `nvidia-dkms-580-server` (580.126.20) → must swap to open. OVH's "Ubuntu 24.04
+# - NVIDIA - v580" image ships the PLAIN PROPRIETARY `nvidia-driver-580` /
+# `nvidia-dkms-580` (no -server, no -open) → ALSO must swap to open: the
+# gst-wayland-display compositor's EGL/GBM glamor needs the open variant
+# (WAYLAND-ARCHITECTURE.md §16.6 — the proprietary variant hits EGL 'dri2
+# screen' → gamescope-as-Wayland-client crashes), and the swap also unifies the
+# host driver so a warm VM is reusable across the gamescope-headless +
+# wayland-display compositors (N-to-N reuse). Gated on the proprietary variant
+# so UpCloud (already open after its 595->580 downgrade) is untouched. See
+# cloud/docs/STATUS.md §4 #42 + the Paris session note + cloud/docs/DEPLOY-
+# RUNBOOK.md §5 + WAYLAND-ARCHITECTURE.md §16.6.
 # NOTE: the script runs under `set -uo pipefail` (line ~61), so `grep -qE` in a
 # pipeline is a trap: grep -q exits on the first match → SIGPIPE kills the
 # upstream awk → pipefail propagates 141 → the function returns non-zero (false)
@@ -128,7 +135,28 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # `grep -E ... >/dev/null` reads ALL input (no early exit → no SIGPIPE) so the
 # pipeline exit is grep's real status (0=match) under pipefail.
 has_proprietary_580() {
-    dpkg -l 2>/dev/null | awk '/^ii/{print $2}' | grep -E 'nvidia-(dkms|driver|kernel-common|utils)-580-server$|^libnvidia-.*-580-server$' >/dev/null
+    # Proprietary (non-open) 580 installed? Two variants, both render EGL/GBM
+    # glamor unusable in headless gamescope (black screen, gamescope #255) AND
+    # in the gst-wayland-display compositor (EGL 'dri2 screen' crash, §16.6):
+    # - server: nvidia-*-580-server / libnvidia-*-580-server (Scaleway's image).
+    # - plain:  nvidia-(dkms|driver)-580 (OVH's "Ubuntu 24.04 - NVIDIA - v580";
+    #   no -server, no -open).
+    # nvidia-utils-580 / nvidia-kernel-common-580 / libnvidia-*-580 are SHARED
+    # with the -open variant — NOT matched for the plain case, or an already-
+    # open host (nvidia-dkms-580-open installed) would falsely read as
+    # proprietary (those shared packages are deps of -open too).
+    dpkg -l 2>/dev/null | awk '/^ii/{print $2}' \
+        | grep -E 'nvidia-(dkms|driver|kernel-common|utils)-580-server$|^libnvidia-.*-580-server$|nvidia-(dkms|driver)-580$' >/dev/null
+}
+has_580_server() {
+    # The -580-server variant (Scaleway). Its userspace (libnvidia-*-580-server,
+    # nvidia-kernel-common-580-server) is SEPARATE from -open's + its packages
+    # Conflict WITHOUT Replaces → the swap needs a broad purge first (apt can't
+    # auto-resolve — observed live, §16.6). The plain variant (OVH) has clean
+    # Conflicts+Replaces to -open + shared userspace → apt resolves it with NO
+    # purge (§16.1). Used to choose the purge strategy in ensure_driver_580.
+    dpkg -l 2>/dev/null | awk '/^ii/{print $2}' \
+        | grep -E 'nvidia-(dkms|driver|kernel-common|utils)-580-server$|^libnvidia-.*-580-server$' >/dev/null
 }
 has_open_580() {
     dpkg -l 2>/dev/null | awk '/^ii/{print $2}' | grep -E 'nvidia-(dkms|driver)-580-open$' >/dev/null
@@ -162,39 +190,67 @@ ensure_driver_580() {
     [ -z "$drv" ] && { log "no driver detected — skipping driver pin (template has none?)"; return 0; }
     case "$drv" in
         580.*)
-            # Right BRANCH (R580 LTS). Check the VARIANT: the proprietary
-            # `-580-server` packages render a BLACK screen in headless gamescope
-            # → swap to the open variant + reboot. The open variant is the no-op
-            # (UpCloud post-downgrade, OVH pre-installed). FATAL on swap failure
-            # so a black-screen VM never goes `ready`.
+            # Right BRANCH (R580 LTS). Check the VARIANT: a PROPRIETARY 580
+            # (the -580-server variant on Scaleway, OR the plain nvidia-driver-580
+            # on OVH's v580 image) renders a BLACK screen in headless gamescope +
+            # crashes the gst-wayland-display compositor's EGL/GBM glamor → swap to
+            # the open variant + reboot. The OPEN variant is the no-op (UpCloud
+            # post-downgrade). FATAL on swap failure so a black-screen VM never
+            # goes `ready`. See the §16.6 note in has_proprietary_580 above.
             if has_proprietary_580 && ! has_open_580; then
-                log "driver is 580 PROPRIETARY (nvidia-dkms-580-server) — headless gamescope renders BLACK; swapping to nvidia-driver-580-open"
-                # Purge the proprietary -server packages FIRST. They ship
-                # `nvidia-kernel-common-580-server` which CONFLICTS with the open
-                # `nvidia-kernel-common-580` (the install fails without this purge
-                # — observed in the reverted 1bb6f26 attempt; the purge resolves
-                # the conflict). Purge every installed package ending in
-                # `-580-server` (the dkms/driver/kernel-common/utils metapackages
-                # + the libnvidia-*-580-server userspace libs).
-                local purge_pkgs
-                # Extract the package NAME first (awk '{print $2}') then match
-                # `-580-server` on the NAME — anchoring `$` on the full dpkg -l
-                # line (the earlier `awk '/^ii.*-580-server$/{print $2}'`) was a
-                # bug: a dpkg line ends with the description ("NVIDIA DKMS
-                # package"), NOT `-580-server`, so purge_pkgs was EMPTY → the
-                # purge was skipped → the install hit the nvidia-kernel-common-580
-                # conflict. Match any nvidia/libnvidia package whose NAME contains
-                # `-580-server` (captures the dkms/driver/kernel-common/utils/
-                # headless/kernel-source/compute-utils metapackages + the
-                # libnvidia-*-580-server:amd64 userspace libs + the firmware pkg).
-                purge_pkgs="$(dpkg -l 2>/dev/null | awk '/^ii/{print $2}' | grep -E '^(nvidia|libnvidia)-.*-580-server' | sort -u | paste -sd ' ')"
-                if [ -n "$purge_pkgs" ]; then
-                    log "purging proprietary -580-server packages: $purge_pkgs"
-                    if ! DEBIAN_FRONTEND=noninteractive apt-get purge -y $purge_pkgs >/tmp/dpad-driver-580-purge.log 2>&1; then
-                        err "purge of proprietary -580-server packages failed (see /tmp/dpad-driver-580-purge.log)"
-                        tail -20 /tmp/dpad-driver-580-purge.log >&2 || true
-                        return 1
+                # Two proprietary 580 variants exist, both → EGL/GBM glamor fails
+                # in headless gamescope (black screen, gamescope #255) AND in the
+                # gst-wayland-display compositor (EGL 'dri2 screen' crash, §16.6).
+                # Both swap to nvidia-driver-580-open. The PURGE strategy differs.
+                # The open driver is universal (works for gamescope-headless +
+                # wayland-display), so always swap — a warm VM may host either
+                # compositor via N-to-N reuse, and the host driver must support
+                # both (the driver is VM-level; the compositor is per-container).
+                if has_580_server; then
+                    # Scaleway's image: nvidia-*-580-server. Its userspace
+                    # (libnvidia-*-580-server, nvidia-kernel-common-580-server) is
+                    # SEPARATE from -open's + the -server packages Conflict WITHOUT
+                    # Replaces → apt can't auto-resolve (the install fails with a
+                    # nvidia-kernel-common-580 conflict — observed in the reverted
+                    # 1bb6f26 attempt). So PURGE the whole -580-server stack FIRST
+                    # (the dkms/driver/kernel-common/utils metapackages + the
+                    # libnvidia-*-580-server userspace libs), then install -open
+                    # (which pulls the non-server userspace libs as deps).
+                    log "driver is 580 PROPRIETARY (nvidia-dkms-580-server, e.g. Scaleway) — headless gamescope renders BLACK; swapping to nvidia-driver-580-open"
+                    local purge_pkgs
+                    # Extract the package NAME first (awk '{print $2}') then match
+                    # `-580-server` on the NAME — anchoring `$` on the full dpkg -l
+                    # line (the earlier `awk '/^ii.*-580-server$/{print $2}'`) was a
+                    # bug: a dpkg line ends with the description ("NVIDIA DKMS
+                    # package"), NOT `-580-server`, so purge_pkgs was EMPTY → the
+                    # purge was skipped → the install hit the nvidia-kernel-common-580
+                    # conflict. Match any nvidia/libnvidia package whose NAME
+                    # contains `-580-server` (captures the dkms/driver/kernel-common/
+                    # utils/headless/kernel-source/compute-utils metapackages + the
+                    # libnvidia-*-580-server:amd64 userspace libs + the firmware pkg).
+                    purge_pkgs="$(dpkg -l 2>/dev/null | awk '/^ii/{print $2}' | grep -E '^(nvidia|libnvidia)-.*-580-server' | sort -u | paste -sd ' ')"
+                    if [ -n "$purge_pkgs" ]; then
+                        log "purging proprietary -580-server packages: $purge_pkgs"
+                        if ! DEBIAN_FRONTEND=noninteractive apt-get purge -y $purge_pkgs >/tmp/dpad-driver-580-purge.log 2>&1; then
+                            err "purge of proprietary -580-server packages failed (see /tmp/dpad-driver-580-purge.log)"
+                            tail -20 /tmp/dpad-driver-580-purge.log >&2 || true
+                            return 1
+                        fi
                     fi
+                else
+                    # OVH's "Ubuntu 24.04 - NVIDIA - v580" image: the PLAIN
+                    # proprietary nvidia-driver-580 / nvidia-dkms-580 (no -server,
+                    # no -open). Unlike the -server variant, its metapackages have
+                    # clean Conflicts+Replaces to nvidia-driver-580-open /
+                    # nvidia-dkms-580-open, AND the userspace (libnvidia-*-580,
+                    # nvidia-utils-580, nvidia-kernel-common-580) is SHARED with
+                    # -open → `apt install nvidia-driver-580-open` resolves it
+                    # alone (removes the 2 conflicting metapackages, keeps the
+                    # shared libs). No purge needed — confirmed live on OVH (§16.1:
+                    # a manual `apt install nvidia-driver-580-open` loaded the open
+                    # module, license Dual MIT/GPL). Purging here would risk a
+                    # cascade (removing the shared libs) for no benefit.
+                    log "driver is 580 PROPRIETARY (plain nvidia-driver-580/nvidia-dkms-580, e.g. OVH v580 image) — EGL/GBM glamor fails in headless gamescope + the gst-wayland-display compositor (§16.6); swapping to nvidia-driver-580-open (apt resolves via Conflicts+Replaces; shared libnvidia-*-580 / nvidia-utils-580 / nvidia-kernel-common-580 stay — no purge)"
                 fi
                 install_open_580_and_reboot || return 1
                 return 1   # unreachable (install_open_580_and_reboot reboots or returns 1)

@@ -1544,10 +1544,12 @@ cd dpadplay/container-gaming && git pull
 # gamescope --backend wayland now reaches Steam launch before the connection drop.
 #
 # NEXT — the gamescope-wayland client stability (§16.3/§16.4):
-# 1. Provision an OVH L4 (§12). vm-bootstrap.sh install (fetches the EGL-fixed entrypoint).
-#    Confirm the open R580 (vm-bootstrap's ensure_driver_580 must now ALSO swap the
-#    plain proprietary nvidia-driver-580 — NOT just -580-server; the has_proprietary_580
-#    gate matches -580-server only, so OVH's plain -580 isn't swapped — OPEN ITEM §16.6).
+# 1. Provision an OVH L4 (§12). vm-bootstrap.sh install (fetches the EGL-fixed
+#    entrypoint). The open R580 is now AUTOMATED for OVH too (§16.6 FIXED:
+#    has_proprietary_580 now detects OVH's plain nvidia-driver-580/nvidia-dkms-580
+#    + ensure_driver_580 swaps to nvidia-driver-580-open with NO purge — apt
+#    resolves the plain variant's Conflicts+Replaces; the -580-server broad-purge
+#    path for Scaleway is unchanged). One cold-boot reboot for the swap (~12-18 min).
 # 2. VM_IP=<ip> SHELL=steam bash /tmp/wayland-display-probe.sh
 # 3. Connect a peer (selkies-sdp-probe.py) → gamescope launches → opens the browser
 #    at http://$VM_IP:16100 to SEE the compositor surface (black until a client renders).
@@ -1557,19 +1559,36 @@ cd dpadplay/container-gaming && git pull
 #    multi-store path unblocked: §8 step 3 Lutris shell → §8 step 4 store launchers).
 ```
 
-### 16.6 Open item — `ensure_driver_580` doesn't swap OVH's plain proprietary 580
+### 16.6 ✅ FIXED — `ensure_driver_580` now swaps OVH's plain proprietary 580 too
 
 OVH's `Ubuntu 24.04 - NVIDIA - v580` ships `nvidia-dkms-580` + `nvidia-driver-580`
 (the plain proprietary variant, `license: NVIDIA` — no `-server`, no `-open`).
-`vm-bootstrap.sh`'s `has_proprietary_580` gate matches `-580-server` only (the
-Scaleway variant), so on OVH the gate returns false → `ensure_driver_580` skips
-the swap → the proprietary 580 stays. The compositor's EGL/GBM glamor REQUIRES
-the open variant (the proprietary `dri2 screen` failure, §5) — so OVH
-wayland-display sessions boot on the proprietary driver + hit the EGL crash
-UNLESS the open swap runs. **Fix (deferred):** extend `has_proprietary_580` to
-also match the plain `nvidia-(dkms|driver)-580$` (non-open, non-server) +
-purge it before installing `-open` (resolves the `nvidia-kernel-common-580`
-conflict, same as the Scaleway purge). The manual `apt install
-nvidia-driver-580-open` + reboot worked on this VM (the open module loaded,
-`license: Dual MIT/GPL`), so the swap is viable — it just isn't automated for
-OVH yet.
+Previously `vm-bootstrap.sh`'s `has_proprietary_580` gate matched `-580-server`
+only (the Scaleway variant), so on OVH the gate returned false → `ensure_driver_580`
+skipped the swap → the proprietary 580 stayed → the compositor's EGL/GBM glamor
+hit the `dri2 screen` crash (§5) on OVH wayland-display sessions.
+
+**Fix (IMPLEMENTED, scripts/vm-bootstrap.sh):**
+- `has_proprietary_580` now also matches the plain `nvidia-(dkms|driver)-580$`
+  (non-open, non-server). The shared packages (`nvidia-utils-580` /
+  `nvidia-kernel-common-580` / `libnvidia-*-580` — deps of `-open` too) are
+  deliberately NOT matched for the plain case, so an already-open host doesn't
+  falsely read as proprietary.
+- A new `has_580_server` gate chooses the PURGE strategy:
+  - **`-580-server` (Scaleway):** unchanged — broad purge of the whole
+    `-580-server` stack first (its userspace is separate from `-open`'s + its
+    packages Conflict WITHOUT Replaces → apt can't auto-resolve; the purge is
+    the proven workaround).
+  - **plain `-580` (OVH):** NO purge — `apt install nvidia-driver-580-open`
+    resolves it alone: the plain metapackages have clean Conflicts+Replaces to
+    `-open` (apt removes the 2 conflicting metapackages) + the shared userspace
+    stays. This matches the §16.1 live evidence (a manual `apt install
+    nvidia-driver-580-open` loaded the open module, `license: Dual MIT/GPL`). A
+    purge here would risk a cascade (removing the shared libs) for no benefit.
+- The swap is now UNCONDITIONAL on the compositor: a warm VM may host either the
+  gamescope-headless OR the wayland-display compositor via N-to-N reuse, and the
+  host driver (VM-level) must support both — the open variant does. Cost: one
+  cold-boot reboot on OVH (~12-18 min, same as Scaleway) where previously OVH
+  booted without a driver swap. UpCloud (already open post-595-downgrade) is
+  untouched. Verified by a dpkg-list simulation (OVH plain → no-purge+install;
+  Scaleway server → broad purge; already-open → no-op).
