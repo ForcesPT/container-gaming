@@ -1876,6 +1876,73 @@ active 3:1 stutters.
 as the first peer. `nvidia-smi` shows N compute apps; `nft list ruleset | grep
 "udp dport 347"` shows all N relay counters > 0.
 
+## 16.9 🔬 Store-validation probe (2026-08-09) — Lutris video WORKS on the prod tag; sway SIGTRAP + .cache/lutris bugs block a stable Lutris session
+
+> **A short store-validation probe (§8 step 3/4) on the §17 OVH L4.** The key
+> positive result: the Lutris Electron picker shell **streams video on the prod
+> tag** (the §17.3 blocker is retired for the real shell, extending §18.2 from
+> the sdp-probe to the browser). Two new bugs block a *stable* Lutris session:
+> a sway SIGTRAP crash under the Lutris shell + a `.cache/lutris` permission
+> bug. gamescope-as-client is NOT a fallback (it drops for Electron too).
+
+Probed `DPAD_STORE_SHELL=lutris` under `DPAD_COMPOSITOR=wayland-display` on the
+prod `:dpad-SteamOS` tag (the §17 OVH L4, `79.137.11.29`, open R580). Findings:
+
+**✅ Lutris shell video WORKS on the prod tag.** With `DPAD_WAYLAND_CLIENT=sway`,
+a real browser peer received the Lutris gamepad-UI image (the user saw the UI)
+before sway crashed at ~33s — i.e. the `waylanddisplaysrc` compositor captured
+the Electron app's surface + the WebRTC video track delivered it. This retires
+§17.3 for the real Electron picker shell on the shippable image (§18.2 confirmed
+it via the headless sdp-probe `m=video:9`; this confirms the browser path).
+
+**🐛 BUG 1 — sway SIGTRAP crash under the Lutris shell (~33s).** sway 1.9 hits a
+`Trace/breakpoint trap (core dumped)` (SIGTRAP = assertion/abort in wlroots)
+~33s after start, during **wayland-backend input-device teardown**:
+```
+00:00:33.756 [DEBUG] [sway/input/seat.c:994] removing device 0:0:wayland-pointer-seat-0 from seat seat0
+00:00:33.765 [DEBUG] [sway/input/input-manager.c:202] removing device: '0:0:wayland-touch-seat-0'
+00:00:33.765 [DEBUG] [sway/input/seat.c:994] removing device 0:0:wayland-keyboard-seat-0 from seat seat0
+...
+Trace/breakpoint trap (core dumped)
+```
+The health loop relaunches sway but it crashes again at ~33s → the browser sees
+the last captured frame + "Waiting for stream" (the live video stalls when sway
+dies). **Not seen with the Steam shell** (sway stayed up, §16.7 — only the
+occasional self-healing drop). The trigger is likely the Lutris/SDL3 gamepad
+input path (the gamepad-UI inits SDL3, `LUTRIS_GAMEPAD_UI_ENABLE_SDL_INPUT=1`)
+causing a compositor→sway input-device add/remove that hits a wlroots seat-teardown
+assert. The compositor's wayland-backend input devices (wayland-pointer/touch/
+keyboard) are UNUSED for actual input (input goes via XTest to XWayland,
+`DPAD_INPUT_DISPLAY=:0`, §17.2) — so a fix is to prevent sway from adding/tearing
+them down (a sway/wlroots config or an inputtino-virtual-device change), OR a
+sway/wlroots version bump. **Open — blocks the Lutris shell.**
+
+**🐛 BUG 2 — `gamescope --backend wayland` drops for the Lutris Electron app too
+(§16.3 confirmed NOT Steam-specific).** `DPAD_WAYLAND_CLIENT=gamescope` +
+`DPAD_STORE_SHELL=lutris` → the browser connects but the screen is **black**
+(gamescope-wayland drops the compositor connection once the Electron app commits
+surfaces, same as §16.3 for Steam's CEF). So gamescope-as-client is **NOT** a
+fallback for the Lutris shell — sway is the only working client, + it hits BUG 1.
+
+**🐛 BUG 3 — `/home/dpad/.cache/lutris/` created root-owned → Lutris backend
+`PermissionError`.** The Lutris Python backend (the `lutris_wrapper` the gamepad-UI
+calls) crashes on startup: `PermissionError: [Errno 13] Permission denied:
+'/home/dpad/.cache/lutris/lutris.log'` — a root boot process creates `.cache/lutris`
+root-owned (the §4 `.local`-class gotcha, not yet applied to `.cache/lutris`). The
+gamepad-UI (Electron) still renders (it showed the UI before sway crashed), but
+the backend is down → no library / store config (the §18.2 "No games found" was
+this). **Fix:** the entrypoint's targeted-chown (`find <dir> ! -user dpad`) should
+cover `~/.cache` (not just `~/.local`), OR `setup_stores()` should `chown -R dpad:dpad
+~/.cache/lutris` before launching the shell. Low effort; image/entrypoint fix.
+
+**Net for the store-validation gate:** the compositor pivot **does** unblock the
+Lutris Electron shell for video (§17.3 retired on the prod tag) — but a stable
+multi-store session is blocked by BUG 1 (the sway SIGTRAP). BUG 3 (the .cache
+perm) is a quick entrypoint fix; BUG 2 confirms sway is the only viable client
+(no gamescope fallback for Electron). **Next:** investigate BUG 1 (a sway/wlroots
+input-device teardown assert under the Lutris/SDL3 gamepad path) — the blocker
+for the Lutris shell + thus the multi-store flip.
+
 ## 17. Prod-tag re-validation + the input & resolution fixes (2026-08-09)
 
 > **Followed up the §16.7 spike-tag validation by re-running the full sway path
@@ -2094,7 +2161,14 @@ picker + the store-launcher rendering path.
 **Still open (the §8 phasing tail, unchanged):**
 1. **The FULL store validation** (the execution tail of §8 step 4): Battle.net
    install + login + a game, OR Epic/GOG via Lutris sources (Legendary/gogdl —
-   no Windows launcher, lighter). Needs store creds + a download.
+   no Windows launcher, lighter). Needs store creds + a download. **⚠️ 2026-08-09
+   probe (§16.9): the Lutris shell video WORKS on the prod tag (§17.3 retired for
+   the real Electron shell), but a stable Lutris session is BLOCKED by a sway
+   SIGTRAP crash (~33s, BUG 1) + the `.cache/lutris` permission bug (BUG 3);
+   gamescope-wayland drops for Electron too (BUG 2). The `legendary`/`gogdl`
+   backends are NOT installed in the image (Epic/GOG via Lutris needs them — a
+   STORES-PLAN §16 image-bake gap). BUG 1 is the blocker to clear before the full
+   store validation can run.**
 2. **✅ DONE 2026-08-09 (§16.8) — N-on-N on the sway path.** 2:1 + 3:1 compositor
    gate validated: 3 concurrent sway/wayland-display compositors on 1 L4, all
    streaming video+audio (48% GPU / 1.9 GB of 23 GB, load 4.45/22 cores, 3 coturn
