@@ -322,6 +322,8 @@ launch() {
         -e DPAD_WAYLAND_CLIENT="${DPAD_WAYLAND_CLIENT:-}" \
         -e DPAD_STREAM_WIDTH="${DPAD_STREAM_WIDTH:-1920}" \
         -e DPAD_STREAM_HEIGHT="${DPAD_STREAM_HEIGHT:-1080}" \
+        -e DPAD_WD_WIDTH="${DPAD_WD_WIDTH:-${DPAD_STREAM_WIDTH:-1920}}" \
+        -e DPAD_WD_HEIGHT="${DPAD_WD_HEIGHT:-${DPAD_STREAM_HEIGHT:-1080}}" \
         "$image" || { err "docker run $name failed"; return 1; }
     log "container $name launched (coturn ${port}/udp, selkies ${selkies_port}->16100, login dpad/${pass:0:4}…)"
 
