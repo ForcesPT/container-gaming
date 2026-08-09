@@ -749,13 +749,18 @@ cd dpadplay/container-gaming && git pull
 #    DPAD_WAYLAND_CLIENT=gamescope|sway gates it (sway is the working one).
 #
 # NEXT — the remaining §8 phasing (priority order, see §16.5 resume):
-#   1. Lutris shell under sway (§8 step 3) — DPAD_STORE_SHELL=lutris +
-#      --ozone-platform=wayland OR sway-XWayland. Decisive: render + clickable?
-#   2. Store launchers under sway (§8 step 4) — Battle.net/Epic via
-#      GE-Proton11-3 under sway's XWayland. THE real multi-store validation.
-#   3. Gamepad input under sway (§5.4) — keyboard/mouse reach Steam (§16.7);
-#      the evdev interposer was for gamescope's XWayland → real-controller test
-#      under sway needed (or inputtino migration, §8 step 6, last).
+#   1. ✅ DONE 2026-08-09 (§18) — Lutris shell under sway (§8 step 3): renders +
+#      captures + clickable + gamepad-navigable (libSDL3). The §17.3 blocker is
+#      retired for the real Electron shell.
+#   2. ✅ DE-RISKED 2026-08-09 (§18) — store-launcher path: a Windows app
+#      (winecfg) via GE-Proton11-3 under sway's Xwayland renders + captures +
+#      interacts → Battle.net has no architectural unknown left. The FULL store
+#      validation (Battle.net install + login + a game, OR Epic/GOG via Lutris
+#      sources) is the remaining execution (needs store creds + a download).
+#   3. ✅ DONE 2026-08-09 (§18) — gamepad input under sway (§5.4 phase A): the
+#      6-layer interposer is compositor-agnostic → the user navigated the Lutris
+#      UI with a real controller (SDL3 saw the pads). inputtino migration (§8
+#      step 6) is the last, cleaner-but-not-blocking step.
 #   4. N-on-N on the sway path (§16.5) — 2 sway compositors on 1 L4 via MPS.
 #   5. --device /dev/dri CDI-perm fix for prod multi-GPU hosts (§14) — the
 #      spike mounts ALL GPUs' /dev/dri; prod needs a scoped render-node mount.
@@ -1939,3 +1944,125 @@ needed.
 script + the `dpad_input_patch.py` bind-mount) → browser as the first peer at
 `http://$IP:16100` → Steam Big Picture (1280×720, no bars) + mouse/keyboard +
 gamepad.
+
+## 18. Lutris shell + Windows-app/launcher path — LIVE-VALIDATED 2026-08-09
+
+> **§8 step 3 (Lutris shell under sway) + §8 step 4 (store-launcher path,
+de-risked) + §5.4 phase A (gamepad under sway) — all VALIDATED LIVE on the
+same OVH Gravelines L4 that was left warm from §17** (`dpadtest-wayland`,
+`e6d4b0ca-…` @ `79.137.11.29`, open R580 `580.178.04`, prod `:dpad-SteamOS`
+tag). Retires the original §17.3 blocker for the real Electron picker shell;
+proves the Windows-app/launcher path (Battle.net's class) renders + captures +
+interacts under the new compositor. No code changed this session (the §17.2
+lazy-input + §16.4 sway + §16.6 driver-swap + §5.6 sdl3-builder fixes already
+ship via the entrypoint/`dpad_input_patch.py` bind-mount hotfix path).
+
+### 18.1 Setup
+The §17 `wd-probe` container (steam shell) was torn down + relaunched with
+`DPAD_STORE_SHELL=lutris` on the same proven path: `DPAD_COMPOSITOR=wayland-
+display DPAD_WAYLAND_CLIENT=sway` + the entrypoint / `extract-nvrtc.sh` /
+`dpad_input_patch.py` bind-mounts (the `relaunch-probe.sh` pattern, §17.4), prod
+image `forcespt/dpadcloud-gaming:dpad-SteamOS`. A real browser connected as the
+first peer (the §16.7 blessed path — do NOT run `selkies-sdp-probe.py` first; it
+pollutes the selkies signalling `self.peers` + breaks the audio app).
+
+### 18.2 §8 step 3 — Lutris shell: VALIDATED (render + click + gamepad)
+- **Renders + captures:** the browser shows the `lutris-gamepad-ui` UI (not
+  black / not "Waiting for stream") — the §17.3 `m=video:0` blocker is retired
+  for the real Electron shell. `lutris-gamepad-ui.bin` runs under sway's
+  `Xwayland :0`; sway registered its xwayland surface; the compositor captures
+  it. (The library shows "No games found" — an empty-library content state, not
+  a bug; no stores are configured on the probe container.)
+- **`[sdl_manager] SDL3 initialized! libSDL3.so.0`** (the §5.6 `sdl3-builder`
+  fix) — the SDL3 gamepad path is live.
+- **Mouse/keyboard reach Lutris (§17.2 lazy XTest→:0):** `dpad_input: waiting
+  for :0 … Connection refused` at start (selkies launches before sway/Xwayland)
+  → `opened :0 OK (lazy)` once sway's `:0` came up → 76 `head=m` mouse-move
+  events flowed → the user clicked the UI.
+- **Gamepad navigates the Lutris UI** — the user confirmed. The 6-layer
+  interposer is compositor-agnostic (browser → Selkies → `/dev/input/jsN` →
+  SDL3 → Lutris, never touches X/Wayland) → gamepad works under sway with no
+  new plumbing (retires §5.4 phase A for the sway path; inputtino is the last,
+  cleaner-but-not-blocking step).
+- **sway + Xwayland stable** — one transient sway drop self-healed by the
+  health loop's restart-on-death path (the §16.7 behavior).
+- **One non-fatal error:** `remote_desktop_manager: No such interface
+  org.freedesktop.portal.RemoteDesktop` — `lutris-gamepad-ui` tries to use
+  xdg-desktop-portal for *its own* remote-desktop feature (not our stream). A
+  missing portal package; the app continues, input + stream unaffected. Polish
+  item (install `xdg-desktop-portal` + a backend, or ignore).
+
+### 18.3 §8 step 4 — store-launcher path: DE-RISKED (Windows app under sway's XWayland)
+The real §1 #2 wall is the Chromium/CEF Windows store launchers (Battle.net is
+the v1 one) rendering under Wine/Proton. Before the big Battle.net download,
+a trivial Windows app was launched under GE-Proton11-3 to de-risk the path:
+`winecfg.exe` (the standard Wine settings GUI) via
+`…/GE-Proton11-3/files/bin/wine`, as the `dpad` user, with `DISPLAY=:0`
+(sway's Xwayland) + `WAYLAND_DISPLAY=wayland-1`, `WINEPREFIX=/home/dpad/.wine-test`.
+- **It rendered + was captured + was interactive.** `winecfg.exe` + `wineserver`
++ `explorer.exe /desktop` ran; sway registered the xwayland surface
+(`_WINE_ALLOW_FLIP`, `WM_ICON_NAME`, `View … updated CSD`); the sway tree
+showed `"Wine configuration" class=steam_proton focused=true`; the user saw the
+Wine configuration window + clicked its tabs.
+- **Net:** the Wine/Proton + XWayland + sway + gst-wayland-display-capture path
+  works for a Windows GUI app. Battle.net (a Chromium/CEF Windows launcher,
+  the same Wine/Proton path, §5 Xwayland rule) has **no architectural unknown
+  left** — the full store validation is now pure execution: run the Lutris
+  Battle.net install script (downloads `Battle.net-Setup.exe` + creates the
+  prefix — STORES-PLAN §7) + login + install a small game. The Battle.net
+  launcher+prefix pre-bake (STORES-PLAN §16 piece #2) is still deferred.
+- **Cleanup:** `wineserver -k` + `pkill winecfg.exe` + `rm -rf .wine-test`;
+the Lutris shell was left up.
+
+### 18.4 What's now proven vs. still open
+**Proven on the prod tag (this session):** the Lutris picker shell + gamepad +
+mouse/keyboard under sway, AND a Windows app via GE-Proton11-3 under sway's
+Xwayland — both captured + interactive. The pivot delivers the multi-store
+picker + the store-launcher rendering path.
+
+**Still open (the §8 phasing tail, unchanged):**
+1. **The FULL store validation** (the execution tail of §8 step 4): Battle.net
+   install + login + a game, OR Epic/GOG via Lutris sources (Legendary/gogdl —
+   no Windows launcher, lighter). Needs store creds + a download.
+2. **N-on-N on the sway path** (§16.5) — 2 sway compositors on 1 L4 (raw
+   render-node time-slice; MPS optional for loaded 3:1). Confirms the oversub
+   economics hold on the new compositor.
+3. **1080p/1440p compositor-mode fix** (§17.3 real fix) — the 720p interim cap
+   is a quality regression vs gamescope-headless's 1080p. Needs a `gst-wayland-
+   display` plugin-source change (`wl_output` mode from negotiated caps) + a
+   rebuild.
+4. **`--device /dev/dri` CDI-perm fix** for prod multi-GPU hosts (§14) — the
+   spike mounts ALL GPUs' `/dev/dri`; prod needs a scoped render-node mount.
+5. **selkies audio-peer reconnect robustness** (§16.7) — stale uid in
+   `self.peers`.
+6. **CUDAMemory zero-copy** (§13.3 follow-up, non-blocking).
+7. **Flip the control-plane default** to `DPAD_COMPOSITOR=wayland-display` after
+   a parallel-run on all 5 regions; **vendor `gst-wayland-display`** (§8 step 7).
+8. **inputtino gamepad migration** (§8 step 6, last) — then retire the evdev
+   interposer.
+
+### 18.5 Resume
+```bash
+cd dpadplay/container-gaming && git pull
+# §18 VALIDATED 2026-08-09 on the live OVH L4 (79.137.11.29, dpadtest-wayland):
+#   §8 step 3 (Lutris shell under sway) + §8 step 4 de-risk (winecfg Windows app)
+#   + §5.4 phase A (gamepad under sway) all PASS. No code changed this session
+#   (the §17.2/§16.4/§16.6/§5.6 fixes already ship via bind-mount hotfix).
+#   The §17.3 m=video:0 blocker is retired for the real Electron picker.
+#
+# NEXT (priority order):
+#   A. FULL store validation — Battle.net (Lutris install script + login + a
+#      game) OR Epic/GOG (Legendary/gogdl, lighter, no Windows launcher).
+#      Needs store creds + a download. The path is de-risked (§18.3).
+#   B. N-on-N on the sway path (2 sway compositors on the 1 L4; MPS optional).
+#   C. 1080p/1440p compositor-mode fix (a gst-wayland-display plugin-source
+#      change + rebuild) — the 720p interim is a quality regression.
+#   Then: --device /dev/dri CDI-perm fix (§14), selkies audio-peer reconnect
+#   (§16.7), CUDAMemory zero-copy (§13.3), flip the default + vendor (§8 step 5/7),
+#   inputtino migration (§8 step 6, last).
+#
+# The live VM is warm (wd-probe = the Lutris shell). Reproduce: §12 (provision an
+# OVH L4) + vm-bootstrap.sh install + relaunch-probe.sh with DPAD_STORE_SHELL=lutris
+# (the probe script's SHELL=lutris, or edit the docker run) → browser as the
+# first peer at http://$IP:16100 → Lutris UI + mouse/keyboard + gamepad.
+```
