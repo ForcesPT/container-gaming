@@ -1528,10 +1528,19 @@ gamescope-as-Wayland-client stability layer.
 
 1. **sway as the Wayland client** (the games-on-whales default, `RUN_SWAY=1`):
    sway provides XWayland to the app too, + is more stable as a Wayland client
-   of gst-wayland-display than gamescope on Nvidia. Add a
-   `DPAD_WAYLAND_CLIENT=gamescope|sway` gate; the entrypoint launches
-   `sway` (with `WAYLAND_DISPLAY=wayland-N`) instead of `gamescope --backend
-   wayland`. Same compositor capture; different XWayland provider.
+   of gst-wayland-display than gamescope on Nvidia. **✅ IMPLEMENTED (pending
+   live validation):** a `DPAD_WAYLAND_CLIENT=gamescope|sway` gate (default
+   `gamescope` = no regression) in the entrypoint's `start_wayland_display_session`
+   (`_launch_wayland_client`, replacing `_launch_gs_wayland`) launches `sway
+   --unsupported-gpu -c /tmp/dpad-sway.config -d` nested under gst-wayland-display
+   (`WLR_BACKENDS=wayland` forces the Wayland backend → NO DRM master → N-on-N
+   preserved, §2.1) instead of `gamescope --backend wayland`. The sway config
+   auto-fullscreens + `exec`s the shell app (Steam/Lutris) as a sway client. sway +
+   xwayland are baked into the vast-vm stage (Dockerfile) — needs a rebuild + push
+   (a spike tag, e.g. `dpad-SteamOS-wd-spike`) before the live test; the entrypoint
+   gate ships via the bind-mount hotfix. `dpad-launch-session` +
+   `wayland-display-probe.sh` forward `DPAD_WAYLAND_CLIENT`. Same compositor
+   capture; different XWayland provider.
 2. **A gamescope rebuild** with a newer gamescope tag (the image's gamescope is
    3.16.25) — upstream may have fixed the Wayland-client connection issue. Lower-
    priority (a build change); try sway first.
@@ -1553,8 +1562,14 @@ cd dpadplay/container-gaming && git pull
 # 2. VM_IP=<ip> SHELL=steam bash /tmp/wayland-display-probe.sh
 # 3. Connect a peer (selkies-sdp-probe.py) → gamescope launches → opens the browser
 #    at http://$VM_IP:16100 to SEE the compositor surface (black until a client renders).
-# 4. Try the sway fallback (§16.4 #1): DPAD_WAYLAND_CLIENT=sway gate in the entrypoint
-#    (launch sway with WAYLAND_DISPLAY=wayland-N instead of gamescope --backend wayland).
+# 4. Try the sway fallback (§16.4 #1) — ✅ BUILT, ready to A/B:
+#    DPAD_WAYLAND_CLIENT=sway (entrypoint gate + dpad-launch-session/probe forward
+#    it; sway + xwayland baked in the Dockerfile vast-vm stage — needs a rebuild +
+#    push of a spike tag). Run:
+#      VM_IP=<ip> SHELL=steam DPAD_WAYLAND_CLIENT=sway IMAGE=<spike-tag> bash /tmp/wayland-display-probe.sh
+#    Then connect a peer + watch /tmp/sway-client.log (inside the container) if
+#    sway drops. If sway stays up + Steam renders → the §16.3 gamescope-wayland
+#    drop is bypassed (the compositor still captures sway).
 # 5. If sway stays up + Steam renders, the browser shows Steam Big Picture (the full
 #    multi-store path unblocked: §8 step 3 Lutris shell → §8 step 4 store launchers).
 ```

@@ -658,6 +658,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends zenity && rm -r
 #    exports zero pixman_region32_* symbols, so without this the 3.16.25
 #    gamescope binary crashes at startup with 'undefined symbol:
 #    pixman_region32_empty'.
+#    sway + xwayland: the §16.4 fallback Wayland client for
+#    DPAD_COMPOSITOR=wayland-display. gamescope --backend wayland drops its
+#    client connection to gst-wayland-display on Nvidia after Steam launches
+#    (§16.3, 'IWaitable hung up'); sway (a wlroots compositor run NESTED as a
+#    Wayland client of gst-wayland-display, the games-on-whales RUN_SWAY=1 model)
+#    is the documented more-stable fallback. sway provides XWayland to Steam/
+#    Lutris (same role as gamescope-as-client); the compositor still captures it.
+#    `xwayland` is the XWayland binary sway launches for X apps. INERT by
+#    default: nothing launches sway until the entrypoint's DPAD_WAYLAND_CLIENT=sway
+#    gate (default gamescope = no regression). PENDING LIVE VALIDATION (§16.5 step 4).
 RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common && \
     add-apt-repository -y ppa:3v1n0/gamescope && \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -665,11 +675,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
         wireplumber libeis-dev gstreamer1.0-pipewire \
         gstreamer1.0-tools gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
         gstreamer1.0-x gstreamer1.0-plugins-base pulseaudio-utils \
-        libpixman-1-0 && \
+        libpixman-1-0 \
+        sway xwayland && \
     for b in gamescope gamescopereaper gamescopestream gamescopectl; do \
         [ -e /usr/games/$b ] && ln -sf /usr/games/$b /usr/bin/$b; \
     done && \
     (command -v gamescope && gamescope --version 2>&1 | head -1) && \
+    (command -v sway && sway --version 2>&1 | head -1) && \
     rm -rf /var/lib/apt/lists/*
 
 # --- Patched gamescope binaries from gamescope-builder (headless hasPrimary /

@@ -923,22 +923,52 @@ start_wayland_display_session() {
     # gamescope-as-Wayland-client launcher. Nested function (bash dynamic scoping:
     # sees the caller's locals — GS_W/GS_H/SHELL_APP/SDL_GP_ENV/LUTRIS_ENV/etc.).
     # Reused for the initial launch + the restart-on-death path in the health loop.
-    _launch_gs_wayland() {
+    # DPAD_WAYLAND_CLIENT selects the Wayland client of gst-wayland-display:
+    # - gamescope (default): gamescope --backend wayland -- <shell> (provides XWayland
+    #   to Steam/Lutris). Hits the §16.3 client-connection drop on Nvidia after Steam
+    #   launches ('IWaitable hung up').
+    # - sway: a wlroots compositor run NESTED as a Wayland client (the games-on-whales
+    #   RUN_SWAY=1 model, §16.4 fallback — more stable than gamescope --backend wayland
+    #   on Nvidia). sway provides XWayland to Steam/Lutris; the compositor captures it.
+    # Both inherit the NVIDIA EGL vendor (the §16.2 fix: the entrypoint's Xvfb path
+    # exports __EGL_VENDOR_LIBRARY_FILENAMES=50_mesa.json globally; Mesa EGL can't match
+    # the L4 PCI id → 'dri2 screen' → the client aborts. The open R580 EGL/GBM glamor
+    # path works — §13.14 confirmed EGL init off the render node.)
+    _launch_wayland_client() {
         local wl_name="$1"
-        # The entrypoint's Xvfb path exports __EGL_VENDOR_LIBRARY_FILENAMES=50_mesa.json
-        # (so Xvfb doesn't segfault on NVIDIA EGL GBM). gamescope --backend wayland +
-        # Steam's CEF use Mesa EGL/GBM glamor → with Mesa forced they hit 'pci id for fd
-        # N: 10de:27b8, driver (null)' → 'egl: failed to create dri2 screen' → gamescope
-        # aborts ('IWaitable hung up'). Force the NVIDIA EGL vendor instead (the open R580
-        # EGL/GBM glamor path works — §13.14 confirmed EGL init off the render node).
-        as_user "cd ${USER_HOME}; unset DISPLAY __EGL_VENDOR_LIBRARY_FILENAMES; export WAYLAND_DISPLAY=${wl_name} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} ${LUTRIS_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend wayland -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}" >>/tmp/gamescope-steam.log 2>&1 &
+        local client="${DPAD_WAYLAND_CLIENT:-gamescope}"
+        local egl_unset="unset DISPLAY __EGL_VENDOR_LIBRARY_FILENAMES"
+        local egl_set="__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
+        local shared_env="WAYLAND_DISPLAY=${wl_name} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} ${LUTRIS_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'"
+        if [ "$client" = "sway" ] && ! command -v sway >/dev/null 2>&1; then
+            echo "[*] WARNING: DPAD_WAYLAND_CLIENT=sway but 'sway' is not installed — falling back to gamescope"
+            client="gamescope"
+        fi
+        if [ "$client" = "sway" ]; then
+            # sway nested under gst-wayland-display. Minimal config: auto-fullscreen
+            # the shell app (Steam Big Picture / Lutris go fullscreen anyway) + exec
+            # it as a sway client (XWayland for Steam/Lutris-CEF, native Wayland if the
+            # app requests --ozone-platform=wayland). WLR_BACKENDS=wayland forces the
+            # nested Wayland backend (NO DRM master → N-on-N preserved, §2.1);
+            # --unsupported-gpu skips sway's Nvidia 'unsupported GPU' abort; -d logs
+            # to /tmp/sway-client.log (the spike diagnostics for the §16.3 drop).
+            cat > /tmp/dpad-sway.config <<SWAYCFG
+# dpad sway config — nested Wayland client of gst-wayland-display (§16.4)
+for_window [app_id=".*"] fullscreen enable
+for_window [class=".*"] fullscreen enable
+exec ${SHELL_APP}
+SWAYCFG
+            as_user "cd ${USER_HOME}; ${egl_unset}; export ${shared_env} ${egl_set} WLR_BACKENDS=wayland XDG_CURRENT_DESKTOP=sway WLR_LIBINPUT_NO_DEVICES=1; exec sway --unsupported-gpu -c /tmp/dpad-sway.config -d" >>/tmp/sway-client.log 2>&1 &
+        else
+            as_user "cd ${USER_HOME}; ${egl_unset}; export ${shared_env} ${egl_set}; exec gamescope --backend wayland -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}" >>/tmp/gamescope-steam.log 2>&1 &
+        fi
     }
 
-    # --- health loop: poll for the compositor socket → launch gamescope-as-client ---
+    # --- health loop: poll for the compositor socket → launch the wayland client ---
     # The wayland-N socket appears ONLY when a WebRTC peer connects (selkies builds
     # the pipeline on on_session → waylanddisplaysrc starts the compositor, §13.12).
-    # So gamescope's launch is DEFERRED until the socket appears. If selkies restarts
-    # (compositor restarts → new socket), gamescope must reconnect (gs_launched=0).
+    # So the client's launch is DEFERRED until the socket appears. If selkies restarts
+    # (compositor restarts → new socket), the client must reconnect (gs_launched=0).
     local gs_pid="" gs_launched=0
     while true; do
         sleep 5
@@ -948,20 +978,20 @@ start_wayland_display_session() {
             [ -S "$f" ] || continue
             wl_sock="$f"; wl_name="$(basename "$f")"; break
         done
-        # Launch gamescope as a Wayland client once the socket appears.
+        # Launch the wayland client (gamescope|sway) once the socket appears.
         if [ -n "$wl_name" ] && [ $gs_launched -eq 0 ]; then
-            echo "[*] Compositor socket ${wl_name} appeared (peer connected) — launching gamescope --backend wayland -- ${SHELL_APP}"
-            _launch_gs_wayland "$wl_name"
+            echo "[*] Compositor socket ${wl_name} appeared (peer connected) — launching wayland client (DPAD_WAYLAND_CLIENT=${DPAD_WAYLAND_CLIENT:-gamescope}) -- ${SHELL_APP}"
+            _launch_wayland_client "$wl_name"
             gs_pid=$!
             gs_launched=1
         fi
-        # Restart gamescope if it died (and the socket is still there).
+        # Restart the wayland client if it died (and the socket is still there).
         if [ $gs_launched -eq 1 ] && [ -n "$gs_pid" ] && ! kill -0 "$gs_pid" 2>/dev/null; then
-            echo "[*] WARNING: gamescope died — restarting..."
-            kill "$gs_pid" 2>/dev/null; pkill -9 -x steam 2>/dev/null; pkill -9 -x steamwebhelper 2>/dev/null; pkill -9 -f lutris-gamepad-ui 2>/dev/null; sleep 2
+            echo "[*] WARNING: wayland client died — restarting..."
+            kill "$gs_pid" 2>/dev/null; pkill -9 -x steam 2>/dev/null; pkill -9 -x steamwebhelper 2>/dev/null; pkill -9 -x sway 2>/dev/null; pkill -9 -f lutris-gamepad-ui 2>/dev/null; sleep 2
             rm -f "${USER_HOME}/.steam/steam/steam.pid" "${USER_HOME}/.steam/debian-installation/steam.pid" 2>/dev/null
             if [ -n "$wl_name" ] && [ -S "$wl_sock" ]; then
-                _launch_gs_wayland "$wl_name"
+                _launch_wayland_client "$wl_name"
                 gs_pid=$!
             else
                 gs_launched=0   # socket gone → wait for a new peer/compositor

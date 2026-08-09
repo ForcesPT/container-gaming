@@ -319,6 +319,7 @@ launch() {
         -e DPAD_LUTRIS_EXTRA_ARGS="${DPAD_LUTRIS_EXTRA_ARGS:-}" \
         -e DPAD_LUTRIS_SHELL_ARGS="${DPAD_LUTRIS_SHELL_ARGS:-}" \
         -e DPAD_COMPOSITOR="${DPAD_COMPOSITOR:-}" \
+        -e DPAD_WAYLAND_CLIENT="${DPAD_WAYLAND_CLIENT:-}" \
         -e DPAD_STREAM_WIDTH="${DPAD_STREAM_WIDTH:-1920}" \
         -e DPAD_STREAM_HEIGHT="${DPAD_STREAM_HEIGHT:-1080}" \
         "$image" || { err "docker run $name failed"; return 1; }

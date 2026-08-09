@@ -27,6 +27,10 @@
 #                    use dpad-SteamOS-wd-spike for the spike tag with the plugin baked
 #   PASS             the selkies basic-auth password (default: testpass)
 #   SHELL            steam (default) | lutris (validates the §17.3 Lutris capture fix)
+#   DPAD_WAYLAND_CLIENT  gamescope (default) | sway (the §16.4 fallback — sway as a
+#                     nested Wayland client of gst-wayland-display, more stable
+#                     than gamescope --backend wayland on Nvidia. Needs sway baked
+#                     into the image — use a spike tag, e.g. IMAGE=...:dpad-SteamOS-wd-spike)
 #   EXTRA_ENV        extra -e flags (e.g. DPAD_LUTRIS_DISABLE_GPU=1 for the probe)
 set -euo pipefail
 
@@ -34,6 +38,7 @@ VM_IP="${VM_IP:?VM_IP is required (the VM public IP for TURN)}"
 IMAGE="${IMAGE:-forcespt/dpadcloud-gaming:dpad-SteamOS}"
 PASS="${PASS:-testpass}"
 SHELL_SEL="${SHELL:-steam}"
+DPAD_WAYLAND_CLIENT="${DPAD_WAYLAND_CLIENT:-gamescope}"
 NAME="wd-probe"
 PORT=3478
 SELKIES_PORT=16100
@@ -70,6 +75,7 @@ docker run -d --name "$NAME" \
     -p "${SELKIES_PORT}:${SELKIES_PORT}" \
     -e DPAD_GAMESCOPE=1 \
     -e DPAD_COMPOSITOR=wayland-display \
+    -e DPAD_WAYLAND_CLIENT="${DPAD_WAYLAND_CLIENT:-gamescope}" \
     -e DPAD_STORE_SHELL="$SHELL_SEL" \
     -e DPAD_TUNNEL=ssh \
     -e DPAD_SELKIES_BIND=0.0.0.0 \
@@ -98,7 +104,8 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
         echo "  1. Open http://$VM_IP:$SELKIES_PORT (login dpad/$PASS)."
         echo "  2. Watch 'docker logs -f $NAME' for:"
         echo "       'Compositor socket wayland-N appeared (peer connected)'"
-        echo "       'launching gamescope --backend wayland -- $SHELL_SEL'"
+        echo "       'launching wayland client (DPAD_WAYLAND_CLIENT=${DPAD_WAYLAND_CLIENT}) -- $SHELL_SEL'"
+        echo "       (gamescope path logs to /tmp/gamescope-steam.log; sway to /tmp/sway-client.log)"
         echo "  3. GATE: the browser should show video (Steam Big Picture, not black)"
         echo "     within ~30-40s of connecting. Check the SDP + compositor logs:"
         echo "       docker logs $NAME 2>&1 | grep -E 'm=video|waylanddisplaysrc|nvrtc: error'"
