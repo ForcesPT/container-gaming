@@ -364,6 +364,15 @@ COPY scripts/patch_gst_web_cursors.sh /opt/dpadcloud/patch_gst_web_cursors.sh
 RUN chmod +x /opt/dpadcloud/patch_gst_web_cursors.sh \
     && /opt/dpadcloud/patch_gst_web_cursors.sh /opt/gst-web/input.js
 
+# --- 4b. Live-resolution dropdown (§18.7) — bake the in-stream Resolution ---
+# selector + the _arg_res data-channel handler into the web client + the
+# selkies pip package at build time. The idempotent patcher also runs at boot
+# (entrypoint fetch-from-main overlay) so future fixes ship without a rebuild;
+# baked here so a brand-new container has the dropdown with NO network fetch.
+COPY scripts/patch_live_resolution.py /opt/dpadcloud/patch_live_resolution.py
+RUN chmod +x /opt/dpadcloud/patch_live_resolution.py \
+    && /opt/dpadcloud/patch_live_resolution.py
+
 # --- 5. cloudflared (HTTPS tunnel front for Selkies) ---
 RUN cd /tmp && curl -fsSL -o cloudflared \
       "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64" && \
