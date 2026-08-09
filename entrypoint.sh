@@ -907,9 +907,23 @@ start_wayland_display_session() {
     # --backend wayland as a Wayland client of it.
     local enc="${DPAD_GAMESCOPE_ENCODER:-nvh264enc}"
     local video_src="waylanddisplaysrc"
-    local selkies_cmd="export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_STREAM_WIDTH=${DPAD_WD_WIDTH:-1920} DPAD_STREAM_HEIGHT=${DPAD_WD_HEIGHT:-1080} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
+    # Live-resolution helpers (§18.7): /tmp/dpad_resolution is written by the
+    # selkies _arg_res data-channel handler (the web dropdown). Both the
+    # compositor caps (DPAD_STREAM_WIDTH/HEIGHT) + the sway `output * mode`
+    # read it, so a live change → handler kills selkies → this health loop
+    # relaunches selkies (new caps) + sway (new output mode) at the new res.
+    # Defaults to DPAD_WD_WIDTH/HEIGHT (the launch env / 1080p).
+    _dpad_res() { [ -f /tmp/dpad_resolution ] && cat /tmp/dpad_resolution || echo "${DPAD_WD_WIDTH:-1920}x${DPAD_WD_HEIGHT:-1080}"; }
+    _dpad_w() { _dpad_res | cut -dx -f1; }
+    _dpad_h() { _dpad_res | cut -dx -f2; }
+    # Build the selkies-gstreamer launch command. A function (not a captured
+    # string) so each (re)launch re-reads /tmp/dpad_resolution — the health
+    # loop's restart-on-death path picks up a live resolution change.
+    build_selkies_cmd() {
+      echo "export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_STREAM_WIDTH=$(_dpad_w) DPAD_STREAM_HEIGHT=$(_dpad_h) XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
+    }
     echo "[*] Launching selkies (wayland-display compositor; video_src=${video_src}, encoder=${enc})..."
-    as_user "${selkies_cmd}" >>/tmp/selkies.log 2>&1 &
+    as_user "$(build_selkies_cmd)" >>/tmp/selkies.log 2>&1 &
     sleep 6
     if ! pgrep -f selkies-gstreamer >/dev/null; then
         echo "    WARNING: selkies failed to start (see /tmp/selkies.log)"; tail -20 /tmp/selkies.log 2>/dev/null | sed 's/^/      /'
@@ -958,7 +972,9 @@ start_wayland_display_session() {
 # wl_output.mode (modes: [] -> defaults to 720p) so we must set it explicitly to
 # match the compositor (DPAD_WD_WIDTH/HEIGHT, same as the selkies caps). Without
 # this the stream is letterboxed (§17.3). §18.6 fix.
-output * mode --custom ${DPAD_WD_WIDTH:-1920}x${DPAD_WD_HEIGHT:-1080}
+# Read the live resolution from /tmp/dpad_resolution (§18.7 web dropdown) so
+# a live change relaunches sway at the new mode. Falls back to DPAD_WD_* / 1080p.
+output * mode --custom $(_dpad_w)x$(_dpad_h)
 for_window [app_id=".*"] fullscreen enable
 for_window [class=".*"] fullscreen enable
 exec ${SHELL_APP}
@@ -1006,7 +1022,12 @@ SWAYCFG
         if ! pgrep -f selkies-gstreamer >/dev/null; then
             echo "[*] WARNING: selkies-gstreamer died (compositor gone) — restarting..."
             pkill -f selkies-gstreamer 2>/dev/null; sleep 2
-            as_user "${selkies_cmd}" >>/tmp/selkies.log 2>&1 &
+            # Compositor died → sway (its client) is hung on the dead socket; kill
+            # sway + steam so the loop relaunches sway on the NEW compositor socket
+            # at the new resolution (no stale-sway double-launch). §18.7.
+            pkill -9 -x sway 2>/dev/null; pkill -9 -x steam 2>/dev/null; pkill -9 -x steamwebhelper 2>/dev/null
+            rm -f "${USER_HOME}/.steam/steam/steam.pid" 2>/dev/null
+            as_user "$(build_selkies_cmd)" >>/tmp/selkies.log 2>&1 &
             gs_launched=0   # compositor restarted → wait for the new socket
         fi
         # evdev_bridge.py supervisor (only in evdev mode).
