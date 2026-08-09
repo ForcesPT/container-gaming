@@ -1528,50 +1528,53 @@ gamescope-as-Wayland-client stability layer.
 
 1. **sway as the Wayland client** (the games-on-whales default, `RUN_SWAY=1`):
    sway provides XWayland to the app too, + is more stable as a Wayland client
-   of gst-wayland-display than gamescope on Nvidia. **✅ IMPLEMENTED (pending
-   live validation):** a `DPAD_WAYLAND_CLIENT=gamescope|sway` gate (default
-   `gamescope` = no regression) in the entrypoint's `start_wayland_display_session`
-   (`_launch_wayland_client`, replacing `_launch_gs_wayland`) launches `sway
-   --unsupported-gpu -c /tmp/dpad-sway.config -d` nested under gst-wayland-display
-   (`WLR_BACKENDS=wayland` forces the Wayland backend → NO DRM master → N-on-N
-   preserved, §2.1) instead of `gamescope --backend wayland`. The sway config
-   auto-fullscreens + `exec`s the shell app (Steam/Lutris) as a sway client. sway +
-   xwayland are baked into the vast-vm stage (Dockerfile) — needs a rebuild + push
-   (a spike tag, e.g. `dpad-SteamOS-wd-spike`) before the live test; the entrypoint
-   gate ships via the bind-mount hotfix. `dpad-launch-session` +
-   `wayland-display-probe.sh` forward `DPAD_WAYLAND_CLIENT`. Same compositor
+   of gst-wayland-display than gamescope on Nvidia. **✅ IMPLEMENTED + ✅ VALIDATED
+   LIVE 2026-08-09 (OVH Gravelines L4, image `dpad-SteamOS-wd-spike`):** a
+   `DPAD_WAYLAND_CLIENT=gamescope|sway` gate (default `gamescope` = no regression)
+   in the entrypoint's `start_wayland_display_session` (`_launch_wayland_client`,
+   replacing `_launch_gs_wayland`) launches `sway --unsupported-gpu -c
+   /tmp/dpad-sway.config -d` nested under gst-wayland-display (`WLR_BACKENDS=wayland`
+   forces the Wayland backend → NO DRM master → N-on-N preserved, §2.1;
+   `WLR_LIBINPUT_NO_DEVICES=1` for headless) instead of `gamescope --backend
+   wayland`. The sway config auto-fullscreens + `exec`s the shell app
+   (Steam/Lutris) as a sway client. sway + xwayland are baked into the vast-vm
+   stage (Dockerfile). **sway STAYS UP** (self-heals via the entrypoint health
+   loop on the occasional drop — `relaunch` path) + **Steam renders + audio plays +
+   the user can click/navigate** — the §16.3 gamescope-wayland client drop is
+   **BYPASSED end-to-end** (video `m=video:9` + audio `m=audio:9` + interaction).
+   See §16.7 for the live results + the audio-peer caveat. `dpad-launch-session`
+   + `wayland-display-probe.sh` forward `DPAD_WAYLAND_CLIENT`. Same compositor
    capture; different XWayland provider.
 2. **A gamescope rebuild** with a newer gamescope tag (the image's gamescope is
    3.16.25) — upstream may have fixed the Wayland-client connection issue. Lower-
    priority (a build change); try sway first.
 
-### 16.5 Resume (the client-stability layer)
+### 16.5 Resume
 
 ```bash
 cd dpadplay/container-gaming && git pull
-# §16: the EGL-vendor bug is FIXED (21dfb1e, ships via the entrypoint hotfix).
-# gamescope --backend wayland now reaches Steam launch before the connection drop.
+# §16.4 sway fallback: ✅ VALIDATED LIVE 2026-08-09 (OVH L4). sway stays up +
+#   Steam renders + audio plays + clickable. The §16.3 gamescope-wayland drop is
+#   BYPASSED. See §16.7. The prod image now bakes sway + the gate (dpad-SteamOS).
+# §16.6 OVH plain-proprietary-580 → open swap: ✅ validated live on the same VM.
 #
-# NEXT — the gamescope-wayland client stability (§16.3/§16.4):
-# 1. Provision an OVH L4 (§12). vm-bootstrap.sh install (fetches the EGL-fixed
-#    entrypoint). The open R580 is now AUTOMATED for OVH too (§16.6 FIXED:
-#    has_proprietary_580 now detects OVH's plain nvidia-driver-580/nvidia-dkms-580
-#    + ensure_driver_580 swaps to nvidia-driver-580-open with NO purge — apt
-#    resolves the plain variant's Conflicts+Replaces; the -580-server broad-purge
-#    path for Scaleway is unchanged). One cold-boot reboot for the swap (~12-18 min).
-# 2. VM_IP=<ip> SHELL=steam bash /tmp/wayland-display-probe.sh
-# 3. Connect a peer (selkies-sdp-probe.py) → gamescope launches → opens the browser
-#    at http://$VM_IP:16100 to SEE the compositor surface (black until a client renders).
-# 4. Try the sway fallback (§16.4 #1) — ✅ BUILT, ready to A/B:
-#    DPAD_WAYLAND_CLIENT=sway (entrypoint gate + dpad-launch-session/probe forward
-#    it; sway + xwayland baked in the Dockerfile vast-vm stage — needs a rebuild +
-#    push of a spike tag). Run:
-#      VM_IP=<ip> SHELL=steam DPAD_WAYLAND_CLIENT=sway IMAGE=<spike-tag> bash /tmp/wayland-display-probe.sh
-#    Then connect a peer + watch /tmp/sway-client.log (inside the container) if
-#    sway drops. If sway stays up + Steam renders → the §16.3 gamescope-wayland
-#    drop is bypassed (the compositor still captures sway).
-# 5. If sway stays up + Steam renders, the browser shows Steam Big Picture (the full
-#    multi-store path unblocked: §8 step 3 Lutris shell → §8 step 4 store launchers).
+# NEXT — the remaining §8 phasing:
+# 1. §8 step 3: Lutris shell under the new compositor (DPAD_STORE_SHELL=lutris +
+#    --ozone-platform=wayland) — libSDL3 already ships, so gamepad nav should work.
+# 2. §8 step 4: store launchers (Battle.net/Epic) via sway-as-client (XWayland).
+# 3. §5.4 input: keyboard/mouse are reaching Steam under sway (clickable); the
+#    gamepad path under sway (vs the gamescope-XWayland evdev interposer) needs a
+#    real-controller test + the inputtino migration (§8 step 6, last).
+# 4. §8 step 5: flip the control-plane default to DPAD_COMPOSITOR=wayland-display
+#    after a parallel-run period (the image is ready; the default is still
+#    gamescope-headless = no regression).
+# 5. Re-verify N-on-N on the sway path (2 sway compositors on 1 L4 via MPS).
+#
+# Audio caveat (§16.7): the selkies AUDIO peer (SESSION 3, the separate-audio-
+#   webrtcbin architecture, PR #96) is flaky on reconnect — a stale uid in the
+#   signalling server's self.peers blocks the audio app's reconnect. DO NOT run
+#   selkies-sdp-probe.py on a session VM before the browser (it pollutes
+#   self.peers); a fresh container + the browser as the first peer = audio works.
 ```
 
 ### 16.6 ✅ FIXED — `ensure_driver_580` now swaps OVH's plain proprietary 580 too
@@ -1607,3 +1610,68 @@ hit the `dri2 screen` crash (§5) on OVH wayland-display sessions.
   booted without a driver swap. UpCloud (already open post-595-downgrade) is
   untouched. Verified by a dpkg-list simulation (OVH plain → no-purge+install;
   Scaleway server → broad purge; already-open → no-op).
+
+### 16.7 ✅ LIVE-VALIDATED 2026-08-09 — sway fallback end-to-end (video + audio + interaction)
+
+Provisioned a fresh OVH Gravelines L4 (`f4742340-…` @ `217.182.104.61`) via the
+§12 `createOvhAdapter` pattern, image `forcespt/dpadcloud-gaming:dpad-SteamOS-wd-spike`
+(= prod `:dpad-SteamOS` `aaa880f2` + `apt install sway xwayland` + the latest
+`entrypoint.sh` with the §16.2 EGL fix + the §16.4 sway gate; a shortcut build,
+no full rebuild). `vm-bootstrap.sh install` triggered the **§16.6 driver swap**
+(plain proprietary `nvidia-driver-580` → `nvidia-driver-580-open`, `580.178.04`,
+`license: Dual MIT/GPL`, one cold-boot reboot — the FIRST live validation of the
+§16.6 fix on OVH) → `DPAD_VM_READY` → probe container with
+`DPAD_COMPOSITOR=wayland-display DPAD_WAYLAND_CLIENT=sway DPAD_STORE_SHELL=steam`.
+A real browser peer connected.
+
+**Results — the §16.3 gamescope-wayland client drop is BYPASSED end-to-end:**
+- **sway STAYS UP** (`sway` 1.9, `WLR_BACKENDS=wayland` nested under
+gst-wayland-display). The occasional sway drop is caught + **self-healed by the
+entrypoint health loop's restart-on-death path** (`_launch_wayland_client` is
+re-called when sway dies + the compositor socket is still there) — sway was
+observed dropping once then relaunching; the user kept seeing Steam.
+- **Steam renders**: `steam` + `Xwayland` + `steamwebhelper` (×12) running;
+`m=video 9` (H264) negotiated → the user sees Steam Big Picture.
+- **Audio plays**: `m=audio 9` negotiated (the separate selkies audio peer,
+`SESSION 3`); the user hears game audio.
+- **Clickable**: with both video + audio connected, the web-client `status` reaches
+`'connected'` → the `scale-loader` overlay (`:loading="(status !== 'connected')"`,
+index.html) clears → the user can click + navigate Steam.
+- **NVRTC errors = 0** (the CUDAMemory/compositor path; `extract-nvrtc.sh`
+redundant here — §13.14 confirmed).
+- sway's `[ERROR] Proprietary Nvidia drivers are in use` is a **false positive**
+(the kernel module is open `580.178.04`; sway's heuristic flags the nvidia
+userspace regardless) — `--unsupported-gpu` skips the abort, harmless.
+
+**Audio caveat — the selkies separate-audio-peer flakiness (NOT a sway issue):**
+This selkies-gstreamer uses the PR #96 architecture (separate webrtcbins for
+video + audio; the app is `my_id=0`/`SESSION 1` video + `my_id=2`/`SESSION 3`
+audio; the browser is peer 1 video + peer 3 audio). The audio app's signaling
+connection is flaky on **reconnect**: when it drops, the signalling server
+(`signalling_web.py:hello_peer`) does NOT clean up the dead uid `2` from
+`self.peers` → the audio app's reconnect is rejected with `Invalid uid '2'
+from …` / `invalid peer uid` (signalling_web.py:421: `if … uid in self.peers …`).
+A stale uid blocks all subsequent audio. **Trigger observed:** running
+`scripts/selkies-sdp-probe.py` on the session VM BEFORE the browser pollutes
+`self.peers` (the sdp-probe's disconnect leaves uid 2 stale → the browser run's
+audio app can't connect → no `m=audio` → `audioConnected != 'connected'` → the
+overlay stays → not clickable). **Fix for testing:** a FRESH container (browser as
+the first/only peer) = audio connects cleanly + stays. **DO NOT run
+selkies-sdp-probe.py on a session VM before the browser.** The prod flow (browser
+is the first peer) is unaffected. The deeper fix (server-side dead-peer cleanup on
+WS close) is an upstream selkies issue (the #109 "audio randomly disabled" class)
++ a future hardening; not blocking the wayland path.
+
+**Net:** the multi-store wayland path (compositor + sway-as-client + Steam + audio
++ interaction) is **VALIDATED**. Remaining §8 phasing: the Lutris shell + store
+launchers under sway, the gamepad input under sway (§5.4 — keyboard/mouse already
+reach Steam; the gamepad interposer was for gamescope's XWayland), N-on-N on the
+sway path, then flip the control-plane default.
+
+**Reproducible test (§12 pattern):** provision an OVH L4, `vm-bootstrap.sh install`
+(fetches the fixed `vm-bootstrap.sh` + `entrypoint.sh` from repo `main` — the
+§16.6 + §16.4 commits are pushed), launch the probe with
+`DPAD_COMPOSITOR=wayland-display DPAD_WAYLAND_CLIENT=sway` + the sway-capable image
+(`:dpad-SteamOS` now bakes sway + the gate, or the `:dpad-SteamOS-wd-spike` tag),
+open the browser (do NOT run sdp-probe first), connect. VM torn down after
+validation (`adapter.destroyVm`, 0 orphans, billing stopped).

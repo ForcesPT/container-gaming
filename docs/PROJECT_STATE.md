@@ -425,7 +425,12 @@ reverts to the `:2` bridge fallback.
     Selkies `build_video_pipeline` patch + the entrypoint `DPAD_COMPOSITOR` gate
     + the full browser-stream (webrtcbin+coturn) validation. The probe knobs stay
     as a stopgap + a way to characterise the bug; the real fix is the new
-    compositor. With the NVRTC fix + `DPAD_STORE_SHELL=lutris`, the
+    compositor. **✅ RESOLVED 2026-08-09 (WAYLAND-ARCHITECTURE.md §16.7):** the
+    sway-as-client fallback (`DPAD_WAYLAND_CLIENT=sway`) is LIVE-VALIDATED on an
+    OVH L4 — sway stays up (self-heals on drop), Steam renders, audio plays, +
+    the user can click. The gamescope `--backend wayland` client drop (§16.3) is
+    BYPASSED. The remaining §8 phasing: Lutris shell + store launchers under
+    sway, gamepad input under sway (§5.4), N-on-N on sway, then flip the default. With the NVRTC fix + `DPAD_STORE_SHELL=lutris`, the
     video webrtcbin never adds a video m-line (`m=video: 0` vs `m=video: 2`
     for steam on the SAME VM/image) → audio connects but no video → "Waiting
     for stream". `lutris-gamepad-ui` (Electron AppImage) does NOT render into
