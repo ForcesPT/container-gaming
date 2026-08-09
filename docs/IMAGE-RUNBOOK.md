@@ -97,6 +97,8 @@ docker logs -f dpad-0
 | `DPAD_TUNNEL` | (unset) | `ssh` gates cloudflared OFF (the B1 self-hosted `play-<id>.dpadplay.com` path). Unset = cloudflared quick tunnel (legacy). |
 | `DPAD_DEFAULT_GAMING_MODE` | `0` | `1` = default the browser to **Gaming mode** (pointer lock ON → relative mouse for FPS aim) on stream load; `0` = Desktop mode (visible cursor + absolute mouse for Steam UI). The user can still toggle at runtime (floating button / `Ctrl+Shift+G`). Wired through `patch_gst_web_cursors.sh`; the control plane can set it per region/tier. |
 | `DPAD_INPUT_HOTFIX` | `0` | The 2026-08-05 image rebuild baked the input fixes (scroll direction + Gaming-mode toggle), so the boot-time overlay from repo `main` is **OFF by default** (avoids a `main`-regression overwriting the just-pushed image). Set `=1` to re-overlay `dpad_input_patch.py` + `patch_gst_web_cursors.sh` from `main` (useful to ship a NEW input hotfix before the next rebuild); on fetch failure it falls back to the baked copies. |
+| `DPAD_WD_WIDTH` / `DPAD_WD_HEIGHT` | `1920` / `1080` | **Stream resolution (wayland-display path, §18.6/§18.7).** Sets the compositor's caps (`DPAD_STREAM_WIDTH/HEIGHT` in the selkies launch) + sway's `output * mode --custom` (the no-letterbox fix — sway's nested wayland backend ignores the compositor's `wl_output.mode` + defaults to 720p without it). The cloud worker reads `preferences.resolution` + passes these per-session via an `env` prefix on `dpad-launch-session`; `dpad-launch-session` forwards them to `docker run -e`. |
+| `/tmp/dpad_resolution` (in-container state file) | `DPAD_WD_WIDTH x DPAD_WD_HEIGHT` | **Live resolution switch (§18.7).** Written by the selkies `_arg_res` data-channel handler (the in-stream **Resolution** dropdown). The entrypoint's `build_selkies_cmd()` + the sway heredoc read it on every selkies (re)launch, so writing it + SIGTERM-ing selkies → the health loop relaunches selkies (new caps) + sway (new output mode) at the new resolution; the browser reconnects ~6s. Not an env var — a runtime state file. |
 | `DPAD_AUDIO_PACKETLOSS` | `0` | Opus inband FEC % (e.g. `10`). 0 = off. |
 | `DPAD_VIDEO_PACKETLOSS` | `0` | ULP_RED video FEC % (e.g. `10`, RFC 2198 forward redundancy). Auto-trims `fec_video_bitrate = video_bitrate / (1 + %/100)`. 0 = off. NACK rtx is always on. |
 | `DPAD_COTURN_PORT` | `3478` | coturn listen port (internal). Expose with `-p`. |
@@ -179,7 +181,8 @@ cloudflared ~10s · the rest ~8s).
 | Mild flicker on Steam menu open/close | NVIDIA 580 driver regression (gamescope #1964). Accepted; host-side. **Severe whole-frame flicker = driver 595** → the host must downgrade 595 → R580 LTS (see `cloud/docs/DEPLOY-RUNBOOK.md`). |
 | Browser refresh occasionally "Waiting for stream" | Selkies 1.6.2 reconnect race. Self-heals on a 2nd refresh; a fresh incognito tab always works. **A restart-on-disconnect supervisor (`entrypoint.sh` `relaunch_selkies()` in the gamescope-session health loop) auto-relaunches `selkies-gstreamer` when it dies while gamescope is up, so the browser reconnects without a manual refresh — validated live 2026-08-05 (OVH Gravelines L4: killed selkies mid-stream, health loop relaunched it within ~20s)** (`PROJECT_STATE.md` §6 #7). |
 | `webrtcnice … failed to resolve "<uuid>.local"` | Harmless — Chrome's mDNS `.local` ICE candidates the container can't resolve; the TURN relay handles it. |
-| `remote resize is disabled, skipping resize to 2552x1308` | Harmless — hi-DPI browser asked bigger; `--enable_resize=false` fixes the stream at 1920×1080. |
+| `remote resize is disabled, skipping resize to 2552x1308` | Harmless — hi-DPI browser asked bigger; `--enable_resize=false` fixes the stream at the compositor's caps (set by `DPAD_WD_WIDTH/HEIGHT` or the live Resolution dropdown). |
+| Live Resolution dropdown missing / no `_arg_res` | The 2026-08-09 rebuild bakes the in-stream **Resolution** select (720p/1080p/1440p/4K) + the `_arg_res` handler. On a pre-08-09 image, re-provision (`docker pull forcespt/dpadcloud-gaming:dpad-SteamOS`) — the boot-time `patch_live_resolution.py` overlay also fetches it from `main` as a backstop. Picking a resolution writes `/tmp/dpad_resolution` + SIGTERMs selkies; the entrypoint health loop relaunches selkies (new compositor caps) + sway (new `output * mode --custom`) at the new res; the browser reconnects ~6s (signalling.js auto-retry). See WAYLAND-ARCHITECTURE.md §18.7. |
 
 ## Multi-tenant — N sessions on N GPUs in one VM
 
@@ -193,11 +196,16 @@ plan.
 
 ## Rebuild + push
 
-The public `:dpad-SteamOS` tag is **current as of the 2026-08-05 rebuild** —
-it bakes the input fixes (scroll direction + Gaming-mode toggle) and the evdev
-gamepad fixes (i386 fake-libudev SONAME + bridge socket-chmod). A fresh
-`docker pull` gets them; no hotfix overlay needed (`DPAD_INPUT_HOTFIX` defaults
-to `0`). Rebuild only when new fixes land in `main`.
+The public `:dpad-SteamOS` tag is **current as of the 2026-08-09 rebuild** —
+it bakes the **live in-stream Resolution dropdown** (720p/1080p/1440p/4K, next
+to Video bitrate — the `_arg_res` data-channel handler + the `build_selkies_cmd`
++ sway `output * mode --custom` machinery, WAYLAND-ARCHITECTURE.md §18.7) ON TOP
+of the 2026-08-05 fixes (input scroll direction + Gaming-mode toggle + evdev
+i386 fake-libudev SONAME + bridge socket-chmod). A fresh `docker pull` gets all
+of it; no hotfix overlay needed (`DPAD_INPUT_HOTFIX` defaults to `0`). The
+boot-time `patch_live_resolution.py` overlay stays as an idempotent backstop
+(it skips when the feature is already present) so future web-client/handler
+fixes can ship without a rebuild. Rebuild only when new fixes land in `main`.
 
 ```bash
 docker build --target vast-vm -t forcespt/dpadcloud-gaming:dpad-SteamOS .
@@ -205,6 +213,14 @@ docker build --target vast-vm --build-arg CUDA_VERSION=12.8.1 --build-arg CUDA_P
   -t forcespt/dpadcloud-gaming:dpad-SteamOS-rtx50 .
 docker push forcespt/dpadcloud-gaming:dpad-SteamOS
 ```
+
+**2026-08-09 rebuild — live-validated on OVH Gravelines L4** (`79.137.11.29`,
+container `wd-probe`, wayland-display path): pulled the fresh image + ran it
+with NO `entrypoint.sh` bind-mount (pure baked image) → the Resolution
+dropdown is present in the served `index.html`, the `_arg_res` handler is in
+the baked `webrtc_input.py`, + a 4K pick from the dropdown switched the live
+stream to `3840x2160` (xrandr `WL-1 connected 3840x2160`, sway mode forced, no
+letterbox) via the `/tmp/dpad_resolution` → selkies+sway restart path.
 
 ## Evdev gamepad path — manual real-controller test (DPAD_GAMEPAD_INTERPOSER=evdev)
 
