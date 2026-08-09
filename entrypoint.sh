@@ -839,7 +839,11 @@ start_wayland_display_session() {
     GS_H="$(printf '%s' "${SCREEN_RESOLUTION:-1920x1080x24}" | cut -dx -f2)"; [ -z "$GS_H" ] && GS_H=1080
     STEAM_ARGS="${DPAD_STEAM_ARGS:--gamepadui}"
     local SHELL_APP SHELL_PROC
-    if [ "${DPAD_STORE_SHELL:-steam}" = "lutris" ]; then
+    if [ "${DPAD_STORE_SHELL:-steam}" = "picker" ]; then
+        SHELL_APP="/opt/dpadcloud/launcher-shell"
+        SHELL_PROC="dpad-launcher"
+        echo "[*] DPAD_STORE_SHELL=picker — DpadPlay launcher (the store-picker shell)"
+    elif [ "${DPAD_STORE_SHELL:-steam}" = "lutris" ]; then
         SHELL_APP="/opt/dpadcloud/lutris-shell"
         SHELL_PROC="lutris-gamepad-ui"
         echo "[*] DPAD_STORE_SHELL=lutris — Lutris gamepad-UI shell (Epic+GOG+Battle.net, STORES-PLAN.md)"
@@ -847,7 +851,7 @@ start_wayland_display_session() {
         SHELL_APP="steam ${STEAM_ARGS}"
         SHELL_PROC="steam"
     fi
-    local LUTRIS_ENV="DPAD_LUTRIS_DISABLE_GPU='${DPAD_LUTRIS_DISABLE_GPU:-}' DPAD_LUTRIS_OZONE='${DPAD_LUTRIS_OZONE:-}' DPAD_LUTRIS_USE_GL='${DPAD_LUTRIS_USE_GL:-}' DPAD_LUTRIS_EXTRA_ARGS='${DPAD_LUTRIS_EXTRA_ARGS:-}' DPAD_LUTRIS_SHELL_ARGS='${DPAD_LUTRIS_SHELL_ARGS:-}'"
+    local LUTRIS_ENV="DPAD_LUTRIS_DISABLE_GPU='${DPAD_LUTRIS_DISABLE_GPU:-}' DPAD_LUTRIS_OZONE='${DPAD_LUTRIS_OZONE:-}' DPAD_LUTRIS_USE_GL='${DPAD_LUTRIS_USE_GL:-}' DPAD_LUTRIS_EXTRA_ARGS='${DPAD_LUTRIS_EXTRA_ARGS:-}' DPAD_LUTRIS_SHELL_ARGS='${DPAD_LUTRIS_SHELL_ARGS:-}' DPAD_LUTRIS_SDL3='${DPAD_LUTRIS_SDL3:-}'"
 
     # --- shared session prep (mirrors start_gamescope_session) ---
     setup_user_volume
@@ -1098,7 +1102,11 @@ start_gamescope_session() {
     # the process name the ready-check + health-loop target (steam via pgrep -x;
     # the gamepad-UI via pgrep -f).
     local SHELL_APP SHELL_PROC
-    if [ "${DPAD_STORE_SHELL:-steam}" = "lutris" ]; then
+    if [ "${DPAD_STORE_SHELL:-steam}" = "picker" ]; then
+        SHELL_APP="/opt/dpadcloud/launcher-shell"
+        SHELL_PROC="dpad-launcher"   # pgrep -f matches the Electron binary
+        echo "[*] DPAD_STORE_SHELL=picker — DpadPlay launcher (the store-picker shell)"
+    elif [ "${DPAD_STORE_SHELL:-steam}" = "lutris" ]; then
         SHELL_APP="/opt/dpadcloud/lutris-shell"
         SHELL_PROC="lutris-gamepad-ui"   # pgrep -f matches the AppRun cmdline
         echo "[*] DPAD_STORE_SHELL=lutris — Lutris gamepad-UI shell (Epic+GOG+Battle.net, STORES-PLAN.md)"
@@ -1115,7 +1123,9 @@ start_gamescope_session() {
     # be re-exported here or they never reach the wrapper. Empty-safe: an unset
     # var exports as '' which the wrapper's `${VAR:-}` / `[ -n "${VAR:-}" ]`
     # checks treat as unset. No-op for the steam shell (the wrapper isn't exec'd).
-    local LUTRIS_ENV="DPAD_LUTRIS_DISABLE_GPU='${DPAD_LUTRIS_DISABLE_GPU:-}' DPAD_LUTRIS_OZONE='${DPAD_LUTRIS_OZONE:-}' DPAD_LUTRIS_USE_GL='${DPAD_LUTRIS_USE_GL:-}' DPAD_LUTRIS_EXTRA_ARGS='${DPAD_LUTRIS_EXTRA_ARGS:-}' DPAD_LUTRIS_SHELL_ARGS='${DPAD_LUTRIS_SHELL_ARGS:-}'"
+    # DPAD_LUTRIS_SDL3 forwards the SDL3-gamepad ON/OFF A/B to the wrapper
+    # (the §16.9 sway-SIGTRAP isolation knob); empty = wrapper defaults to 1.
+    local LUTRIS_ENV="DPAD_LUTRIS_DISABLE_GPU='${DPAD_LUTRIS_DISABLE_GPU:-}' DPAD_LUTRIS_OZONE='${DPAD_LUTRIS_OZONE:-}' DPAD_LUTRIS_USE_GL='${DPAD_LUTRIS_USE_GL:-}' DPAD_LUTRIS_EXTRA_ARGS='${DPAD_LUTRIS_EXTRA_ARGS:-}' DPAD_LUTRIS_SHELL_ARGS='${DPAD_LUTRIS_SHELL_ARGS:-}' DPAD_LUTRIS_SDL3='${DPAD_LUTRIS_SDL3:-}'"
 
     # Bind the user's persistent library volume (if mounted) BEFORE bootstrapping
     # Steam — the library subpaths (steamapps/config/userdata) must point at the

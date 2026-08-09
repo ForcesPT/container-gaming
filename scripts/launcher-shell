@@ -1,0 +1,31 @@
+#!/bin/bash
+# launcher-shell — start the dpad-launcher Electron app (the store-picker
+# shell) in the headless cloud-gaming container. The entrypoint's sway/wayland
+# session launches THIS instead of `steam -gamepadui` / `lutris-shell` when
+# DPAD_STORE_SHELL=picker (wired in entrypoint.sh). Replaces lutris-gamepad-ui.
+#
+# Gamepad: the launcher polls SDL3 via koffi (the Web Gamepad API doesn't see
+# the mknod'd /dev/input/jsN pads in-container). It needs the classic-joystick
+# interposer + the SDL3 env the entrypoint's session already exports
+# (SDL_JOYSTICK_LINUX_CLASSIC=1, SDL_JOYSTICK_DISABLE_UDEV=1,
+# SDL_JOYSTICK_DEVICE=/dev/input/js0, SDL_GAMECONTROLLERCONFIG, LD_PRELOAD=
+# selkies_joystick_interposer.so). When run as the sway startup app those are
+# inherited; for a manual `docker exec` test they must be set on the process.
+#
+# Usage:  launcher-shell   (env: DISPLAY / XDG_RUNTIME_DIR / SDL_* / LD_PRELOAD
+#         must be exported by the caller — the entrypoint's launch line does.)
+# Logs:   /tmp/launcher.log
+set -e
+
+APPDIR="/opt/dpadcloud/launcher"
+APPRUN="${APPDIR}/dpad-launcher"
+if [ ! -x "${APPRUN}" ]; then
+    echo "launcher-shell: FATAL — ${APPRUN} not found/executable" >&2
+    echo "  (the launcher AppDir is baked into the image at ${APPDIR}/ via" >&2
+    echo "   COPY --from=forcespt/dpadcloud-launcher, or bind-mounted for dev)" >&2
+    exit 1
+fi
+
+# Electron sandbox off (the container has userns; --no-sandbox avoids the
+# setuid chrome-sandbox requirement, matching the lutris-shell / heroic path).
+exec "${APPRUN}" --no-sandbox >/tmp/launcher.log 2>&1

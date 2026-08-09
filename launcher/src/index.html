@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'" />
+  <title>DpadPlay</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="stage">
+    <header class="brand">
+      <div class="wordmark"><span class="dot"></span>DpadPlay</div>
+      <div class="tagline">Choose your store</div>
+    </header>
+
+    <main class="grid" id="grid"></main>
+
+    <footer class="hint">
+      <span class="key">←</span><span class="key">→</span><span class="key">↑</span><span class="key">↓</span>
+      navigate &nbsp;·&nbsp;
+      <span class="key">Enter</span> / <span class="pad">A</span> launch &nbsp;·&nbsp;
+      <span class="key">Esc</span> / <span class="pad">B</span> exit store &nbsp;·&nbsp;
+      gamepad supported
+    </footer>
+
+    <!-- launch overlay: shown while a store client boots; covers the grid so
+         the user has clear feedback the launch is happening. Stays until the
+         store window appears (covering the launcher) or any input dismisses. -->
+    <div id="launchOverlay" class="launch-overlay" aria-hidden="true">
+      <div class="launch-card">
+        <img id="launchLogo" class="launch-logo" src="" alt="" />
+        <div id="launchName" class="launch-name">Launching…</div>
+        <div class="launch-spinner" aria-hidden="true"></div>
+        <div class="launch-hint">Press <span class="pad">B</span> / <span class="key">Esc</span> to cancel</div>
+      </div>
+    </div>
+  </main>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

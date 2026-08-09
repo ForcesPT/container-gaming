@@ -1,0 +1,276 @@
+/* dpad-launcher — graphite6 palette (matches dpadplay.com live site).
+   Tokens pulled from /_next CSS: --color-surface #0c0d11, --color-surface-high
+   #1a1c23, --color-surface-variant/--color-outline-variant #262a33, --color-primary
+   #eceff6, --color-on-surface #f5f7fa, --color-steel #aab2c0, --color-tertiary
+   #6e7582, --color-green-500 #00c758, --color-warn #e6be72. */
+
+:root {
+  --surface: #0c0d11;
+  --surface-container: #0f1116;
+  --surface-high: #1a1c23;
+  --surface-low: #0a0c10;
+  --border: #262a33;
+  --primary: #eceff6;
+  --on-surface: #f5f7fa;
+  --steel: #aab2c0;
+  --tertiary: #6e7582;
+  --green: #00c758;
+  --warn: #e6be72;
+  --error: #f2768a;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* kill the UA default focus ring (we draw our own via .card.focused) —
+   otherwise clicking the page flashes an orange/amber outline. */
+*:focus { outline: none; }
+
+html, body {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: var(--surface);
+  color: var(--on-surface);
+  font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+.stage {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  /* subtle radial glow like the site hero */
+  background:
+    radial-gradient(60% 80% at 50% 38%, rgba(236, 239, 246, 0.07), transparent 62%),
+    linear-gradient(160deg, #1b1e25, #0f1116 72%);
+}
+
+.brand {
+  padding: 64px 80px 0;
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+}
+.wordmark {
+  font-size: 2.6rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.wordmark .dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--primary);
+  box-shadow: 0 0 16px rgba(236, 239, 246, 0.6);
+}
+.tagline {
+  font-size: 1.05rem;
+  color: var(--tertiary);
+  letter-spacing: 0.02em;
+}
+
+.grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 28px;
+  padding: 56px 80px;
+  align-content: center;
+}
+
+/* ---- store card ---- */
+.card {
+  position: relative;
+  height: 360px;
+  border-radius: 22px;
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  outline: none;
+}
+.card .tile {
+  height: 62%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  background: linear-gradient(160deg, var(--brand, #2a2f3a), rgba(12, 13, 17, 0.35));
+}
+.card .tile .glyph {
+  font-size: 5.2rem;
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.92);
+  letter-spacing: -0.04em;
+  text-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+}
+.card .tile .logo {
+  width: 116px;
+  height: 116px;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 22px rgba(0, 0, 0, 0.42));
+  transition: transform 0.18s ease;
+}
+.card.focused .tile .logo { transform: scale(1.06); }
+.card .body {
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+.card .name {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--primary);
+  letter-spacing: -0.01em;
+}
+.card .subtitle {
+  font-size: 0.95rem;
+  color: var(--steel);
+}
+.card .status {
+  margin-top: auto;
+  align-self: flex-start;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 5px 12px;
+  border-radius: 999px;
+}
+.status.available { color: var(--green); background: rgba(0, 199, 88, 0.12); border: 1px solid rgba(0, 199, 88, 0.3); }
+.status.soon { color: var(--warn); background: rgba(230, 190, 114, 0.1); border: 1px solid rgba(230, 190, 114, 0.25); }
+.status.missing { color: var(--tertiary); background: rgba(110, 117, 130, 0.12); border: 1px solid var(--border); }
+
+/* disabled / coming-soon card */
+.card.disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+.card.disabled .tile { filter: grayscale(0.6); }
+
+/* ---- focus (keyboard + gamepad) ---- */
+.card.focused {
+  transform: translateY(-6px) scale(1.035);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary), 0 18px 48px rgba(0, 0, 0, 0.55),
+              0 0 60px rgba(236, 239, 246, 0.18);
+  z-index: 2;
+}
+.card.focused .tile::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(60% 80% at 50% 40%, rgba(236, 239, 246, 0.16), transparent 62%);
+}
+
+.hint {
+  padding: 0 80px 40px;
+  color: var(--tertiary);
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.hint .key, .hint .pad {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  margin: 0 2px;
+  border-radius: 6px;
+  background: var(--surface-container);
+  border: 1px solid var(--border);
+  color: var(--steel);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.hint .pad { color: var(--primary); }
+
+/* launch flash (brief confirmation when a store is launched) */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 120px;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  color: var(--on-surface);
+  padding: 16px 28px;
+  border-radius: 14px;
+  font-size: 1.1rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  z-index: 10;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.error { border-color: rgba(242, 118, 138, 0.5); color: var(--error); }
+
+/* ---- launch overlay (shown while a store client boots) ---- */
+.launch-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 9, 12, 0.92);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+  z-index: 50;
+}
+.launch-overlay.show { opacity: 1; pointer-events: auto; }
+.launch-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  padding: 56px 72px;
+  border-radius: 26px;
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6), 0 0 80px rgba(236, 239, 246, 0.1);
+}
+.launch-logo {
+  width: 132px;
+  height: 132px;
+  object-fit: contain;
+  filter: drop-shadow(0 10px 28px rgba(0, 0, 0, 0.5));
+  animation: launch-pulse 1.4s ease-in-out infinite;
+}
+.launch-name {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--primary);
+  letter-spacing: -0.01em;
+}
+.launch-spinner {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 4px solid var(--border);
+  border-top-color: var(--primary);
+  animation: launch-spin 0.9s linear infinite;
+}
+.launch-hint { color: var(--tertiary); font-size: 0.95rem; }
+@keyframes launch-spin { to { transform: rotate(360deg); } }
+@keyframes launch-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.06); opacity: 0.85; }
+}

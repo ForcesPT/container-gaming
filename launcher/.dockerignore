@@ -1,0 +1,4 @@
+# Only the prebuilt AppDir + the Dockerfile need to reach the builder daemon.
+*
+!dist/linux-unpacked/
+!Dockerfile

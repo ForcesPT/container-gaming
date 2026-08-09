@@ -1,0 +1,5 @@
+# build artifacts + deps (the AppDir is built by scripts/build.sh + shipped as
+# the forcespt/dpadcloud-launcher Docker image; not committed to this repo)
+node_modules/
+dist/
+package-lock.json

@@ -1,0 +1,40 @@
+{
+  "name": "dpad-launcher",
+  "version": "0.1.0",
+  "description": "DpadPlay 10-foot store launcher — a gamepad/keyboard front door to the installed store clients (Steam, Battle.net, ...). Replaces lutris-gamepad-ui as the shell. See README.md.",
+  "main": "src/main.js",
+  "author": "DpadPlay",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --linux dir"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "simple-icons": "^16.28.0"
+  },
+  "dependencies": {
+    "koffi": "^2.16.1"
+  },
+  "build": {
+    "appId": "com.dpadplay.launcher",
+    "productName": "dpad-launcher",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "linux": {
+      "target": [
+        "dir"
+      ],
+      "category": "Game",
+      "executableName": "dpad-launcher"
+    }
+  }
+}

@@ -38,8 +38,12 @@ if [ ! -x "${APPRUN}" ]; then
 fi
 
 # SDL3 gamepad input (required in-container; the Web Gamepad API default won't
-# see the mknod'd /dev/input/jsN pads).
-export LUTRIS_GAMEPAD_UI_ENABLE_SDL_INPUT=1
+# see the mknod'd /dev/input/jsN pads). Env-overridable so the sway SIGTRAP
+# isolation test (WAYLAND-ARCHITECTURE.md §16.9 BUG 1) can A/B the SDL3 gamepad
+# path: DPAD_LUTRIS_SDL3=0 disables it (keyboard/mouse via Selkies Desktop mode
+# still navigates the UI). Default 1 = the validated gamepad-nav path (no
+# regression); the entrypoint forwards DPAD_LUTRIS_SDL3 through as_user (su).
+export LUTRIS_GAMEPAD_UI_ENABLE_SDL_INPUT="${DPAD_LUTRIS_SDL3:-1}"
 # We bake a pinned AppImage version — disable its self-update checker (avoid a
 # background download of a different version we haven't validated).
 export LUTRIS_GAMEPAD_UI_DISABLE_UPDATE_CHECKER=1
