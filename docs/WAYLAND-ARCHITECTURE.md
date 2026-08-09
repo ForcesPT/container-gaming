@@ -726,8 +726,12 @@ confirmed.
 ```bash
 cd dpadplay/container-gaming && git pull
 # This doc = the decision + the live-validation log (§13–§16). Current state as
-# of §16.7 (2026-08-09): the compositor pivot is LIVE-VALIDATED end-to-end via
-# the sway-as-client fallback — video + audio + interaction on an OVH L4.
+# of §16.9 (2026-08-09, end of session): the compositor pivot is LIVE-VALIDATED
+# end-to-end via the sway-as-client fallback (video + audio + interaction on
+# an OVH L4); N-on-N 2:1 + 3:1 validated (§16.8); the Lutris Electron shell
+# streams VIDEO on the prod tag (§16.9) BUT a stable Lutris session is BLOCKED
+# by the sway SIGTRAP (BUG 1, §16.9). The test VM (79.137.11.29) was torn down
+# at session end — re-provision via §12 to resume.
 #
 # DONE + validated:
 #  - §8 step 1 probe: DPAD_LUTRIS_DISABLE_GPU=1 did NOT fix §17.3 → pivot
@@ -753,11 +757,11 @@ cd dpadplay/container-gaming && git pull
 #   1. ✅ DONE 2026-08-09 (§18) — Lutris shell under sway (§8 step 3): renders +
 #      captures + clickable + gamepad-navigable (libSDL3). The §17.3 blocker is
 #      retired for the real Electron shell.
-#   2. ✅ DE-RISKED 2026-08-09 (§18) — store-launcher path: a Windows app
-#      (winecfg) via GE-Proton11-3 under sway's Xwayland renders + captures +
-#      interacts → Battle.net has no architectural unknown left. The FULL store
-#      validation (Battle.net install + login + a game, OR Epic/GOG via Lutris
-#      sources) is the remaining execution (needs store creds + a download).
+#   2. store-launcher path — DE-RISKED 2026-08-09 (§18, winecfg under sway's
+#      Xwayland) + PROBED 2026-08-09 (§16.9): the Lutris Electron shell streams
+#      VIDEO on the prod tag (§17.3 retired for the real Electron shell). A
+#      stable Lutris session is BLOCKED by the sway SIGTRAP (BUG 1, §16.9). See
+#      the STORE-VALIDATION BLOCKER note below for the cheap next test.
 #   3. ✅ DONE 2026-08-09 (§18) — gamepad input under sway (§5.4 phase A): the
 #      6-layer interposer is compositor-agnostic → the user navigated the Lutris
 #      UI with a real controller (SDL3 saw the pads). inputtino migration (§8
@@ -777,9 +781,22 @@ cd dpadplay/container-gaming && git pull
 #      a parallel-run on all 5 regions (§8 step 5). Keep gamescope-headless as
 #      a fallback env. Vendor gst-wayland-display (§8 step 7).
 #
+# STORE-VALIDATION BLOCKER (§16.9) — the cheap next test: relaunch the Lutris
+# shell with the SDL3 gamepad path OFF (LUTRIS_GAMEPAD_UI_ENABLE_SDL_INPUT=0 —
+# override the lutris-shell wrapper via DPAD_LUTRIS_SHELL_ARGS or a wrapper edit)
+# to see if the SDL3 gamepad path is the sway-SIGTRAP trigger. If sway then stays
+# up past 33s → a targeted fix exists (avoid the SDL3 seat-device add/remove);
+# if it still crashes → BUG 1 is deeper (a wlroots seat-teardown assert) → needs
+# a sway/wlroots version bump or a config to not add the compositor's unused
+# wayland input devices. Also fix BUG 3 (entrypoint chown ~/.cache/lutris, the
+# §4 .local-class gotcha) + bake legendary/gogdl (the Epic/GOD image-bake gap)
+# before the full store validation. gamescope-wayland is NOT a fallback (BUG 2,
+# §16.3 drops for Electron too).
+#
 # Reproducible test: §12 (provision an OVH L4 via createOvhAdapter) + §16.7
 # (DPAD_COMPOSITOR=wayland-display DPAD_WAYLAND_CLIENT=sway, browser as the
 # FIRST peer — do NOT run selkies-sdp-probe.py first, it pollutes self.peers).
+# The 2026-08-09 session's VM (79.137.11.29) was torn down at session end.
 ```
 
 ## 12. Reproducible test-VM provisioning (OVH API, no website)
