@@ -37,9 +37,9 @@
 > - **Still open (the §8 phasing tail):** Lutris shell + store launchers under
 >   sway, N-on-N on the sway path, the `--device /dev/dri` CDI-perm fix for prod
 >   multi-GPU hosts (§14), selkies audio-peer reconnect robustness (§16.7), + the
->   1080p/1440p + dynamic-resize compositor-mode fix (§17.3 — a plugin-source
->   change; the wayland-display path is 720p-capped until it lands), then the
->   default flip. **Mouse/keyboard under sway are now RESOLVED** (§17.2, the lazy
+>   1080p/1440p + dynamic-resize compositor-mode fix (§17.3 — **DONE 2026-08-09
+>   §18.6**: a sway `output * mode --custom` config line, NOT a plugin-source
+>   change; default bumped to 1080p), then the default flip. **Mouse/keyboard under sway are now RESOLVED** (§17.2, the lazy
 >   `DPAD_INPUT_DISPLAY` open) + gamepad already worked. The spec sections
 >   §2.2/§4/§5.2/§5.3/§5.6/§13.3/§13.9/§13.12 carry `⚠️ SUPERSEDED` markers where
 >   the live results changed the design — trust those over the original prose.
@@ -1897,28 +1897,20 @@ the compositor's native 1280×720 mode → no letterbox. The gamescope-headless
 path is unaffected (still `GS_W/GS_H` = 1920/1080). **✅ VALIDATED LIVE
 2026-08-09:** the black bars are gone; the stream is a clean 1280×720.
 
-**The real fix (backlog — a plugin-source change, not a live hotfix):** make
-the `gst-wayland-display` compositor set its `wl_output` mode from the
-negotiated caps (or expose a size property), so the output can be 1920×1080 /
-2560×1440 / arbitrary. Then:
-- Set `DPAD_WD_WIDTH/HEIGHT` (or the caps) to the target res (1080p/1440p).
-- Turn on selkies `--enable_resize=true` (currently `false`) so the browser
-  reports its window size + the server resizes the stream to match the client
-  (the "the host/VM catches the client resolution" UX — the user's 1440p client
-  would drive a 1440p stream).
-- This needs a rebuild of the `wayland-display-builder` stage (a Rust source
-  change to the Smithay compositor's output creation) + an image rebuild/push.
-- The gamescope-headless path already does 1080p (its compositor output is set
-  via `gamescope -W -H`); the wayland-display path's ceiling is 720p until this
-  lands.
+**✅ RESOLVED 2026-08-09 (§18.6) — the real fix is a sway config line, NOT a plugin-source change.** The §17.3 root-cause diagnosis above was partly wrong: the compositor was NOT capping at 720p. `wayland-info` on an isolated `gst-launch waylanddisplaysrc ! video/x-raw,format=RGBx,width=1920,height=1080` compositor confirmed the `wl_output` IS 1080p (`logical_width: 1920, logical_height: 1080`), + the `e657806` resolution-propagation fix is already in our pinned ref `b15285a2`. The bug is **sway's nested Wayland backend** (`WLR_BACKENDS=wayland`): it ignores the compositor's `wl_output.mode` (`swaymsg` shows `modes: []` + `current_mode` defaulting to 1280×720) and renders at 720p, which the compositor centers on the 1080p capture caps → black bars.
+
+**The fix (commit `fefe3f4`):** a one-line sway config — `output * mode --custom ${DPAD_WD_WIDTH:-1920}x${DPAD_WD_HEIGHT:-1080}` — forces sway's output to the desired resolution (sway accepts it: `swaymsg 'output WL-1 mode --custom 1920x1080'` → success + rect 1920×1080). The compositor's caps (DPAD_WD_WIDTH/HEIGHT via the selkies capsfilter) and the sway output mode now BOTH derive from DPAD_WD_WIDTH/HEIGHT → always match → no bars at any resolution. The DPAD_WD_WIDTH/HEIGHT default is bumped 1280×720 → 1920×1080 (the 720p interim was only because 1080p letterboxed; now the sway side adopts the mode). This also **enables the future user-facing resolution dropdown**: the control plane / web sets DPAD_WD_WIDTH/HEIGHT; the entrypoint + sway follow.
+
+**Still a follow-up (non-blocking):** dynamic resize — turn on selkies `--enable_resize=true` so the browser's window size drives the stream resolution at runtime (the "host catches the client resolution" UX). That needs the compositor's wl_output mode to follow the re-negotiated caps + the sway `output * mode` to re-apply; a later enhancement on top of the fixed-resolution path.
 
 ### 17.4 The live result + the resume
 
 **Net (2026-08-09, prod tag):** video + audio + gamepad + **mouse + keyboard**
 all work end-to-end on the freshly-rebuilt `:dpad-SteamOS` via the sway-as-client
 wayland-display path — no shortcut build. The pivot is shippable; the remaining
-gaps are (a) the 1080p/1440p + dynamic-resize compositor-mode fix (§17.3, a
-plugin-source change) + (b) the §8 phasing tail (Lutris shell + store launchers
+gaps are (a) ~~the 1080p/1440p + dynamic-resize compositor-mode fix~~
+   (**DONE §18.6** — a sway config line, default 1080p) + (b) the §8 phasing tail
+   (Lutris shell + store launchers
 under sway, N-on-N on sway, the `--device /dev/dri` CDI-perm fix for multi-GPU
 hosts, selkies audio-peer reconnect, then the default flip).
 
@@ -2027,10 +2019,12 @@ picker + the store-launcher rendering path.
 2. **N-on-N on the sway path** (§16.5) — 2 sway compositors on 1 L4 (raw
    render-node time-slice; MPS optional for loaded 3:1). Confirms the oversub
    economics hold on the new compositor.
-3. **1080p/1440p compositor-mode fix** (§17.3 real fix) — the 720p interim cap
-   is a quality regression vs gamescope-headless's 1080p. Needs a `gst-wayland-
-   display` plugin-source change (`wl_output` mode from negotiated caps) + a
-   rebuild.
+3. **✅ DONE 2026-08-09 (§18.6)** — 1080p/1440p fix: a one-line sway config
+   (`output * mode --custom WxH`), NOT a plugin-source change. sway's nested
+   Wayland backend ignored the compositor's `wl_output.mode` (defaulted to
+   720p); forcing the sway output mode matches the compositor caps → no bars.
+   Default bumped to 1920×1080. Dynamic resize (`--enable_resize=true`) is a
+   non-blocking follow-up.
 4. **`--device /dev/dri` CDI-perm fix** for prod multi-GPU hosts (§14) — the
    spike mounts ALL GPUs' `/dev/dri`; prod needs a scoped render-node mount.
 5. **selkies audio-peer reconnect robustness** (§16.7) — stale uid in
@@ -2055,8 +2049,9 @@ cd dpadplay/container-gaming && git pull
 #      game) OR Epic/GOG (Legendary/gogdl, lighter, no Windows launcher).
 #      Needs store creds + a download. The path is de-risked (§18.3).
 #   B. N-on-N on the sway path (2 sway compositors on the 1 L4; MPS optional).
-#   C. 1080p/1440p compositor-mode fix (a gst-wayland-display plugin-source
-#      change + rebuild) — the 720p interim is a quality regression.
+#   C. ✅ DONE (§18.6) — the 1080p fix is a sway `output * mode --custom` config
+#      line (default 1920x1080), NOT a plugin-source change. Dynamic resize
+#      (--enable_resize=true) is a non-blocking follow-up.
 #   Then: --device /dev/dri CDI-perm fix (§14), selkies audio-peer reconnect
 #   (§16.7), CUDAMemory zero-copy (§13.3), flip the default + vendor (§8 step 5/7),
 #   inputtino migration (§8 step 6, last).
@@ -2065,4 +2060,74 @@ cd dpadplay/container-gaming && git pull
 # OVH L4) + vm-bootstrap.sh install + relaunch-probe.sh with DPAD_STORE_SHELL=lutris
 # (the probe script's SHELL=lutris, or edit the docker run) → browser as the
 # first peer at http://$IP:16100 → Lutris UI + mouse/keyboard + gamepad.
+```
+## 18.6 Resolution fix — sway `output * mode --custom` (LIVE-VALIDATED 2026-08-09)
+
+> **Retires the §17.3 letterbox with a one-line sway config — NOT the plugin-source
+> change the §17.3 backlog speculated.** The §17.3 diagnosis blamed the compositor;
+> the real bug is sway's nested Wayland backend ignoring the compositor's
+> `wl_output.mode`. Validated live on the §17 OVH L4 (default 1080p → no bars).
+
+### 18.6.1 The diagnosis (the compositor is NOT the bug)
+Three checks on the live `wd-probe` container (DPAD_WD_WIDTH=1920 DPAD_WD_HEIGHT=1080):
+1. **The caps ARE 1080p** — the selkies patch's capsfilter is 1920×1080 RGBx
+   (DPAD_STREAM_WIDTH/HEIGHT from DPAD_WD_WIDTH/HEIGHT); the waylanddisplaysrc
+   `set_caps` receives 1080p → `apply_video_info(1080p)`. Confirmed via
+   `GST_DEBUG=waylanddisplaysrc:6` + `RUST_LOG=waylanddisplaycore=debug`:
+   `Requested video format: RGBx` + `Handling allocation query video/x-raw,
+   format=RGBx, width=1920, height=1080, framerate=60/1`.
+2. **The compositor's wl_output IS 1080p** — install `wayland-utils` + run an
+   isolated `gst-launch-1.0 waylanddisplaysrc ! video/x-raw,format=RGBx,
+   width=1920,height=1080,framerate=60/1 ! fakesink` (no selkies) → `wayland-info`
+   on its socket reports `logical_width: 1920, logical_height: 1080`. The
+   `e657806` "propagate runtime resolution changes" fix is already in our pinned
+   ref `b15285a2` (`apply_video_info` runs `change_current_state` on every
+   VideoInfo; `output_already_running` only guards `map_output`).
+3. **But sway sees 720p** — launch sway on that same 1080p compositor → `swaymsg
+   -t get_outputs` shows `"modes": []` + `current_mode: {width:1280,height:720}`
+   + `rect: 1280x720`. sway's nested Wayland backend (`WLR_BACKENDS=wayland`)
+   ignores the compositor's `wl_output.mode` (its wlr_wl_output exposes no modes)
+   and defaults to 720p → the compositor centers the 720p sway surface on its
+   1080p capture caps → black bars.
+
+### 18.6.2 The fix (commit `fefe3f4`)
+`swaymsg 'output WL-1 mode --custom 1920x1080'` → `success` + `rect: 1920x1080`.
+So the entrypoint's sway config (the `start_wayland_display_session` heredoc,
+`/tmp/dpad-sway.config`) now emits `output * mode --custom
+${DPAD_WD_WIDTH:-1920}x${DPAD_WD_HEIGHT:-1080}` before the `exec ${SHELL_APP}`.
+Both the compositor's caps (the selkies capsfilter, DPAD_STREAM_WIDTH/HEIGHT)
+and the sway output mode now derive from DPAD_WD_WIDTH/HEIGHT → always match →
+no bars at any resolution. The DPAD_WD_WIDTH/HEIGHT default is bumped 1280×720
+→ 1920×1080 (the §17.3 720p interim existed only because 1080p letterboxed;
+now that sway adopts the mode, 1080p is the correct default, matching
+`gamescope --backend headless -W 1920 -H 1080`).
+
+### 18.6.3 ✅ LIVE-VALIDATED
+`DPAD_COMPOSITOR=wayland-display DPAD_WAYLAND_CLIENT=sway` + the default 1080p
+(no DPAD_WD_WIDTH) → Steam Big Picture fills the frame, **no black bars**;
+`swaymsg` `rect: 1920x1080`, `current_mode: {width:1920,height:1080}`; `xrandr
+WL-1 connected 1920x1080+0+0, 1920x1080 59.96*+`. Resolution is now
+controllable via DPAD_WD_WIDTH/HEIGHT (the lever for the future user-facing
+resolution dropdown — the control plane / web sets it; the entrypoint + sway
+follow).
+
+### 18.6.4 Follow-up (non-blocking)
+Dynamic resize: turn on selkies `--enable_resize=true` so the browser's window
+size drives the stream resolution at runtime (the "host catches the client
+resolution" UX). That needs the compositor's wl_output mode to follow the
+re-negotiated caps + the sway `output * mode` to re-apply on the fly. A later
+enhancement on top of this fixed-resolution path. The `gst-wayland-display`
+plugin-source change the §17.3 backlog speculated is NOT needed.
+
+### 18.6.5 Reproduce
+```bash
+# On a warm wayland-display VM (§12), confirm the compositor emits the caps' res:
+docker exec -u 0 wd-probe bash -lc 'apt-get install -y -qq wayland-utils >/dev/null;
+  su -s /bin/bash dpad -c "export XDG_RUNTIME_DIR=/run/user/1001 GST_PLUGIN_PATH=/opt/gstreamer/lib/x86_64-linux-gnu/gstreamer-1.0;
+  . /opt/gstreamer/gst-env; nohup gst-launch-1.0 waylanddisplaysrc ! video/x-raw,format=RGBx,width=1920,height=1080,framerate=60/1 ! fakesink sync=false >/tmp/g.log 2>&1 &"; sleep 3;
+  su -s /bin/bash dpad -c "WAYLAND_DISPLAY=\$(ls -t /run/user/1001/wayland-* | grep -v lock | head -1 | xargs basename) XDG_RUNTIME_DIR=/run/user/1001 timeout 4 wayland-info" | grep -E "logical_width|logical_height"'
+# → logical_width: 1920, logical_height: 1080  (compositor follows the caps)
+# Then confirm sway ignores it (the bug) + the fix:
+# swaymsg -t get_outputs  → modes: [], current_mode 1280x720  (the bug)
+# swaymsg -t command "output * mode --custom 1920x1080"  → success; rect 1920x1080  (the fix)
 ```
