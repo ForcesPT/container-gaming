@@ -128,6 +128,9 @@ function resolveStores() {
   }));
 }
 
+let mainWindow = null;
+let quitting = false;
+
 function createWindow() {
   const win = new BrowserWindow({
     fullscreen: true,
@@ -149,15 +152,18 @@ function createWindow() {
   // pointer lock upstream). F12 devtools disabled in kiosk.
   if (process.env.DPAD_LAUNCHER_DEV) win.webContents.openDevTools({ mode: 'detach' });
 
-  // Re-assert fullscreen when the window regains focus. When a launched store
-  // client (Steam) opens fullscreen it takes the output + sway demotes the
-  // launcher; when the store quits + sway refocuses the launcher, sway does
-  // NOT restore its fullscreen (the for_window rule only fires on map), so the
-  // launcher comes back windowed. Re-send the fullscreen hint on focus/restore.
-  const refull = () => { try { win.setFullScreen(true); } catch (_) {} };
-  win.on('focus', refull);
-  win.on('restore', refull);
+  // The launcher must never die. If its window is closed (e.g. a launched
+  // store client's XWayland teardown destabilizes it, or the store-exit path
+  // below destroys it to re-fullscreen) recreate it so sway's for_window rule
+  // re-fullscreens the new window on map. (setFullScreen() on the nested
+  // sway/wayland-display compositor crashes the window, so destroy+recreate is
+  // the robust path.) `quitting` gates the intentional Esc/B quit.
+  win.on('closed', () => {
+    mainWindow = null;
+    if (!quitting) createWindow();
+  });
 
+  mainWindow = win;
   return win;
 }
 
@@ -179,6 +185,17 @@ ipcMain.handle('launch-store', (event, storeId) => {
       env: { ...process.env },
     });
     child.on('error', (e) => log(`launch-store ${storeId} spawn error: ${e.message}`));
+    // When the store client exits, force the launcher back to fullscreen.
+    // sway demotes the launcher's fullscreen while the store is up + does NOT
+    // restore it on refocus; setFullScreen(true) alone is a no-op if Electron
+    // still thinks it's fullscreen, so toggle off->on to re-send the hint.
+    child.on('exit', (code, sig) => {
+      log(`launch-store ${storeId} exited (code=${code} sig=${sig}) -- recreate window`);
+      // Destroy + recreate the launcher window so sway re-fullscreens the new
+      // window on map. setFullScreen on the nested compositor crashes; destroy
+      // also recovers if the store's XWayland teardown already destabilized it.
+      if (mainWindow) { try { mainWindow.destroy(); } catch (_) {} } else createWindow();
+    });
     child.unref();
     return { ok: true, pid: child.pid };
   } catch (e) {
@@ -199,7 +216,7 @@ ipcMain.handle('poll-gamepads', () => {
 // Quit (e.g. the user hits a "Exit" entry). The entrypoint health loop will
 // relaunch the shell on the next compositor socket — but normally the shell
 // stays for the session; quitting is only for dev.
-ipcMain.handle('quit', () => { app.quit(); });
+ipcMain.handle('quit', () => { quitting = true; app.quit(); });
 
 app.whenReady().then(() => {
   log(`dpad-launcher ready. HOME=${USER_HOME} DISPLAY=${process.env.DISPLAY}`);
@@ -208,6 +225,8 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  // No macOS here; just quit. The health loop relaunches on the next session.
-  app.quit();
+  // The launcher is the shell — never quit on its own; recreate the window (a
+  // 'closed' handler usually already did, this covers the race). Only the
+  // intentional Esc/B quit (the 'quit' IPC, which sets `quitting`) exits.
+  if (!quitting) createWindow();
 });
