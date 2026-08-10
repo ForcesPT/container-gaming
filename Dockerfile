@@ -895,6 +895,46 @@ RUN set -e; \
     && ln -sf /usr/games/lutris /usr/bin/lutris \
     && command -v lutris  # sanity: the Lutris CLI is on PATH (deb ships it in /usr/games, symlink to /usr/bin — same as gamescope)
 
+#    (e) umu-launcher — the Steam-Linux-Runtime container wrapper for non-Steam
+#        Windows games (STORES-PLAN §10 piece 1c). Replaces raw `wine` in
+#        battlenet-launch so the 32-bit Blizzard Update Agent (Agent.exe) runs
+#        under Valve's tested wow64 (inside the Steam Linux Runtime container)
+#        instead of Wine 11's experimental new wow64 — the documented-fragile
+#        manual-wine wall that stalled the Battle.net install (PROJECT_STATE §18).
+#        umu-run wraps GE-Proton11-3 (the white-screen fix + the NVIDIA compat
+#        libs) in the SLR + applies store/game protonfixes (STORE=battlenet).
+#        The deb ships only the umu-run Python launcher + the umu_delta Rust
+#        ext (~3 MB, cpython-3.12 — matches Noble's Python 3.12); the ~1–2 GB
+#        Steam Linux Runtime + pressure-vessel download to
+#        $HOME/.local/share/umu on the FIRST umu-run (one-time per VM, first-
+#        run latency; the VM has network). Deps apt-resolved: python3-xlib,
+#        apparmor-profiles (ships the bwrap-userns-restrict extra profile the
+#        deb's /etc/apparmor.d/bwrap-userns-restrict-umu symlink points at),
+#        libgl1-mesa-dri:i386 + libglx-mesa0:i386 (32-bit GL for the SLR's
+#        matched 32-bit libs — i386 is already enabled in the base stage for
+#        wine32), libzstd1. The AppArmor profile is moot in our session
+#        container (it runs --security-opt apparmor=unconfined + seccomp=
+#        unconfined + --cap-add SYS_ADMIN, the bwrap-nest flag set,
+#        IMAGE-RUNBOOK; + the host sysctls kernel.unprivileged_userns_clone=1
+#        + kernel.apparmor_restrict_unprivileged_userns=0 via vm-bootstrap).
+#        If pressure-vessel hits "Can't mount proc on /newroot/proc" at runtime,
+#        add --security-opt systempaths=unconfined to the docker run (the
+#        fourth bwrap-nest flag) — a runtime-validation item.
+ARG UMU_VERSION=1.4.4
+RUN set -e; \
+    apt-get update && apt-get install -y --no-install-recommends \
+        python3-xlib apparmor-profiles libzstd1 \
+        libgl1-mesa-dri:i386 libglx-mesa0:i386 \
+    && rm -rf /var/lib/apt/lists/* \
+    && cd /tmp && curl -fsSL -o /tmp/umu.deb \
+      "https://github.com/Open-Wine-Components/umu-launcher/releases/download/${UMU_VERSION}/python3-umu-launcher_${UMU_VERSION}-1_amd64_ubuntu-noble.deb" \
+    && apt-get update && ( apt-get install -y --no-install-recommends /tmp/umu.deb \
+                           || ( apt-get install -f -y && dpkg -i /tmp/umu.deb ) ) \
+    && rm -f /tmp/umu.deb && rm -rf /var/lib/apt/lists/* \
+    && command -v umu-run \
+    && test -s /usr/bin/umu-run \
+    && python3 -c 'import umu.umu_consts'   # sanity: the launcher imports (do NOT run umu-run — it fetches the ~1-2 GB SLR on first exec)
+
 EXPOSE 16100/tcp
 # 3478 (coturn TURN) opt-in via -p 3478:3478 at launch. No 8080/47989/47990/41641.
 USER root

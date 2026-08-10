@@ -1,38 +1,61 @@
 #!/bin/bash
-# battlenet-launch — launch the Battle.net Windows client under GE-Proton11-3/wine
-# in the headless cloud-gaming session. The dpad-launcher's "Battle.net" store
-# card (launcher/src/main.js) spawns this; it runs IN THE SAME sway/XWayland
+# battlenet-launch — launch the Battle.net Windows client under GE-Proton11-3
+# via umu-launcher (the Steam Linux Runtime container) in the headless
+# cloud-gaming session. The dpad-launcher's "Battle.net" store card
+# (launcher/src/main.js) spawns this; it runs IN THE SAME sway/XWayland
 # session (inheriting DISPLAY=:0, the NVIDIA EGL vendor, PULSE_SERVER, the
 # gamepad interposer env) so the Battle.net window is captured by the
 # wayland-display compositor + the user interacts via Selkies.
 #
-# First launch: downloads + runs the Blizzard installer (Battle.net-Setup.exe)
-# into the session's Wine prefix — the installer window appears in the stream
-# + the user clicks through any EULA; it downloads + installs Battle.net.exe.
-# Every later launch reuses the installed launcher + the stored login token.
+# Why umu-launcher (not raw wine): the 2026-08-10 live test (PROJECT_STATE §18)
+# got the Blizzard installer + the 32-bit Blizzard Update Agent (Agent.exe,
+# PE32 Intel 80386) to download fully under raw GE-Proton wine, but the Agent
+# would NOT launch ("BLZBNTBTS0000005C / BLZBNTAGT00000002, Failed to
+# communicate with Agent after launch, Agent.exe error=2"). Agent.exe is
+# 32-bit + Wine 11's "experimental new wow64 mode" struggles with its process
+# creation/IPC — the documented-fragile manual-wine wall. umu-run wraps
+# GE-Proton in Valve's Steam Linux Runtime container (matched 32+64-bit libs +
+# Valve's tested wow64 + protonfixes) — the 2026 consensus reliable path
+# (sudowheel: "Method 1: Via Steam [umu] is the most reliable approach"; the
+# manual-wine path is the fragile one). The image already runs Steam/Proton,
+# so pressure-vessel works in the container. STORES-PLAN §10 piece 1c.
+#
+# Container nesting: umu uses pressure-vessel → bwrap, which needs
+# unshare(CLONE_NEWUSER) + a few syscalls. Our session container already runs
+# with the bwrap-nest flag set (IMAGE-RUNBOOK): --cap-add SYS_ADMIN +
+# --security-opt seccomp=unconfined + --security-opt apparmor=unconfined, +
+# the host sysctls kernel.unprivileged_userns_clone=1 +
+# kernel.apparmor_restrict_unprivileged_userns=0 (vm-bootstrap.sh). If
+# pressure-vessel hits "Can't mount proc on /newroot/proc", add
+# --security-opt systempaths=unconfined to the docker run (the fourth bwrap-
+# nest flag) — a runtime-validation item, not a wrapper concern.
+#
+# First launch: umu-run winetricks initializes the prefix (corefonts/win10/
+# vcrun2022/d3dcompiler_47) inside the SLR, then downloads + runs the Blizzard
+# installer (Battle.net-Setup.exe) — the installer window appears in the
+# stream + the user clicks through any EULA; it downloads + installs
+# Battle.net.exe. Every later launch reuses the installed launcher + the
+# stored login token.
 #
 # The prefix lives at ~/Games/battlenet (symlinked to <vol>/games/battlenet by
 # the entrypoint's setup_stores when a persistent volume is attached), so the
 # Battle.net login token + installed games persist across End+relaunch.
 # Ephemeral sessions (no volume) install onto the (capped, 200 GB) rootfs.
 #
-# Why GE-Proton11-3 (not system wine): the Battle.net white-screen fix is in
-# (GE-Proton11-2 changelog: "fixed Wine Wayland white-screen behavior" +
-# "--in-process-gpu handling for Wine Wayland launchers") + it bundles the
-# NVIDIA compat libs (NVAPI/CUDA/NVENC). All Windows launchers run via Xwayland
-# (PROTON_ENABLE_WAYLAND unset) per STORES-PLAN §5. The §18.3 winecfg probe
-# validated this exact path (…/GE-Proton11-3/files/bin/wine + DISPLAY=:0 +
-# WINEPREFIX + sway's Xwayland) — a Windows GUI app renders + is captured +
-# interactive under the sway/wayland-display compositor.
+# The ~1–2 GB Steam Linux Runtime + pressure-vessel download to
+# $HOME/.local/share/umu on the FIRST umu-run (one-time per VM, first-run
+# latency; the VM has network). Subsequent launches reuse it.
 #
 # Env inherited from the launcher (the entrypoint's shared_env via launcher-shell):
 #   DISPLAY=:0  WAYLAND_DISPLAY  XDG_RUNTIME_DIR  PULSE_SERVER  HOME  USER
-# We set WINEPREFIX ourselves. Logs: /tmp/battlenet-launch.log.
+# We set WINEPREFIX + PROTONPATH + STORE + GAMEID ourselves. Logs:
+# /tmp/battlenet-launch.log (+ UMU_LOG=1 / PROTON_LOG=1 for verbose).
 set -u
 
 LOG=/tmp/battlenet-launch.log
 echo "[battlenet-launch] $(date -Is) start (HOME=${HOME:-} DISPLAY=${DISPLAY:-})" >> "$LOG"
 
+# --- umu-run / GE-Proton / prefix paths --------------------------------------
 # The Wine prefix. ~/Games/battlenet (-> <vol>/games/battlenet on a persistent
 # volume; the capped rootfs on ephemeral). An explicit WINEPREFIX override is
 # respected (manual tests / probes).
@@ -40,28 +63,54 @@ PREFIX="${WINEPREFIX:-${HOME}/Games/battlenet}"
 mkdir -p "$PREFIX" 2>/dev/null || true
 export WINEPREFIX="$PREFIX"
 
-# Pick the wine binary: GE-Proton11-3 (preferred — the white-screen fix) → system wine.
+# GE-Proton11-3 — the Battle.net white-screen fix is in (GE-Proton11-2
+# changelog: "Battle.net: fixed Wine Wayland white-screen behavior" +
+# "--in-process-gpu handling for Wine Wayland launchers") + it bundles the
+# NVIDIA compat libs (NVAPI/CUDA/NVENC/NVML) + umu.exe. All Windows launchers
+# run via Xwayland (PROTON_ENABLE_WAYLAND unset) per STORES-PLAN §5.
 GP_DIR="${HOME}/.steam/debian-installation/compatibilitytools.d/GE-Proton11-3"
-GP_WINE="${GP_DIR}/files/bin/wine"
-if [ -x "$GP_WINE" ]; then
-    WINE="$GP_WINE"
-elif command -v wine >/dev/null 2>&1; then
-    WINE="$(command -v wine)"
-else
-    echo "[battlenet-launch] FATAL: no wine found (GE-Proton11-3 at $GP_WINE nor system wine on PATH)" | tee -a "$LOG" >&2
+if [ ! -x "$GP_DIR/proton" ]; then
+    echo "[battlenet-launch] FATAL: GE-Proton11-3 not found at $GP_DIR (no proton binary)" | tee -a "$LOG" >&2
     exit 1
 fi
-export WINE
-export WINEDEBUG=-all        # cut the wine spam (the install is chatty otherwise)
-# 2026 Battle.net-on-GE-Proton must-haves (NixOS Wiki, WineHQ AppDB, GamingOnLinux
-# Feb 2026). WINE_SIMULATE_WRITECOPY fixes the CEF write-copy mapping that blanks
-# the installer/login UI (Proton's wine honors it). locationapi=d disables the
-# Windows Location API DLL that stalls the Blizzard Update Agent init → the
-# "BLZBNTBNA00000005" agent-sleep / install-stall class. Together the recommended
-# fix for the installer producing no Battle.net dir.
+export PROTONPATH="$GP_DIR"
+
+# umu-run env: STORE=battlenet (umu-database store id) + GAMEID (overridable;
+# umu-battlenet is the conventional id for the launcher — applies any
+# battlenet-store protonfix if present, else umu-default = no fix, which is
+# fine: the win is the SLR container's tested wow64, not a gamefix).
+export STORE="${STORE:-battlenet}"
+export GAMEID="${GAMEID:-umu-battlenet}"
+export PROTON_VERB="${PROTON_VERB:-waitforexitandrun}"
+
+# Locate umu-run (the deb installs /usr/bin/umu-run; allow a PATH override for
+# manual tests / a user-install at $HOME/.local/bin).
+UMU_RUN="${UMU_RUN:-umu-run}"
+if ! command -v "$UMU_RUN" >/dev/null 2>&1; then
+    echo "[battlenet-launch] FATAL: umu-run not found on PATH (install the umu-launcher deb)" | tee -a "$LOG" >&2
+    exit 1
+fi
+echo "[battlenet-launch] umu-run=$(command -v "$UMU_RUN") prefix=$PREFIX proton=$GP_DIR store=$STORE gameid=$GAMEID" >> "$LOG"
+
+# 2026 Battle.net-on-GE-Proton must-haves (NixOS Wiki, WineHQ AppDB,
+# GamingOnLinux Feb 2026). WINE_SIMULATE_WRITECOPY fixes the CEF write-copy
+# mapping that blanks the installer/login UI (Proton's wine honors it).
+# locationapi=d disables the Windows Location API DLL that stalls the Blizzard
+# Update Agent init → the "BLZBNTBNA00000005" agent-sleep / install-stall class.
 export WINE_SIMULATE_WRITECOPY=1
 export WINEDLLOVERRIDES="locationapi=d"
-echo "[battlenet-launch] wine=$WINE prefix=$PREFIX" >> "$LOG"
+# Quieter Proton/wine spam in the log (the install is chatty otherwise). Flip
+# to PROTON_LOG=1 for a verbose steam-<gameid>.log in $HOME when debugging.
+export WINEDEBUG="${WINEDEBUG:--all}"
+
+# Defensive: drop the session's gamepad-interposer LD_PRELOAD before entering
+# the SLR container — the interposer is a host-side hack for Steam/SDL pad
+# discovery; it has no business inside pressure-vessel (the .so path won't
+# resolve in the SLR's library stack, + a dangling LD_PRELOAD can warn/fail
+# bwrap). Wine games read /dev/input/jsN via their own input stack inside the
+# container. umu 1.4.1+ also unsets LD_PRELOAD in gamescope sessions; this
+# makes it explicit regardless of the umu version.
+unset LD_PRELOAD
 
 # Battle.net paths. Windows paths inside the prefix are backslash-quoted.
 # The Lutris install script (battlenet-standard) produces "Battle.net Launcher.exe"
@@ -88,29 +137,32 @@ bn_installed() { [ -f "$BN_INST" ] || [ -f "$BN_INST_ALT" ]; }
 
 # --- first-launch install (one-time per prefix) -------------------------------
 if ! bn_installed; then
-    echo "[battlenet-launch] first launch — preparing the Wine prefix, then downloading + installing Battle.net (the installer window will appear in the stream; ~5-10 min, one-time)" | tee -a "$LOG" >&2
+    echo "[battlenet-launch] first launch — initializing the Wine prefix under umu/SLR, then downloading + installing Battle.net (the installer window will appear in the stream; ~5-10 min, one-time)" | tee -a "$LOG" >&2
 
     # Pre-config the prefix BEFORE the installer (mirrors the Lutris battlenet-
-    # standard script): wineboot -> corefonts + Win10 -> Battle.net.config (disable
-    # HW accel/sound/streaming). Without this the installer's CEF/agent misinits
-    # → the "Object moved"/agent-sleep failure that produces no Battle.net dir.
-    echo "[battlenet-launch] initializing prefix (wineboot)" >> "$LOG"
-    "$WINE" wineboot --init >>"$LOG" 2>&1 || echo "[battlenet-launch] wineboot exited $?" >> "$LOG"
-    # corefonts: the installer's CEF UI needs MS fonts (best-effort — needs
-    # cabextract; if it fails, the install still proceeds, fonts are polish).
-    # win10: sets the Windows version to Win10 (the regedit Battle.net's server
-    # comms + SSL/DNS handling require; the sudowheel 2026 guide's networking fix).
-    # vcrun2022 + d3dcompiler_47: the Blizzard Update Agent (Agent.exe) needs the
-    # VC++ 2022 runtime + the D3D compiler — without them Agent.exe fails to
-    # launch with error=2 (ERROR_FILE_NOT_FOUND on a missing DLL) → the installer
-    # BLZBNTBTS0000005C / BLZBNTAGT00000002 "Failed to communicate with Agent"
-    # stall (the full Lutris battlenet-standard verb set, STORES-PLAN §7).
-    echo "[battlenet-launch] winetricks corefonts win10 vcrun2022 d3dcompiler_47" >> "$LOG"
-    winetricks -q corefonts win10 vcrun2022 d3dcompiler_47 >>"$LOG" 2>&1 || echo "[battlenet-launch] winetricks exited $? (best-effort)" >> "$LOG"
+    # standard script). Running winetricks through umu-run creates the prefix
+    # inside the Steam Linux Runtime container (Proton's wine + Valve's tested
+    # 32/64-bit libs) + applies the verbs in one step — the clean replacement
+    # for the old `wineboot --init` + system-`winetricks` pair.
+    #   corefonts       — the installer's CEF UI needs MS fonts
+    #   win10           — Battle.net's server comms + SSL/DNS handling require
+    #                     Win10 (the sudowheel 2026 guide's networking fix)
+    #   vcrun2022       — the Blizzard Update Agent (Agent.exe) needs the VC++
+    #                     2022 runtime
+    #   d3dcompiler_47  — the D3D compiler (without it Agent.exe fails to
+    #                     launch with error=2 → the installer
+    #                     BLZBNTBTS0000005C / BLZBNTAGT00000002 stall)
+    # Best-effort: a winetricks failure leaves the prefix for the installer to
+    # complete (fonts/verbs are polish; the SLR's matched libs are the real fix).
+    echo "[battlenet-launch] umu-run winetricks -q corefonts win10 vcrun2022 d3dcompiler_47" >> "$LOG"
+    "$UMU_RUN" winetricks -q corefonts win10 vcrun2022 d3dcompiler_47 >>"$LOG" 2>&1 \
+        || echo "[battlenet-launch] umu-run winetricks exited $? (best-effort — the SLR's matched libs are the real fix)" >> "$LOG"
+
     # Pre-write the Battle.net config: disable HardwareAcceleration + Sound +
     # Streaming (the launcher is Chromium/CEF — HW accel in a headless/XWayland
     # prefix misrenders; sound/streaming are unused server-side). This is the
-    # linchpin Lutris step for headless/Proton installs.
+    # linchpin Lutris step for headless/Proton installs. A plain file write —
+    # no wine needed (the installer/Battle.net reads it on first launch).
     bn_user="${USER:-dpad}"
     bn_cfg_dir="$PREFIX/drive_c/users/$bn_user/AppData/Roaming/Battle.net"
     mkdir -p "$bn_cfg_dir" 2>/dev/null || true
@@ -125,14 +177,17 @@ BNCFG
         echo "[battlenet-launch] FATAL: Battle.net-Setup download failed ($SETUP_URL)" | tee -a "$LOG" >&2
         exit 1
     fi
-    echo "[battlenet-launch] downloaded $(ls -l "$SETUP_EXE" 2>/dev/null | awk '{print $5}') bytes — running installer" >> "$LOG"
+    echo "[battlenet-launch] downloaded $(ls -l "$SETUP_EXE" 2>/dev/null | awk '{print $5}') bytes — running installer under umu/SLR" >> "$LOG"
 
-    # Run the Blizzard installer. It is a Chromium GUI: it opens a window on
-    # DISPLAY (:0, sway's Xwayland), downloads the Battle.net client, + installs
-    # it. The setup stub may hand off to a downloader + exit, or block until
-    # done — either way we then poll for the launcher to appear. Best-effort:
-    # a failed/half install leaves the prefix for inspection; re-launch retries.
-    "$WINE" "$SETUP_EXE" >>"$LOG" 2>&1 || echo "[battlenet-launch] installer exited $?" >>"$LOG"
+    # Run the Blizzard installer through umu-run (GE-Proton inside the SLR).
+    # The 32-bit Agent.exe now launches under Valve's tested wow64 → fixes the
+    # "Failed to communicate with Agent" stall. The installer is a Chromium
+    # GUI: it opens a window on DISPLAY (:0, sway's Xwayland), downloads the
+    # Battle.net client, + installs it. The setup stub may hand off to a
+    # downloader + exit, or block until done — either way we then poll for the
+    # launcher to appear. Best-effort: a failed/half install leaves the prefix
+    # for inspection; re-launch retries.
+    "$UMU_RUN" "$SETUP_EXE" >>"$LOG" 2>&1 || echo "[battlenet-launch] installer exited $?" >> "$LOG"
 
     # Wait (up to 15 min) for the install to produce the launcher.
     i=0
@@ -153,5 +208,5 @@ if [ -f "$BN_INST" ]; then EXE="$BN_EXE"; else EXE="$BN_EXE_ALT"; fi
 # Battle.net is single-instance: if the installer auto-launched it, this exec
 # just focuses the existing window + the second process exits; otherwise it
 # starts the launcher fresh. Either way the user lands on the Battle.net login.
-echo "[battlenet-launch] launching $EXE" >> "$LOG"
-exec "$WINE" "$EXE"
+echo "[battlenet-launch] launching $EXE under umu/SLR" >> "$LOG"
+exec "$UMU_RUN" "$EXE"
