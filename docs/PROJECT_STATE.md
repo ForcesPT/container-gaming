@@ -82,9 +82,19 @@
 > issue #156 + the Noble AppArmor userns restriction. One possible runtime extra:
 > if pressure-vessel hits `Can't mount proc on /newroot/proc`, add
 > `--security-opt systempaths=unconfined` to the `docker run` (the 4th bwrap-
-> nest flag). **Built + pushed to Docker Hub as `:dpad-SteamOS` (digest
-> `sha256:76e3cfaa22af…`) — a fresh `docker pull` gets the umu bake. NOT yet
-> live-validated** — needs an OVH L4 session (none ready). The deb's `postinst`
+> nest flag). **✅ LIVE-VALIDATED on an OVH Gravelines L4 (2026-08-10):**
+> umu + pressure-vessel + bwrap nested cleanly with the 4-flag set
+> (`--cap-add SYS_ADMIN` + `seccomp`/`apparmor`/`systempaths` unconfined — no
+> `Can't mount proc` error); `umu-run winetricks` initialized the prefix inside
+> the SLR; the Blizzard installer ran via `umu.exe`→GE-Proton + the 32-bit
+> **Agent.exe launched (no `error=2` / "Failed to communicate with Agent"** —
+> the raw-wine wall is gone); Battle.net installed + launched. **One follow-up
+> fix:** the CEF UI white-screens under Xwayland-in-SLR (the `CrGpuMain` GPU
+> present path is broken; the SLR's libnvidia-egl-wayland can't find
+> libwayland-server.so.0). Fixed by `--disable-gpu --in-process-gpu` on
+> Battle.net.exe (commit `85b6a85`, env-gated via `DPAD_BATTLENET_CEF_ARGS`) →
+> no CrGpuMain, the login UI renders solidly. **Image built + pushed (digest
+> `sha256:e5ad5baaa7ea…`, supersedes `76e3cfaa22af`).** The deb's `postinst`
 > warns `systemctl: command not found` (no systemd in the image) — harmless;
 > the AppArmor profile symlink is laid down by the deb's data.tar regardless.
 > After umu works → the build-time prefix pre-bake (STORES-PLAN §7 piece 2) for

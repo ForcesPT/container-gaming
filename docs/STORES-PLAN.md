@@ -759,10 +759,15 @@ Battle.net card as available; clicking it spawned `battlenet-launch`.
 > dri:i386 / libglx-mesa0:i386), `/usr/bin/umu-run` lands on PATH, `import
 > umu.umu_consts` works (cpython-3.12 = Noble's python3), + `umu-run -h` prints
 > help **without** fetching the ~1–2 GB SLR (so the build-time sanity check is
-> safe). The Dockerfile parses (`buildx --check`: no warnings). **Built +
-> pushed to Docker Hub as `:dpad-SteamOS` (digest `sha256:76e3cfaa22af…`) —
-> a fresh `docker pull` gets the umu bake. NOT yet live-validated** — needs an
-> OVH L4 session (none ready right now).
+> safe). The Dockerfile parses (`buildx --check`: no warnings). **✅ LIVE-VALIDATED on an OVH Gravelines L4 (2026-08-10) — built + pushed (digest
+> `sha256:e5ad5baaa7ea…`, supersedes `76e3cfaa22af`).** umu/pressure-vessel/bwrap
+> nested with the 4-flag set (SYS_ADMIN + seccomp/apparmor/systempaths
+> unconfined — no `Can't mount proc`); `umu-run winetricks` init'd the prefix
+> in the SLR; the 32-bit Agent.exe launched under Valve's tested wow64 (no
+> `error=2`); Battle.net installed + launched. One follow-up fix: the CEF UI
+> white-screens under Xwayland-in-SLR (CrGpuMain present path broken) → fixed
+> by `--disable-gpu --in-process-gpu` on Battle.net.exe (commit `85b6a85`,
+> env-gated `DPAD_BATTLENET_CEF_ARGS`); the login UI then renders solidly.
 
 What shipped (the design referenced above, now implemented):
 - **`scripts/battlenet-launch`** — `umu-run winetricks -q corefonts win10
