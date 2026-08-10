@@ -812,6 +812,18 @@ RUN chmod +x /opt/dpadcloud/launcher/dpad-launcher
 COPY scripts/launcher-shell /opt/dpadcloud/launcher-shell
 RUN sed -i 's/\r$//' /opt/dpadcloud/launcher-shell && chmod +x /opt/dpadcloud/launcher-shell
 
+#    (c2) battlenet-launch — the Battle.net store wrapper the dpad-launcher's
+#         "Battle.net" card spawns (launcher/src/main.js). Runs the Blizzard
+#         installer into a Wine prefix on first launch, then launches Battle.net.exe
+#         under GE-Proton11-3 (the white-screen fix). The prefix lives at
+#         ~/Games/battlenet (-> <vol>/games/battlenet via setup_stores). STORES-PLAN §7.
+#         On PATH at /usr/local/bin so the launcher's `which('battlenet-launch')`
+#         availability check resolves it (mirror the gamescope/lutris symlink pattern).
+COPY scripts/battlenet-launch /opt/dpadcloud/battlenet-launch
+RUN sed -i 's/\r$//' /opt/dpadcloud/battlenet-launch && chmod +x /opt/dpadcloud/battlenet-launch \
+    && ln -sf /opt/dpadcloud/battlenet-launch /usr/local/bin/battlenet-launch \
+    && test -x /usr/local/bin/battlenet-launch
+
 #    (d) libSDL3 for lutris-gamepad-ui's gamepad input (koffi FFI dlopen). SDL3
 #        is NOT in Noble repos; the oracular libsdl3-0 .deb churns the pinned
 #        GStreamer/PipeWire stack → built from source in the sdl3-builder stage

@@ -719,6 +719,48 @@ setup_user_volume() {
     echo "    Steam install root -> $target (on the volume; Storage shows the volume)"
 }
 
+setup_stores() {
+    # Per-store state (Wine prefixes for Battle.net/EA/Ubisoft; legendary/gogdl
+    # tokens for Epic/GOG) lives on the persistent volume under <vol>/games/<store>
+    # (STORES-PLAN §9), symlinked into ~/Games so each store's wrapper finds a
+    # fixed path (~/Games/battlenet, ~/Games/ea-app, ...). Ephemeral sessions
+    # (no volume) use ~/Games on the (capped, 200 GB) rootfs — the prefix won't
+    # persist, so the user re-installs + re-logs-in each session (the
+    # multi-store-picker value prop for ephemeral users).
+    #
+    # Gated on DPAD_STORES (comma list from the worker's /etc/environment)
+    # containing a store that uses ~/Games — v1: battlenet. (Steam uses the
+    # install-root-on-volume path in setup_user_volume, not ~/Games.)
+    local vol="${DPAD_VOLUME_MOUNT:-}"
+    local stores="${DPAD_STORES:-}"
+    [ -z "$stores" ] && return 0
+    case ",${stores}," in
+        *,battlenet,*) ;;
+        *) return 0 ;;
+    esac
+    local games_link="${USER_HOME}/Games"
+    if [ -n "$vol" ] && [ -d "$vol" ]; then
+        local vol_games="$vol/games"
+        mkdir -p "$vol_games" 2>/dev/null || true
+        chown -R "${USER_NAME}:${USER_NAME}" "$vol_games" 2>/dev/null || true
+        # Symlink ~/Games -> <vol>/games (idempotent). Non-destructive: only
+        # create/replace the link when ~/Games is absent or already a symlink;
+        # a pre-existing real ~/Games (rare on a fresh volume) is left in place
+        # so existing data isn't moved/lost — the wrapper uses it as-is.
+        if [ ! -e "$games_link" ]; then
+            ln -s "$vol_games" "$games_link"
+        elif [ -L "$games_link" ] && [ "$(readlink -f "$games_link" 2>/dev/null)" != "$(readlink -f "$vol_games" 2>/dev/null)" ]; then
+            rm -f "$games_link"; ln -s "$vol_games" "$games_link"
+        fi
+        chown -h "${USER_NAME}:${USER_NAME}" "$games_link" 2>/dev/null || true
+        echo "    ~/Games -> $vol_games (Battle.net prefix persists on the volume)"
+    else
+        mkdir -p "$games_link" 2>/dev/null || true
+        chown -R "${USER_NAME}:${USER_NAME}" "$games_link" 2>/dev/null || true
+        echo "    ~/Games on the rootfs (ephemeral; Battle.net prefix will NOT persist)"
+    fi
+}
+
 setup_gamepad_interposer() {
     # Sets up the gamepad interposer (classic or evdev) + the LD_PRELOAD assembly.
     # Sets globals: DPAD_PRELOAD, SDL_GP_ENV, SELKIES_INTERPOSER (exported),
@@ -855,6 +897,7 @@ start_wayland_display_session() {
 
     # --- shared session prep (mirrors start_gamescope_session) ---
     setup_user_volume
+    setup_stores
     bootstrap_steam_on_xvfb
 
     # PipeWire + wireplumber — the compositor doesn't need PipeWire for video, but
@@ -1137,6 +1180,7 @@ start_gamescope_session() {
     # volume so games + the login persist across sessions (V2-PLAN §5). No-op
     # when DPAD_VOLUME_MOUNT is unset (ephemeral/back-compat).
     setup_user_volume
+    setup_stores
 
     # Bootstrap the Steam full client on Xvfb BEFORE entering gamescope. Steam's
     # first-run GL updater UI can't create its font texture on gamescope headless

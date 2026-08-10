@@ -1,0 +1,98 @@
+#!/bin/bash
+# battlenet-launch — launch the Battle.net Windows client under GE-Proton11-3/wine
+# in the headless cloud-gaming session. The dpad-launcher's "Battle.net" store
+# card (launcher/src/main.js) spawns this; it runs IN THE SAME sway/XWayland
+# session (inheriting DISPLAY=:0, the NVIDIA EGL vendor, PULSE_SERVER, the
+# gamepad interposer env) so the Battle.net window is captured by the
+# wayland-display compositor + the user interacts via Selkies.
+#
+# First launch: downloads + runs the Blizzard installer (Battle.net-Setup.exe)
+# into the session's Wine prefix — the installer window appears in the stream
+# + the user clicks through any EULA; it downloads + installs Battle.net.exe.
+# Every later launch reuses the installed launcher + the stored login token.
+#
+# The prefix lives at ~/Games/battlenet (symlinked to <vol>/games/battlenet by
+# the entrypoint's setup_stores when a persistent volume is attached), so the
+# Battle.net login token + installed games persist across End+relaunch.
+# Ephemeral sessions (no volume) install onto the (capped, 200 GB) rootfs.
+#
+# Why GE-Proton11-3 (not system wine): the Battle.net white-screen fix is in
+# (GE-Proton11-2 changelog: "fixed Wine Wayland white-screen behavior" +
+# "--in-process-gpu handling for Wine Wayland launchers") + it bundles the
+# NVIDIA compat libs (NVAPI/CUDA/NVENC). All Windows launchers run via Xwayland
+# (PROTON_ENABLE_WAYLAND unset) per STORES-PLAN §5. The §18.3 winecfg probe
+# validated this exact path (…/GE-Proton11-3/files/bin/wine + DISPLAY=:0 +
+# WINEPREFIX + sway's Xwayland) — a Windows GUI app renders + is captured +
+# interactive under the sway/wayland-display compositor.
+#
+# Env inherited from the launcher (the entrypoint's shared_env via launcher-shell):
+#   DISPLAY=:0  WAYLAND_DISPLAY  XDG_RUNTIME_DIR  PULSE_SERVER  HOME  USER
+# We set WINEPREFIX ourselves. Logs: /tmp/battlenet-launch.log.
+set -u
+
+LOG=/tmp/battlenet-launch.log
+echo "[battlenet-launch] $(date -Is) start (HOME=${HOME:-} DISPLAY=${DISPLAY:-})" >> "$LOG"
+
+# The Wine prefix. ~/Games/battlenet (-> <vol>/games/battlenet on a persistent
+# volume; the capped rootfs on ephemeral). An explicit WINEPREFIX override is
+# respected (manual tests / probes).
+PREFIX="${WINEPREFIX:-${HOME}/Games/battlenet}"
+mkdir -p "$PREFIX" 2>/dev/null || true
+export WINEPREFIX="$PREFIX"
+
+# Pick the wine binary: GE-Proton11-3 (preferred — the white-screen fix) → system wine.
+GP_DIR="${HOME}/.steam/debian-installation/compatibilitytools.d/GE-Proton11-3"
+GP_WINE="${GP_DIR}/files/bin/wine"
+if [ -x "$GP_WINE" ]; then
+    WINE="$GP_WINE"
+elif command -v wine >/dev/null 2>&1; then
+    WINE="$(command -v wine)"
+else
+    echo "[battlenet-launch] FATAL: no wine found (GE-Proton11-3 at $GP_WINE nor system wine on PATH)" | tee -a "$LOG" >&2
+    exit 1
+fi
+export WINE
+export WINEDEBUG=-all        # cut the wine spam (the install is chatty otherwise)
+echo "[battlenet-launch] wine=$WINE prefix=$PREFIX" >> "$LOG"
+
+# Battle.net paths. Windows paths inside the prefix are backslash-quoted.
+BN_INST="$PREFIX/drive_c/Program Files (x86)/Battle.net/Battle.net.exe"
+BN_EXE='C:\Program Files (x86)\Battle.net\Battle.net.exe'
+SETUP_URL='https://www.battle.net/download/getInstaller?installer=Battle.net-Setup.exe'
+SETUP_DIR="$PREFIX/drive_c/battlenet-setup"
+SETUP_EXE="$SETUP_DIR/Battle.net-Setup.exe"
+
+# --- first-launch install (one-time per prefix) -------------------------------
+if [ ! -f "$BN_INST" ]; then
+    echo "[battlenet-launch] first launch — downloading + installing Battle.net (the installer window will appear in the stream; ~5-10 min, one-time)" | tee -a "$LOG" >&2
+    mkdir -p "$SETUP_DIR" 2>/dev/null || true
+    if ! curl -fsSL -o "$SETUP_EXE" "$SETUP_URL" >>"$LOG" 2>&1; then
+        echo "[battlenet-launch] FATAL: Battle.net-Setup download failed ($SETUP_URL)" | tee -a "$LOG" >&2
+        exit 1
+    fi
+
+    # Run the Blizzard installer. It is a Chromium GUI: it opens a window on
+    # DISPLAY (:0, sway's Xwayland), downloads the Battle.net client, + installs
+    # it. The setup stub may hand off to a downloader + exit, or block until
+    # done — either way we then poll for Battle.net.exe to appear. Best-effort:
+    # a failed/half install leaves the prefix for inspection; re-launch retries.
+    "$WINE" "$SETUP_EXE" >>"$LOG" 2>&1 || echo "[battlenet-launch] installer exited $?" >>"$LOG"
+
+    # Wait (up to 15 min) for the install to produce Battle.net.exe.
+    i=0
+    while [ $i -lt 90 ] && [ ! -f "$BN_INST" ]; do
+        sleep 10; i=$((i+1))
+    done
+    rm -rf "$SETUP_DIR" 2>/dev/null || true
+fi
+
+if [ ! -f "$BN_INST" ]; then
+    echo "[battlenet-launch] FATAL: Battle.net.exe not found after install ($BN_INST)" | tee -a "$LOG" >&2
+    exit 1
+fi
+
+# Battle.net is single-instance: if the installer auto-launched it, this exec
+# just focuses the existing window + the second process exits; otherwise it
+# starts the launcher fresh. Either way the user lands on the Battle.net login.
+echo "[battlenet-launch] launching Battle.net.exe" >> "$LOG"
+exec "$WINE" "$BN_EXE"

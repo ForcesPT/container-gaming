@@ -56,9 +56,14 @@ const STORES = [
     id: 'battlenet',
     name: 'Battle.net',
     subtitle: 'Blizzard titles',
-    bin: null, // launcher path checked at runtime (Wine prefix) — coming soon
-    cmd: null,
-    comingSoon: true,
+    // The battlenet-launch wrapper (baked at /usr/local/bin/battlenet-launch).
+    // It runs the Blizzard installer into a Wine prefix on first launch, then
+    // launches Battle.net.exe under GE-Proton11-3 (the white-screen fix). The
+    // prefix lives at ~/Games/battlenet (-> <vol>/games/battlenet on a
+    // persistent volume via the entrypoint's setup_stores) so the login token
+    // + installed games persist. STORES-PLAN §7.
+    bin: 'battlenet-launch',
+    cmd: ['battlenet-launch'],
     color: '#00c2ff',
   },
   {
