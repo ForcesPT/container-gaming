@@ -808,6 +808,47 @@ first umu session, not a wrapper/build concern.
 sway-stable fast-login first launch (needs umu first — same wine at build time
 would hit the same wow64 issue without umu).
 
+### 18.4.1 ✅ DONE (code, 2026-08-10) — the partial build-time prefix prebake
+
+> **Landed in `container-gaming` `main` (commit `31f38fa`):** the FULL build-
+> time install is blocked — the Battle.net-Setup Chromium GUI won't complete
+> headless (validated on the OVH L4: even `--disable-gpu` under Xvfb, the
+> Agent.exe launches but the install stalls before Battle.net.exe; it needs a
+> real display/interaction). So the prebake bakes everything UP TO the
+> installer, + the runtime wrapper copies it + runs only the installer (the
+> user clicks through it in the stream). Cuts the ~2-min `umu-run winetricks`
+> + the ~657 MB Steam Linux Runtime download from every first Battle.net
+> launch (most valuable for ephemeral sessions, which re-install every time).
+
+What shipped:
+- **`scripts/build-bootstrap-battlenet.sh`** (new, mirrors `build-bootstrap-
+  steam.sh`) — re-execs as the dpad user, Xvfb :9 + software GL (no GPU needed,
+  works in a plain `docker build`). `umu-run winetricks -q corefonts win10
+  vcrun2022 d3dcompiler_47` → bakes the winetricks-initialized Wine prefix at
+  `/opt/dpadcloud/battlenet-prefix` AND downloads the Steam Linux Runtime to
+  `~/.local/share/umu` (~657 MB, reused at runtime → no first-run umu SLR
+  download). Pre-writes `Battle.net.config` (steamuser profile) + downloads
+  `Battle.net-Setup.exe` into the prefix. Does NOT run the installer. Writes a
+  `.dpad-prebaked` marker on full success. Idempotent + best-effort (always
+  exits 0; on failure no marker → runtime falls back to full winetricks, no
+  broken image).
+- **`Dockerfile` (vast-vm, piece (f))** — runs the build script late (so
+  entrypoint/script edits don't invalidate the expensive ~3-5 min SLR-download
+  + winetricks layer), chowns the baked prefix + SLR to dpad.
+- **`scripts/battlenet-launch`** — on first launch, if the image has a prebaked
+  prefix (`/opt/dpadcloud/battlenet-prefix/.dpad-prebaked`) + the session
+  WINEPREFIX isn't already prebaked, `cp -a` the prebaked prefix to the session
+  WINEPREFIX (writable rootfs/volume; ~seconds on VM NVMe), then skip winetricks
+  + config + Setup download + go straight to running the installer. Falls back
+  to the full runtime winetricks if no prebake or the copy fails.
+
+**Image rebuild + push in progress** (validates the build-time winetricks works
+in a real `docker build` + bakes the prebake); the build-time winetricks-at-
+build is a new untested path, but the build script is best-effort (a failure
+leaves no marker → the runtime wrapper falls back to the full winetricks, no
+broken image). The full Battle.net install pre-bake (also baking Battle.net.exe)
+remains blocked on the headless installer + is NOT pursued.
+
 ### 18.5 Live VM state (for the next chat)
 - **OVH L4 `591b387c-c079-47ef-b035-c2f5c2e79d69` @ `51.210.224.7` is still UP
   (~€0.75/hr).** Open R580 (`580.178.04`), `bnet-test` container running (picker +

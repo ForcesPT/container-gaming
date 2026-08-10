@@ -97,10 +97,21 @@
 > `sha256:e5ad5baaa7ea…`, supersedes `76e3cfaa22af`).** The deb's `postinst`
 > warns `systemctl: command not found` (no systemd in the image) — harmless;
 > the AppArmor profile symlink is laid down by the deb's data.tar regardless.
-> After umu works → the build-time prefix pre-bake (STORES-PLAN §7 piece 2) for
-> the sway-stable fast-login first launch (needs umu first — same wine at build
-> time would hit the same wow64 issue without umu). See STORES-PLAN §18.4 for the
-> full record.
+> **✅ DONE (code, commit `31f38fa`) — the partial build-time prefix prebake**
+> (STORES-PLAN §7/§10 piece 2 + §18.4.1): the FULL build-time install is
+> blocked (the Battle.net-Setup Chromium GUI won't complete headless — even
+> `--disable-gpu` under Xvfb stalls before Battle.net.exe; needs a real
+> display), so the prebake bakes everything UP TO the installer — `umu-run
+> winetricks` prefix init + the ~657 MB Steam Linux Runtime + `Battle.net.config`
+> + the downloaded `Battle.net-Setup.exe` at `/opt/dpadcloud/battlenet-prefix`
+> (via the new `scripts/build-bootstrap-battlenet.sh`, Xvfb :9 software GL, no
+> GPU needed). `battlenet-launch` copies that prefix to the session WINEPREFIX
+> on first launch (~seconds) + runs only the installer (user clicks through it
+> in the stream) → cuts the ~2-min winetricks + the SLR download from every
+> first launch (most valuable for ephemeral sessions). Best-effort build script
+> (no marker on failure → runtime falls back to full winetricks, no broken
+> image). Image rebuild + push in progress. See STORES-PLAN §18.4 / §18.4.1
+> for the full record.
 >
 > **PREVIOUS (the live-test that motivated the pivot, kept as the record):** the
 > `battlenet-launch` wrapper + launcher card shipped + were live-tested on an
