@@ -1895,6 +1895,34 @@ as the first peer. `nvidia-smi` shows N compute apps; `nft list ruleset | grep
 
 ## 16.9 🔬 Store-validation probe (2026-08-09) — Lutris video WORKS on the prod tag; sway SIGTRAP + .cache/lutris bugs block a stable Lutris session
 
+> **2026-08-10 UPDATE — the Lutris shell is RETIRED by the dpad-launcher;
+> the §16.9 SIGTRAP is re-characterized + the SDL3 hypothesis is DISPROVEN.**
+> The multi-store pivot switched from lutris-gamepad-ui (Option B2) to a
+> custom **dpad-launcher** Electron store-picker shell (Option B1) — see
+> `PROJECT_STATE.md` (2026-08-10 session) + `STORES-PLAN.md` + `launcher/`.
+> Lutris is a *library aggregator* (showed "no games found" on a fresh VM
+> until each store was logged in + synced); the dpad-launcher is a *store
+> launcher* front door. BUG 3 (`.cache/lutris`) was already gone in the newer
+> image (the targeted chown now covers `~/.cache`) + is moot under the
+> launcher (no Lutris backend). **The BUG 1 SIGTRAP isolation (2026-08-10):**
+> A/B'd SDL3 ON vs OFF (the `DPAD_LUTRIS_SDL3` knob) — both crash
+> **identically** → **SDL3 is NOT the trigger** (the §16.9 hypothesis below is
+> disproven). The crash is the **wlroots 0.17.1 keyboard-group-destroy assert**
+> during sway's *shutdown*, triggered by **compositor teardown on peer
+> disconnect** (browser refresh / network blip): selkies tears down the
+> pipeline → `waylanddisplaysrc` socket closes → sway gets "failed to read
+> Wayland events: Broken pipe" → sway shuts down (`Shutting down sway`,
+> main.c:418) → removes the compositor's `wayland-pointer/touch/keyboard-
+> seat-0` devices → "Destroying empty keyboard group" → wlroots aborts
+> (SIGTRAP). It **self-heals** (~20s stall; the entrypoint health loop
+> relaunches sway on the new compositor socket) — NOT a hard blocker. The
+> devices being torn down are the *compositor's own* wayland-backend seats
+> (offered to sway regardless of shell), so it affects any shell under the
+> sway client (Steam too — §16.7's occasional self-healing "drop" was likely
+> this). Hardening = a wlroots bump or keeping the compositor alive across
+> peer disconnect (open). The original §16.9 prose below is kept as the
+> record; read it with this correction.
+
 > **A short store-validation probe (§8 step 3/4) on the §17 OVH L4.** The key
 > positive result: the Lutris Electron picker shell **streams video on the prod
 > tag** (the §17.3 blocker is retired for the real shell, extending §18.2 from

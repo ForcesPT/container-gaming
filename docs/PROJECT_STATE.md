@@ -14,6 +14,59 @@
 > **`WAYLAND-ARCHITECTURE.md`** (the 2026-08-08 compositor pivot decision —
 > adopts `gst-wayland-display`, retires the §6 #11 Lutris-capture blocker).
 >
+> **2026-08-10 session — the dpad-launcher Electron store-picker shell replaces
+> lutris-gamepad-ui as the session shell (`DPAD_STORE_SHELL=picker`).** Lutris is
+> a *library aggregator* (it imports installed games via each store's
+> manifests) → a fresh VM showed "no games found" until each store was logged in
+> + synced. The dpad-launcher is a *store launcher* — a 10-foot front door that
+> spawns the installed store clients (Steam available; Battle.net/Epic/GOG/EA/
+> Ubisoft "coming soon" cards). It's the Option-B1 custom picker from
+> STORES-PLAN §1 (Lutris was B2; the new compositor retired the §17.3 Electron
+> capture blocker that made Lutris "the wrong shape", so a custom picker is now
+> the simpler, owned-UX choice). See `launcher/README.md`.
+>
+> - **Gamepad via SDL3/koffi** (ported from lutris-gamepad-ui's `sdl_manager`)
+>   — the Web Gamepad API does NOT see the mknod'd `/dev/input/jsN` pads
+>   in-container (validated: dpad didn't work via the Web API; works via SDL3).
+>   The main process polls SDL3 + ships the state to the renderer over IPC.
+> - **SIGTRAP isolation result (retires the §6 #9 / §16.9 "SDL3 is the
+>   trigger" hypothesis):** A/B'd SDL3 ON vs OFF — both crash **identically**.
+>   SDL3 is NOT the trigger. The crash is the **wlroots 0.17.1 keyboard-group-
+>   destroy assert** during sway's *shutdown*, triggered by compositor teardown
+>   on **peer disconnect** (browser refresh / network blip): selkies tears down
+>   the pipeline → `waylanddisplaysrc` socket closes → sway gets "failed to
+>   read Wayland events: Broken pipe" → sway shuts down → removes the
+>   compositor's `wayland-pointer/touch/keyboard-seat-0` devices → "Destroying
+>   empty keyboard group" → wlroots aborts (SIGTRAP). It **self-heals** (~20s
+>   stall; the entrypoint health loop relaunches sway on the new compositor
+>   socket). NOT a hard blocker. Hardening (a wlroots bump or keeping the
+>   compositor alive across peer disconnect) is an open follow-up.
+> - **Shipped:** `launcher/` (Electron app, graphite6 palette from the live
+>   site, real brand SVG logos bundled), `scripts/launcher-shell` (the
+>   wrapper), the `DPAD_STORE_SHELL=picker` branch in `entrypoint.sh` (both the
+>   wayland-display + gamescope-headless paths), `scripts/hold-peer.py` (the
+>   SIGTRAP-isolation probe), the `lutris-shell` SDL3 env-override
+>   (`DPAD_LUTRIS_SDL3`). Built + pushed as `forcespt/dpadcloud-launcher:0.1.0`
+>   (a FROM-scratch file-bundle image holding the Linux Electron AppDir at
+>   `/opt/dpadcloud/launcher`), then **baked into `:dpad-SteamOS`** via
+>   `COPY --from=forcespt/dpadcloud-launcher:0.1.0` (Dockerfile vast-vm stage).
+>   The `:dpad-SteamOS` image rebuilt + pushed (digest `sha256:1445c8d5…`).
+> - **Live-validated on an OVH Gravelines L4** (`DPAD_STORE_SHELL=picker`, baked
+>   image, no bind-mounts): renders, gamepad navigates (d-pad/stick + A launch +
+>   B/Esc cancel), the launch overlay (logo + spinner, B/Esc dismiss), Steam
+>   launches from the card, survives sway restarts/refresh.
+> - **Fullscreen-after-store-quit:** the launcher never dies — on window
+>   'closed' it recreates the window (sway's `for_window` re-fullscreens the
+>   re-map); on the launched store's exit it destroys the window to force that
+>   recreate (recovers if the store's XWayland teardown destabilized it +
+>   re-fullscreens the demoted case). sway `default_border none` removes the
+>   blue focused-border flash during the brief windowed phase.
+> - **Open:** the other stores (Epic/GOG/Battle.net "coming soon" — need
+>   `legendary`/`gogdl`/`protobuf` baked + the launcher wiring to launch them;
+>   Battle.net via Proton, Epic/GOG via legendary/gogdl); the sway SIGTRAP
+>   hardening; the **cloud flip** (`DPAD_STORE_SHELL: picker` in the worker
+>   env, now that the image is baked — a `cloud` repo change + redeploy).
+>
 > **2026-08-08 — the multi-store blocker is being solved at the architecture
 > level, not the Lutris-flag level.** See **`WAYLAND-ARCHITECTURE.md`** — the
 > decision to adopt `gst-wayland-display` (a Smithay micro-compositor) as the
