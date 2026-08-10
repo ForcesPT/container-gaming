@@ -1,0 +1,11 @@
+# Keep the docker build context lean — the Dockerfile only COPYs scripts/,
+# configs/, entrypoint.sh, healthcheck.sh (the AppDir comes via
+# COPY --from=forcespt/dpadcloud-launcher). Exclude everything else.
+.git/
+docs/
+launcher/node_modules/
+launcher/dist/
+launcher/package-lock.json
+*.md
+.pi/
+.claude/
