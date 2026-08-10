@@ -705,10 +705,10 @@ system-wide in the Dockerfile (cleanest), OR add the steamrt libSDL3 path to
 - `Dockerfile` — `COPY scripts/battlenet-launch` + symlink to `/usr/local/bin` so
   `which()` resolves it (mirrors the gamescope/lutris symlink pattern).
 - Images: `forcespt/dpadcloud-launcher:0.1.0` (digest `sha256:340629a6…`, rebuilt
-  AppDir with the new `main.js`) + `forcespt/dpadcloud-gaming:dpad-SteamOS` (digest
-  `sha256:0091f28279c8…`). **⚠️ The `:dpad-SteamOS` image has the OLD wrapper baked
-  (the `5b01494` version with the wrong URL); the fixed wrapper (`06feb00`) is on
-  `main` + will bake in at the next rebuild (the umu rebuild).**
+  AppDir with the new `main.js`) + `forcespt/dpadcloud-gaming:dpad-SteamOS`. **The
+  `:dpad-SteamOS` image was re-pushed with the FIXED wrapper baked — digest
+  `sha256:166b76709e0c…` (the `06feb00` wrapper: the working URL + the pre-config);
+  the earlier `sha256:0091f28279c8` (OLD wrapper, wrong URL) is superseded.**
 
 ### 18.2 The live test (OVH L4 `591b387c-…` @ `51.210.224.7`, open R580, picker + wayland-display + sway)
 Reprovisioned a raw OVH L4 via the `createOvhAdapter` worker-container pattern

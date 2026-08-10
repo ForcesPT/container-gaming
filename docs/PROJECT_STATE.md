@@ -71,8 +71,11 @@
 > sway SIGTRAP (do the pre-bake after umu works). **The image on Docker Hub
 > (`sha256:0091f28279c8`) has the OLD wrapper baked (the `5b01494` version with
 > the wrong URL); the fixed wrapper is on `main` (`06feb00`) + will bake in at
-> the umu rebuild.** The live test VM (still up, ~€0.75/hr) has the fixed
-> wrapper patched in via `docker cp`.
+> the umu rebuild.** **[Updated 2026-08-10:] the image was re-pushed with the
+> FIXED wrapper baked — digest `sha256:166b76709e0c…` (the `06feb00` wrapper:
+> the working URL + the pre-config); the earlier `sha256:0091f28279c8` (OLD wrapper,
+> wrong URL) is superseded.** The live test VM (still up, ~€0.75/hr) has the fixed
+> wrapper patched in via `docker cp` (a re-provision would pull the new image).
 >
 > **2026-08-10 session — the dpad-launcher Electron store-picker shell replaces
 > lutris-gamepad-ui as the session shell (`DPAD_STORE_SHELL=picker`).** Lutris is
