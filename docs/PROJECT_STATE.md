@@ -14,6 +14,66 @@
 > **`WAYLAND-ARCHITECTURE.md`** (the 2026-08-08 compositor pivot decision —
 > adopts `gst-wayland-display`, retires the §6 #11 Lutris-capture blocker).
 >
+> **2026-08-10 Battle.net session — the `battlenet-launch` wrapper + launcher
+> card shipped + were live-tested on an OVH Gravelines L4; the install stalls at
+> the 32-bit Blizzard Update Agent under Wine 11's experimental new wow64 → the
+> next step is umu-launcher (STORES-PLAN §10 piece 1c).** Built + pushed: the
+> `battlenet-launch` wrapper (`scripts/battlenet-launch`), the launcher's
+> `battlenet` card (`bin:'battlenet-launch'`, `comingSoon` removed), the
+> entrypoint's `setup_stores()` (symlinks `~/Games` → `<vol>/games` when
+> `battlenet` ∈ `DPAD_STORES`; plain dir on ephemeral), + the Dockerfile bake
+> (`/usr/local/bin/battlenet-launch`). Launcher image rebuilt + pushed
+> (`forcespt/dpadcloud-launcher:0.1.0`, digest `sha256:340629a6…`) +
+> `:dpad-SteamOS` rebuilt + pushed (digest `sha256:0091f28279c8…`). Commits
+> `5b01494` (the wiring) + `06feb00` (the live-test fixes). The cloud worker
+> already writes `DPAD_STORES=steam,epic,gog,battlenet` + `DPAD_STORE_SHELL=picker`
+> to `/etc/environment` (commit `56b5db7`, deployed) → new VMs activate
+> `setup_stores` automatically.
+>
+> **The live test (OVH L4 `591b387c-…` @ `51.210.224.7`, open R580, picker +
+> wayland-display + sway):** the wrapper launches, the Blizzard installer
+> downloads, + the Blizzard Update Agent (Agent.exe + AgentHelper.exe +
+> BlizzardError.exe) downloads fully — BUT the Agent won't launch:
+> `BLZBNTBTS0000005C` / `BLZBNTAGT00000002`, *"Failed to communicate with
+> Agent after launch, Agent.exe error=2"*. `Agent.exe` is **32-bit** (PE32
+> Intel 80386) + Wine 11's *"experimental new wow64 mode"* struggles with its
+> process creation/IPC — the documented-fragile manual-wine wall. Two live-test
+> fixes landed in `06feb00`: (1) the working installer URL
+> `getInstallerForGame?os=win&version=LIVE&gameProgram=BATTLENET_APP` (the
+> `getInstaller?installer=` endpoint 400s from the EU/OVH IP); (2) the Lutris-
+> script-equivalent pre-config — `WINE_SIMULATE_WRITECOPY=1` +
+> `WINEDLLOVERRIDES="locationapi=d"` + `winetricks -q corefonts win10 vcrun2022
+> d3dcompiler_47` + a pre-written `Battle.net.config` (HW accel/sound/streaming
+> off). These got the install from *nothing* → *Agent fully downloaded* but did
+> NOT fix the Agent launch (vcrun2022 was not the missing piece — the diagnostic
+> showed Agent.exe loads its core DLLs fine, no missing module).
+>
+> **Two stacked blockers:** (a) the Agent-launch wow64/IPC failure (above) → the
+> umu pivot; (b) the §16.9 sway SIGTRAP (the wlroots keyboard-group-destroy
+> assert on compositor teardown at peer-disconnect) killed the long-running
+> install once — the Battle.net install is a ~5-min wine process that needs
+> sway/XWayland up the whole time. umu fixes (a); the follow-up for (b) is the
+> build-time prefix pre-bake (STORES-PLAN §7 piece 2) so first launch is a fast
+> login, not a 5-min install (the pre-bake needs umu to fix the Agent launch
+> first — same wine at build time would hit the same wow64 issue without umu).
+>
+> **NEXT — the umu-launcher pivot (STORES-PLAN §10 piece 1c):** bake
+> `umu-launcher` into the image (it's NOT present — no `umu-run` /
+> `pressure-vessel` / `SteamLinuxRuntime` in the image today) + rewrite
+> `battlenet-launch` to use `umu-run` with `PROTONPATH=GE-Proton11-3
+> WINEPREFIX=… GAMEID=battlenet STORE=battlenet` instead of raw `wine`. umu
+> wraps GE-Proton in the Steam Linux Runtime container (matched 32+64-bit libs +
+> Valve's tested wow64 + protonfixes) — the 2026 consensus reliable path
+> (sudowheel: *"Method 1: Via Steam [umu] is the most reliable approach"*).
+> The image already runs Steam/Proton (so pressure-vessel works in the
+> container). Caveats: umu + the Steam Runtime add ~1–2 GB + first-run latency
+> (umu downloads the runtime once — the VM has network); umu does NOT fix the
+> sway SIGTRAP (do the pre-bake after umu works). **The image on Docker Hub
+> (`sha256:0091f28279c8`) has the OLD wrapper baked (the `5b01494` version with
+> the wrong URL); the fixed wrapper is on `main` (`06feb00`) + will bake in at
+> the umu rebuild.** The live test VM (still up, ~€0.75/hr) has the fixed
+> wrapper patched in via `docker cp`.
+>
 > **2026-08-10 session — the dpad-launcher Electron store-picker shell replaces
 > lutris-gamepad-ui as the session shell (`DPAD_STORE_SHELL=picker`).** Lutris is
 > a *library aggregator* (it imports installed games via each store's

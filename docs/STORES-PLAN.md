@@ -676,3 +676,105 @@ system-wide in the Dockerfile (cleanest), OR add the steamrt libSDL3 path to
 - The `warm_pool_vms` row for `ae94ae48` was manually flipped `warming→ready`
   early in the session (the bootstrap had actually completed; the worker log
   looked stuck but had succeeded silently).
+## 18. Battle.net live-test (2026-08-10) — wiring shipped; install stalls at the 32-bit Agent → umu pivot
+
+> **The Battle.net v1 implementation shipped + was live-tested on an OVH Gravelines
+> L4.** The wrapper + launcher card + `setup_stores` + the Dockerfile bake are done
+> (commits `5b01494` + `06feb00`; images pushed). The install gets as far as the
+> Blizzard Update Agent downloading fully — then the Agent won't launch under Wine
+> 11's experimental new wow64. **The next step is the umu-launcher pivot (§10 piece
+> 1c).** See `PROJECT_STATE.md` (2026-08-10 Battle.net session) for the full record.
+
+### 18.1 What shipped (built + pushed + on `main`)
+- `scripts/battlenet-launch` — the wrapper. Picks GE-Proton11-3's wine (falls back
+  to system wine), pre-configs the prefix (`wineboot` → `winetricks -q corefonts
+  win10 vcrun2022 d3dcompiler_47` → pre-writes `Battle.net.config` with HW
+  accel/sound/streaming off), downloads `Battle.net-Setup.exe` from the working
+  `getInstallerForGame?os=win&version=LIVE&gameProgram=BATTLENET_APP` URL (a
+  browser User-Agent avoids CDN edge cases), runs the installer, polls up to 15 min
+  for the launcher exe, then `exec`s `Battle.net Launcher.exe` (fallback
+  `Battle.net.exe`). Sets `WINE_SIMULATE_WRITECOPY=1` + `WINEDLLOVERRIDES="locationapi=d"`
+  (the 2026 NixOS/WineHQ/GamingOnLinux recommended env for the agent-sleep/install-stall).
+- `launcher/src/main.js` — the `battlenet` card: `bin:'battlenet-launch'`,
+  `cmd:['battlenet-launch']`, `comingSoon` removed (the launcher's `which()` resolves
+  it → card shows available).
+- `entrypoint.sh` `setup_stores()` — symlinks `~/Games` → `<vol>/games` when a
+  volume is attached + `battlenet` ∈ `DPAD_STORES` (plain dir on ephemeral); called
+  after `setup_user_volume` in both `start_wayland_display_session` +
+  `start_gamescope_session`.
+- `Dockerfile` — `COPY scripts/battlenet-launch` + symlink to `/usr/local/bin` so
+  `which()` resolves it (mirrors the gamescope/lutris symlink pattern).
+- Images: `forcespt/dpadcloud-launcher:0.1.0` (digest `sha256:340629a6…`, rebuilt
+  AppDir with the new `main.js`) + `forcespt/dpadcloud-gaming:dpad-SteamOS` (digest
+  `sha256:0091f28279c8…`). **⚠️ The `:dpad-SteamOS` image has the OLD wrapper baked
+  (the `5b01494` version with the wrong URL); the fixed wrapper (`06feb00`) is on
+  `main` + will bake in at the next rebuild (the umu rebuild).**
+
+### 18.2 The live test (OVH L4 `591b387c-…` @ `51.210.224.7`, open R580, picker + wayland-display + sway)
+Reprovisioned a raw OVH L4 via the `createOvhAdapter` worker-container pattern
+(WAYLAND-ARCHITECTURE §12). `vm-bootstrap.sh install` → driver swap (plain
+proprietary 580 → open 580.178.04) → image pull → `DPAD_VM_READY`. Launched
+`bnet-test` with `DPAD_COMPOSITOR=wayland-display DPAD_WAYLAND_CLIENT=sway
+DPAD_STORE_SHELL=picker DPAD_STORES=steam,battlenet`. The launcher showed the
+Battle.net card as available; clicking it spawned `battlenet-launch`.
+
+**The install progression (each fix got further):**
+1. **WRONG URL** (`5b01494` wrapper) — `getInstaller?installer=Battle.net-Setup.exe`
+   → HTTP 400 from the EU/OVH IP. **Fixed** (`06feb00`): `getInstallerForGame?…`
+   → HTTP 200, 4.9 MB PE32.
+2. **NO pre-config** (bare prefix) — the installer's CEF/agent misinits. **Fixed**
+   (`06feb00`): the env vars + `winetricks` + `Battle.net.config` pre-write. Now the
+   installer downloads + the Agent (Agent.exe + AgentHelper.exe + BlizzardError.exe)
+   downloads fully.
+3. **BLOCKER — the Agent won't launch.** `BLZBNTBTS0000005C` / `BLZBNTAGT00000002`,
+   *"Failed to communicate with Agent after launch, Agent.exe error=2"*. `Agent.exe`
+   is **32-bit** (PE32 Intel 80386); Wine 11's *"experimental new wow64 mode"*
+   (the winetricks warning) struggles with its process creation/IPC. `vcrun2022` was
+   NOT the missing piece — the diagnostic (`WINEDEBUG=+module` run of Agent.exe as
+   the dpad user) showed Agent.exe loads its core DLLs (ntdll/kernel32/kernelbase/
+   advapi32/msvcrt) fine, no missing module, then PROCESS_DETACH (standalone exit is
+   expected — the real failure is the bootstrapper→Agent IPC, unreproducible
+   standalone). This is the documented-fragile manual-wine wall.
+
+### 18.3 Two stacked blockers
+- **(a) the Agent-launch wow64/IPC failure** → the umu pivot (below).
+- **(b) the §16.9 sway SIGTRAP** (the wlroots keyboard-group-destroy assert on
+  compositor teardown at peer-disconnect) killed the long-running install once
+  (SIGKILL'd the wrapper mid-`winetricks` at 02:36). The Battle.net install is a
+  ~5-min wine process that needs sway/XWayland up the whole time. umu does NOT fix
+  this — the follow-up is the build-time prefix pre-bake (§7 piece 2) so first launch
+  is a fast login, not a 5-min install. **The pre-bake needs umu first** (same wine
+  at build time would hit the same wow64 issue without umu).
+
+### 18.4 NEXT — the umu-launcher pivot (§10 piece 1c)
+Bake `umu-launcher` into the image (NOT present today — no `umu-run` /
+`pressure-vessel` / `SteamLinuxRuntime` in the image) + rewrite `battlenet-launch`
+to use `umu-run` with `PROTONPATH=GE-Proton11-3 WINEPREFIX=… GAMEID=battlenet
+STORE=battlenet` instead of raw `wine`. umu wraps GE-Proton in the Steam Linux
+Runtime container (matched 32+64-bit libs + Valve's tested wow64 + protonfixes) —
+the 2026 consensus reliable path (sudowheel: *"Method 1: Via Steam [umu] is the
+most reliable approach"*; the manual-wine path is the fragile one). The image
+already runs Steam/Proton (so pressure-vessel works in the container). Caveats:
+umu + the Steam Runtime add ~1–2 GB + first-run latency (umu downloads the runtime
+once — the VM has network). After umu works → the pre-bake (§7 piece 2) for the
+sway-stable fast-login first launch.
+
+### 18.5 Live VM state (for the next chat)
+- **OVH L4 `591b387c-c079-47ef-b035-c2f5c2e79d69` @ `51.210.224.7` is still UP
+  (~€0.75/hr).** Open R580 (`580.178.04`), `bnet-test` container running (picker +
+  wayland-display + sway), the FIXED wrapper patched in via `docker cp` (the image
+  has the old one). The partial Battle.net prefix was wiped; `setup_stores` +
+  `~/Games` are in place. SSH: `ssh -i ~/.ssh/dpad_orchestrator_key ubuntu@51.210.224.7`.
+  Stream: `http://51.210.224.7:16100` (auth `dpad`/`bnetpass`). **Teardown to stop
+  billing:**
+  ```bash
+  ssh root@187.124.187.252 'docker exec -i dpadplay-worker-1 node -' <<'NODE'
+  const { createOvhAdapter } = require('/repo/packages/providers/dist/index.js');
+  (async () => {
+    const a = createOvhAdapter({ appKey:process.env.OVH_APP_KEY, appSecret:process.env.OVH_APP_SECRET, consumerKey:process.env.OVH_CONSUMER_KEY, serviceName:process.env.OVH_SERVICE_NAME, sshPublicKey:process.env.OVH_SSH_PUBLIC_KEY, image:process.env.OVH_IMAGE });
+    await a.destroyVm('591b387c-c079-47ef-b035-c2f5c2e79d69'); console.log('destroyed');
+  })().catch(e=>{ console.error('FATAL '+(e&&e.message||e)); process.exit(1); });
+  NODE
+  ```
+- The `ovh-ops.mjs` helper is deployed in the worker container (`docker exec
+  dpadplay-worker-1 node /tmp/ovh-ops.mjs instances` lists VMs).
