@@ -149,6 +149,15 @@ function createWindow() {
   // pointer lock upstream). F12 devtools disabled in kiosk.
   if (process.env.DPAD_LAUNCHER_DEV) win.webContents.openDevTools({ mode: 'detach' });
 
+  // Re-assert fullscreen when the window regains focus. When a launched store
+  // client (Steam) opens fullscreen it takes the output + sway demotes the
+  // launcher; when the store quits + sway refocuses the launcher, sway does
+  // NOT restore its fullscreen (the for_window rule only fires on map), so the
+  // launcher comes back windowed. Re-send the fullscreen hint on focus/restore.
+  const refull = () => { try { win.setFullScreen(true); } catch (_) {} };
+  win.on('focus', refull);
+  win.on('restore', refull);
+
   return win;
 }
 
