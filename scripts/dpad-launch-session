@@ -279,6 +279,10 @@ launch() {
     # is untouched — CDI's /dev/dri via NVIDIA_VISIBLE_DEVICES suffices there.
     local dev_args=()
     [ "${DPAD_COMPOSITOR:-gamescope}" = "wayland-display" ] && dev_args+=( --device /dev/dri )
+    # systempaths=unconfined: the 4th bwrap-nest flag — umu's pressure-vessel
+    # remounts /proc in a new pid+mount namespace; without it, "Can't mount proc
+    # on /newroot/proc". Needed whenever a session runs umu (Battle.net via
+    # battlenet-launch, regardless of compositor). Live-validated on OVH L4.
 
     # Multi-store shell (STORES-PLAN.md). DPAD_STORE_SHELL=lutris switches the
     # gamescope session from `steam -gamepadui` to the lutris-shell wrapper
@@ -290,7 +294,7 @@ launch() {
     # the docker run with "-e: command not found" + "requires at least 1 argument").
     docker run -d --name "$name" \
         --runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=0 \
-        --cap-add SYS_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+        --cap-add SYS_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined \
         --shm-size=2g --ulimit nofile=1048576:1048576 \
         "${res[@]}" \
         "${vol_args[@]}" \
