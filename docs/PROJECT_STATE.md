@@ -57,18 +57,44 @@
 > login, not a 5-min install (the pre-bake needs umu to fix the Agent launch
 > first — same wine at build time would hit the same wow64 issue without umu).
 >
-> **NEXT — the umu-launcher pivot (STORES-PLAN §10 piece 1c):** bake
-> `umu-launcher` into the image (it's NOT present — no `umu-run` /
-> `pressure-vessel` / `SteamLinuxRuntime` in the image today) + rewrite
-> `battlenet-launch` to use `umu-run` with `PROTONPATH=GE-Proton11-3
-> WINEPREFIX=… GAMEID=battlenet STORE=battlenet` instead of raw `wine`. umu
-> wraps GE-Proton in the Steam Linux Runtime container (matched 32+64-bit libs +
-> Valve's tested wow64 + protonfixes) — the 2026 consensus reliable path
-> (sudowheel: *"Method 1: Via Steam [umu] is the most reliable approach"*).
-> The image already runs Steam/Proton (so pressure-vessel works in the
-> container). Caveats: umu + the Steam Runtime add ~1–2 GB + first-run latency
-> (umu downloads the runtime once — the VM has network); umu does NOT fix the
-> sway SIGTRAP (do the pre-bake after umu works). **The image on Docker Hub
+> **✅ DONE (code, 2026-08-10) — the umu-launcher pivot (STORES-PLAN §10 piece
+> 1c) LANDED in `container-gaming` `main` (uncommitted on the build host pending
+> the image rebuild + push):** `scripts/battlenet-launch` is rewritten to use
+> `umu-run` (`STORE=battlenet GAMEID=umu-battlenet PROTONPATH=GE-Proton11-3`)
+> instead of raw `wine`, + a new Dockerfile block (vast-vm stage, piece (e))
+> bakes `umu-launcher` 1.4.4 from the official Ubuntu Noble `.deb`. Validated by
+> an isolated `ubuntu:24.04` + deb build-test: `python3-umu-launcher` installs
+> clean (apt resolves python3-xlib / apparmor-profiles / libzstd1 / libgl1-mesa-
+> dri:i386 / libglx-mesa0:i386), `/usr/bin/umu-run` on PATH, `import
+> umu.umu_consts` works (cpython-3.12 = Noble's python3), `umu-run -h` prints
+> help without fetching the ~1–2 GB SLR (build-time sanity is safe); the
+> Dockerfile parses (`buildx --check`: no warnings). umu wraps GE-Proton in the
+> Steam Linux Runtime container (matched 32+64-bit libs + Valve's tested wow64 +
+> protonfixes) — the 2026 consensus reliable path (sudowheel: *"Method 1: Via
+> Steam [umu] is the most reliable approach"*). The image already runs
+> Steam/Proton so pressure-vessel works. **Container nesting:** umu →
+> pressure-vessel → bwrap needs `unshare(CLONE_NEWUSER)` + a few syscalls; our
+> session container already runs the bwrap-nest flag set (`--cap-add SYS_ADMIN`
+> + `--security-opt seccomp=unconfined apparmor=unconfined`, IMAGE-RUNBOOK) +
+> the host sysctls (`kernel.unprivileged_userns_clone=1` +
+> `kernel.apparmor_restrict_unprivileged_userns=0`, vm-bootstrap) — covers umu
+> issue #156 + the Noble AppArmor userns restriction. One possible runtime extra:
+> if pressure-vessel hits `Can't mount proc on /newroot/proc`, add
+> `--security-opt systempaths=unconfined` to the `docker run` (the 4th bwrap-
+> nest flag). **NOT yet live-validated** — needs the `:dpad-SteamOS` rebuild +
+> push (owner step) + an OVH L4 session (none ready). The deb's `postinst`
+> warns `systemctl: command not found` (no systemd in the image) — harmless;
+> the AppArmor profile symlink is laid down by the deb's data.tar regardless.
+> After umu works → the build-time prefix pre-bake (STORES-PLAN §7 piece 2) for
+> the sway-stable fast-login first launch (needs umu first — same wine at build
+> time would hit the same wow64 issue without umu). See STORES-PLAN §18.4 for the
+> full record.
+>
+> **PREVIOUS (the live-test that motivated the pivot, kept as the record):** the
+> `battlenet-launch` wrapper + launcher card shipped + were live-tested on an
+> OVH Gravelines L4; the install stalls at the 32-bit Blizzard Update Agent
+> under Wine 11's experimental new wow64 → the umu pivot (above) is the fix.**
+> **The image on Docker Hub
 > (`sha256:0091f28279c8`) has the OLD wrapper baked (the `5b01494` version with
 > the wrong URL); the fixed wrapper is on `main` (`06feb00`) + will bake in at
 > the umu rebuild.** **[Updated 2026-08-10:] the image was re-pushed with the

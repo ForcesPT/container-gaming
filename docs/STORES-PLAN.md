@@ -746,18 +746,60 @@ Battle.net card as available; clicking it spawned `battlenet-launch`.
   is a fast login, not a 5-min install. **The pre-bake needs umu first** (same wine
   at build time would hit the same wow64 issue without umu).
 
-### 18.4 NEXT — the umu-launcher pivot (§10 piece 1c)
-Bake `umu-launcher` into the image (NOT present today — no `umu-run` /
-`pressure-vessel` / `SteamLinuxRuntime` in the image) + rewrite `battlenet-launch`
-to use `umu-run` with `PROTONPATH=GE-Proton11-3 WINEPREFIX=… GAMEID=battlenet
-STORE=battlenet` instead of raw `wine`. umu wraps GE-Proton in the Steam Linux
-Runtime container (matched 32+64-bit libs + Valve's tested wow64 + protonfixes) —
-the 2026 consensus reliable path (sudowheel: *"Method 1: Via Steam [umu] is the
-most reliable approach"*; the manual-wine path is the fragile one). The image
-already runs Steam/Proton (so pressure-vessel works in the container). Caveats:
-umu + the Steam Runtime add ~1–2 GB + first-run latency (umu downloads the runtime
-once — the VM has network). After umu works → the pre-bake (§7 piece 2) for the
-sway-stable fast-login first launch.
+### 18.4 ✅ DONE (code, 2026-08-10) — the umu-launcher pivot (§10 piece 1c)
+
+> **Landed in `container-gaming` `main` (uncommitted on the build host pending
+> the image rebuild + push):** the `battlenet-launch` wrapper is rewritten to use
+> `umu-run` (STORE=battlenet, GAMEID=umu-battlenet, PROTONPATH=GE-Proton11-3)
+> instead of raw `wine`, + a new Dockerfile block (vast-vm stage, piece (e))
+> bakes `umu-launcher` 1.4.4 from the official Ubuntu Noble `.deb`. Validated by
+> an isolated `ubuntu:24.04` + deb build-test: `python3-umu-launcher` installs
+> clean (apt resolves python3-xlib / apparmor-profiles / libzstd1 / libgl1-mesa-
+> dri:i386 / libglx-mesa0:i386), `/usr/bin/umu-run` lands on PATH, `import
+> umu.umu_consts` works (cpython-3.12 = Noble's python3), + `umu-run -h` prints
+> help **without** fetching the ~1–2 GB SLR (so the build-time sanity check is
+> safe). The Dockerfile parses (`buildx --check`: no warnings). **NOT yet
+> live-validated** — needs the `:dpad-SteamOS` rebuild + push (the owner step)
+> + an OVH L4 session (none ready right now).
+
+What shipped (the design referenced above, now implemented):
+- **`scripts/battlenet-launch`** — `umu-run winetricks -q corefonts win10
+  vcrun2022 d3dcompiler_47` initializes the prefix INSIDE the Steam Linux
+  Runtime container (replaces the old `wineboot --init` + system-`winetricks`
+  pair), then `umu-run "$SETUP_EXE"` runs the Blizzard installer under
+  GE-Proton-in-SLR (the 32-bit Agent.exe now runs under Valve's tested wow64 →
+  fixes the "Failed to communicate with Agent" stall), then `exec umu-run
+  "$BN_EXE"` launches Battle.net. Keeps the working installer URL, the
+  `WINE_SIMULATE_WRITECOPY=1` + `WINEDLLOVERRIDES=locationapi=d` env, the
+  `Battle.net.config` pre-write (HW accel/sound/streaming off), + the
+  `~/Games/battlenet` prefix path (setup_stores' volume symlink). Defensively
+  `unset LD_PRELOAD` before umu-run so the host gamepad interposer doesn't
+  leak into the pressure-vessel container.
+- **`Dockerfile` (vast-vm, piece (e))** — `ARG UMU_VERSION=1.4.4`, apt-installs
+  the deps + the `python3-umu-launcher_1.4.4-1_amd64_ubuntu-noble.deb` from the
+  GitHub release (matches the existing Steam/Heroic/Lutris/GE-Proton
+  release-artifact pattern). The deb's `postinst` warns `systemctl: command not
+  found` (no systemd in the image) — harmless; the AppArmor profile symlink is
+  laid down by the deb's data.tar regardless.
+
+**Container nesting (the one runtime gotcha to watch):** umu uses
+pressure-vessel → bwrap, which needs `unshare(CLONE_NEWUSER)` + a few syscalls
+(clone, pivot_root, mount, umount2, userfaultfd — the umu issue #156 / bwrap
+issue #505 set). Our session container ALREADY runs the bwrap-nest flag set
+(IMAGE-RUNBOOK): `--cap-add SYS_ADMIN` + `--security-opt seccomp=unconfined` +
+`--security-opt apparmor=unconfined`, + the host sysctls
+`kernel.unprivileged_userns_clone=1` +
+`kernel.apparmor_restrict_unprivileged_userns=0` (vm-bootstrap.sh). That covers
+umu #156 + the Ubuntu-Noble AppArmor userns restriction (the deb ships a
+`bwrap-userns-restrict-umu` profile, moot under `apparmor=unconfined`). **One
+possible extra at runtime:** if pressure-vessel hits `Can't mount proc on
+/newroot/proc`, add `--security-opt systempaths=unconfined` to the `docker run`
+(the fourth bwrap-nest flag — the `/proc` mask). A live-validation item on the
+first umu session, not a wrapper/build concern.
+
+**After umu works** → the build-time prefix pre-bake (§7 piece 2) for the
+sway-stable fast-login first launch (needs umu first — same wine at build time
+would hit the same wow64 issue without umu).
 
 ### 18.5 Live VM state (for the next chat)
 - **OVH L4 `591b387c-c079-47ef-b035-c2f5c2e79d69` @ `51.210.224.7` is still UP
