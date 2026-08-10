@@ -863,19 +863,25 @@ NOT the prebake. The full Battle.net install pre-bake (also baking
 Battle.net.exe) remains blocked on the headless installer + is NOT pursued.
 
 ### 18.5 Live VM state (for the next chat)
-- **OVH L4 `591b387c-c079-47ef-b035-c2f5c2e79d69` @ `51.210.224.7` is still UP
-  (~€0.75/hr).** Open R580 (`580.178.04`), `bnet-test` container running (picker +
-  wayland-display + sway), the FIXED wrapper patched in via `docker cp` (the image
-  has the old one). The partial Battle.net prefix was wiped; `setup_stores` +
-  `~/Games` are in place. SSH: `ssh -i ~/.ssh/dpad_orchestrator_key ubuntu@51.210.224.7`.
-  Stream: `http://51.210.224.7:16100` (auth `dpad`/`bnetpass`). **Teardown to stop
-  billing:**
+- **The prior `591b387c-…` @ `51.210.224.7` VM is TORN DOWN** (confirmed via
+  `ovh-ops.mjs instances` — not in the list; no orphan billing).
+- **OVH L4 `aa122c2d-ae7a-4e60-8613-0ebadbbc847b` (`dpadtest-umu`) @
+  `193.70.74.9` is UP (~€0.75/hr)** — the umu-pivot + `--disable-gpu` CEF
+  live-validation VM. Open R580 (`580.178.04`), the image is the pushed
+  `forcespt/dpadcloud-gaming:dpad-SteamOS` (`sha256:e5ad5baaa7ea…`, umu 1.4.4
+  + the `--disable-gpu` battlenet-launch), running as a MANUAL `docker run`
+  container `bnet-umu` (not worker-managed — won't auto-teardown) with the
+  bwrap-nest flags (`SYS_ADMIN` + `seccomp`/`apparmor`/`systempaths` unconfined).
+  Battle.net installed + the login UI renders solidly (user-confirmed) under
+  `--disable-gpu --in-process-gpu`. SSH: `ssh -i ~/.ssh/dpad_orchestrator_key
+  ubuntu@193.70.74.9`. Stream: `http://193.70.74.9:16100` (auth `dpad`/`bnetpass`).
+  **Teardown to stop billing:**
   ```bash
   ssh root@187.124.187.252 'docker exec -i dpadplay-worker-1 node -' <<'NODE'
   const { createOvhAdapter } = require('/repo/packages/providers/dist/index.js');
   (async () => {
     const a = createOvhAdapter({ appKey:process.env.OVH_APP_KEY, appSecret:process.env.OVH_APP_SECRET, consumerKey:process.env.OVH_CONSUMER_KEY, serviceName:process.env.OVH_SERVICE_NAME, sshPublicKey:process.env.OVH_SSH_PUBLIC_KEY, image:process.env.OVH_IMAGE });
-    await a.destroyVm('591b387c-c079-47ef-b035-c2f5c2e79d69'); console.log('destroyed');
+    await a.destroyVm('aa122c2d-ae7a-4e60-8613-0ebadbbc847b'); console.log('destroyed');
   })().catch(e=>{ console.error('FATAL '+(e&&e.message||e)); process.exit(1); });
   NODE
   ```
