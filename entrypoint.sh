@@ -998,6 +998,11 @@ start_wayland_display_session() {
 # Read the live resolution from /tmp/dpad_resolution (§18.7 web dropdown) so
 # a live change relaunches sway at the new mode. Falls back to DPAD_WD_* / 1080p.
 output * mode --custom $(_dpad_w)x$(_dpad_h)
+# No window borders ever (sway's default focused border is a blue/teal 2px line
+# that flashes during the brief windowed phase before for_window fullscreens a
+# new window — Steam booting, or the launcher recreating after a store quits).
+default_border none
+default_floating_border none
 for_window [app_id=".*"] fullscreen enable
 for_window [class=".*"] fullscreen enable
 exec ${SHELL_APP}
