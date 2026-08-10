@@ -110,7 +110,19 @@
 > in the stream) → cuts the ~2-min winetricks + the SLR download from every
 > first launch (most valuable for ephemeral sessions). Best-effort build script
 > (no marker on failure → runtime falls back to full winetricks, no broken
-> image). Image rebuild + push in progress. See STORES-PLAN §18.4 / §18.4.1
+> image). **⚠️ Build-time blocker:** the prebake layer needs `umu-run` →
+> pressure-vessel → `bwrap` to create a user namespace, but a standard `docker
+> build` container lacks the bwrap-nest privileges (those are runtime `docker
+> run` flags, not build flags) → the build script degrades gracefully (no marker
+> → runtime falls back to full winetricks, no broken image). To bake the
+> prebake, the build must run privileged (`docker buildx build --allow
+> security.insecure` via a builder with `--allow-insecure-entitlement
+> security.insecure`; the default Docker-Desktop daemon rejects it + a custom
+> builder doesn't share cache → a full rebuild). The prebake CODE is landed +
+> correct + graceful — it bakes on a build host that allows the insecure
+> entitlement; on a standard build it's a no-op (runtime fallback). The current
+> Docker Hub image (`sha256:e5ad5baaa7ea…`) has the umu pivot + the `--disable-
+> gpu` CEF fix but not the prebake. See STORES-PLAN §18.4 / §18.4.1.
 > for the full record.
 >
 > **PREVIOUS (the live-test that motivated the pivot, kept as the record):** the

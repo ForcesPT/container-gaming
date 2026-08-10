@@ -842,12 +842,25 @@ What shipped:
   + config + Setup download + go straight to running the installer. Falls back
   to the full runtime winetricks if no prebake or the copy fails.
 
-**Image rebuild + push in progress** (validates the build-time winetricks works
-in a real `docker build` + bakes the prebake); the build-time winetricks-at-
-build is a new untested path, but the build script is best-effort (a failure
-leaves no marker → the runtime wrapper falls back to the full winetricks, no
-broken image). The full Battle.net install pre-bake (also baking Battle.net.exe)
-remains blocked on the headless installer + is NOT pursued.
+**⚠️ Build-time blocker found (2026-08-10):** the prebake layer needs `umu-run`
+→ pressure-vessel → `bwrap` to create a user namespace, but a standard
+`docker build` container does NOT have the bwrap-nest privileges (`--cap-add
+SYS_ADMIN` + `--security-opt seccomp=unconfined apparmor=unconfined` are
+*runtime-session* `docker run` flags, not build flags) → `bwrap: No permissions
+to create a new namespace` → the build script's best-effort path fires (no
+marker, exit 0) → the image bakes WITHOUT the prebake + the runtime wrapper
+falls back to the full winetricks (no broken image, just no speedup). **To
+actually bake the prebake, the build must run privileged:** `docker buildx
+build --allow security.insecure --builder <a builder created with
+--buildkitd-flags '--allow-insecure-entitlement security.insecure'> --load ...`
+(the default Docker-Desktop buildx daemon rejects `security.insecure`; a
+custom builder is needed, + it doesn't share the default builder's cache → a
+full ~30+ min rebuild). The prebake CODE is landed + correct + graceful — it
+will bake on a build host that allows the insecure entitlement; on a standard
+build it degrades to the runtime fallback. The current Docker Hub image
+(`sha256:e5ad5baaa7ea…`) has the umu pivot + the `--disable-gpu` CEF fix but
+NOT the prebake. The full Battle.net install pre-bake (also baking
+Battle.net.exe) remains blocked on the headless installer + is NOT pursued.
 
 ### 18.5 Live VM state (for the next chat)
 - **OVH L4 `591b387c-c079-47ef-b035-c2f5c2e79d69` @ `51.210.224.7` is still UP
