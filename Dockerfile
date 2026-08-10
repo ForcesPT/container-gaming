@@ -935,6 +935,29 @@ RUN set -e; \
     && test -s /usr/bin/umu-run \
     && python3 -c 'import umu.umu_consts'   # sanity: the launcher imports (do NOT run umu-run — it fetches the ~1-2 GB SLR on first exec)
 
+#    (f) Build-time Battle.net prefix prebake (STORES-PLAN §7 piece 2 / §10
+#        piece 2). Runs `umu-run winetricks` (corefonts win10 vcrun2022
+#        d3dcompiler_47) at BUILD time as the dpad user on Xvfb :9 (software GL,
+#        no GPU needed) → bakes the winetricks-initialized Wine prefix at
+#        /opt/dpadcloud/battlenet-prefix (+ the Battle.net.config + the downloaded
+#        Battle.net-Setup.exe + a .dpad-prebaked marker) + the Steam Linux
+#        Runtime at /home/dpad/.local/share/umu (~657 MB, reused at runtime → no
+#        first-run umu SLR download). The Blizzard installer itself is NOT run
+#        at build time (its Chromium GUI won't complete headless — validated:
+#        even --disable-gpu under Xvfb stalls before Battle.net.exe); the runtime
+#        battlenet-launch copies this prefix to the session WINEPREFIX on first
+#        launch + runs the installer there (user clicks through in the stream).
+#        Cuts the ~2-min winetricks + the SLR download from every first launch.
+#        Idempotent + best-effort (always exits 0; on failure the marker isn't
+#        written + battlenet-launch falls back to the full runtime winetricks).
+#        Placed late so entrypoint/script edits don't invalidate this expensive
+#        (~3-5 min: SLR download + winetricks) layer.
+COPY scripts/build-bootstrap-battlenet.sh /tmp/build-bootstrap-battlenet.sh
+RUN chmod +x /tmp/build-bootstrap-battlenet.sh \
+    && /tmp/build-bootstrap-battlenet.sh \
+    && rm -f /tmp/build-bootstrap-battlenet.sh \
+    && chown -R ${USERNAME}:${USERNAME} /opt/dpadcloud/battlenet-prefix ${HOME}/.local/share/umu 2>/dev/null || true
+
 EXPOSE 16100/tcp
 # 3478 (coturn TURN) opt-in via -p 3478:3478 at launch. No 8080/47989/47990/41641.
 USER root
