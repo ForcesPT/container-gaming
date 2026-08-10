@@ -205,8 +205,17 @@ fi
 # Pick the launch exe: prefer Battle.net Launcher.exe (Lutris standard); fall
 # back to Battle.net.exe (no space) if only that is present.
 if [ -f "$BN_INST" ]; then EXE="$BN_EXE"; else EXE="$BN_EXE_ALT"; fi
+# Battle.net is a Chromium/CEF app. Under Wine/Proton + Xwayland the CEF GPU
+# present path white-screens (the window shows content only on hover-damage —
+# render works, the surface isn't continuously presented; the SLR's
+# libnvidia-egl-wayland also can't find libwayland-server.so.0). Force CEF
+# software compositing with --disable-gpu + --in-process-gpu (the launcher UI
+# is light; installed GAMES spawn separately under their own Proton, unaffected).
+# Env-overridable via DPAD_BATTLENET_CEF_ARGS (e.g. '' to disable, or
+# PROTON_ENABLE_WAYLAND=1 + the GE-Proton11-2 wine-wayland fix path instead).
+BN_CEF_ARGS="${DPAD_BATTLENET_CEF_ARGS:---disable-gpu --in-process-gpu}"
 # Battle.net is single-instance: if the installer auto-launched it, this exec
 # just focuses the existing window + the second process exits; otherwise it
 # starts the launcher fresh. Either way the user lands on the Battle.net login.
-echo "[battlenet-launch] launching $EXE under umu/SLR" >> "$LOG"
-exec "$UMU_RUN" "$EXE"
+echo "[battlenet-launch] launching $EXE under umu/SLR (cef_args=$BN_CEF_ARGS)" >> "$LOG"
+exec "$UMU_RUN" "$EXE" $BN_CEF_ARGS
