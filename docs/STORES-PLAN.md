@@ -748,8 +748,9 @@ Battle.net card as available; clicking it spawned `battlenet-launch`.
 
 ### 18.4 ✅ DONE (code, 2026-08-10) — the umu-launcher pivot (§10 piece 1c)
 
-> **Landed in `container-gaming` `main` (uncommitted on the build host pending
-> the image rebuild + push):** the `battlenet-launch` wrapper is rewritten to use
+> **Landed in `container-gaming` `main` + built + pushed to Docker Hub as
+> `forcespt/dpadcloud-gaming:dpad-SteamOS` (digest `sha256:76e3cfaa22af…`,
+> supersedes the `sha256:166b76709e0c` wrapper-only image):** the `battlenet-launch` wrapper is rewritten to use
 > `umu-run` (STORE=battlenet, GAMEID=umu-battlenet, PROTONPATH=GE-Proton11-3)
 > instead of raw `wine`, + a new Dockerfile block (vast-vm stage, piece (e))
 > bakes `umu-launcher` 1.4.4 from the official Ubuntu Noble `.deb`. Validated by
@@ -758,9 +759,10 @@ Battle.net card as available; clicking it spawned `battlenet-launch`.
 > dri:i386 / libglx-mesa0:i386), `/usr/bin/umu-run` lands on PATH, `import
 > umu.umu_consts` works (cpython-3.12 = Noble's python3), + `umu-run -h` prints
 > help **without** fetching the ~1–2 GB SLR (so the build-time sanity check is
-> safe). The Dockerfile parses (`buildx --check`: no warnings). **NOT yet
-> live-validated** — needs the `:dpad-SteamOS` rebuild + push (the owner step)
-> + an OVH L4 session (none ready right now).
+> safe). The Dockerfile parses (`buildx --check`: no warnings). **Built +
+> pushed to Docker Hub as `:dpad-SteamOS` (digest `sha256:76e3cfaa22af…`) —
+> a fresh `docker pull` gets the umu bake. NOT yet live-validated** — needs an
+> OVH L4 session (none ready right now).
 
 What shipped (the design referenced above, now implemented):
 - **`scripts/battlenet-launch`** — `umu-run winetricks -q corefonts win10

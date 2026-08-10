@@ -58,8 +58,9 @@
 > first — same wine at build time would hit the same wow64 issue without umu).
 >
 > **✅ DONE (code, 2026-08-10) — the umu-launcher pivot (STORES-PLAN §10 piece
-> 1c) LANDED in `container-gaming` `main` (uncommitted on the build host pending
-> the image rebuild + push):** `scripts/battlenet-launch` is rewritten to use
+> 1c) LANDED in `container-gaming` `main` + **built + pushed to Docker Hub**
+> (digest `sha256:76e3cfaa22af…`, supersedes the `sha256:166b76709e0c` wrapper-only
+> image):** `scripts/battlenet-launch` is rewritten to use
 > `umu-run` (`STORE=battlenet GAMEID=umu-battlenet PROTONPATH=GE-Proton11-3`)
 > instead of raw `wine`, + a new Dockerfile block (vast-vm stage, piece (e))
 > bakes `umu-launcher` 1.4.4 from the official Ubuntu Noble `.deb`. Validated by
@@ -81,8 +82,9 @@
 > issue #156 + the Noble AppArmor userns restriction. One possible runtime extra:
 > if pressure-vessel hits `Can't mount proc on /newroot/proc`, add
 > `--security-opt systempaths=unconfined` to the `docker run` (the 4th bwrap-
-> nest flag). **NOT yet live-validated** — needs the `:dpad-SteamOS` rebuild +
-> push (owner step) + an OVH L4 session (none ready). The deb's `postinst`
+> nest flag). **Built + pushed to Docker Hub as `:dpad-SteamOS` (digest
+> `sha256:76e3cfaa22af…`) — a fresh `docker pull` gets the umu bake. NOT yet
+> live-validated** — needs an OVH L4 session (none ready). The deb's `postinst`
 > warns `systemctl: command not found` (no systemd in the image) — harmless;
 > the AppArmor profile symlink is laid down by the deb's data.tar regardless.
 > After umu works → the build-time prefix pre-bake (STORES-PLAN §7 piece 2) for
