@@ -53,46 +53,105 @@ else
 fi
 export WINE
 export WINEDEBUG=-all        # cut the wine spam (the install is chatty otherwise)
+# 2026 Battle.net-on-GE-Proton must-haves (NixOS Wiki, WineHQ AppDB, GamingOnLinux
+# Feb 2026). WINE_SIMULATE_WRITECOPY fixes the CEF write-copy mapping that blanks
+# the installer/login UI (Proton's wine honors it). locationapi=d disables the
+# Windows Location API DLL that stalls the Blizzard Update Agent init → the
+# "BLZBNTBNA00000005" agent-sleep / install-stall class. Together the recommended
+# fix for the installer producing no Battle.net dir.
+export WINE_SIMULATE_WRITECOPY=1
+export WINEDLLOVERRIDES="locationapi=d"
 echo "[battlenet-launch] wine=$WINE prefix=$PREFIX" >> "$LOG"
 
 # Battle.net paths. Windows paths inside the prefix are backslash-quoted.
-BN_INST="$PREFIX/drive_c/Program Files (x86)/Battle.net/Battle.net.exe"
-BN_EXE='C:\Program Files (x86)\Battle.net\Battle.net.exe'
-SETUP_URL='https://www.battle.net/download/getInstaller?installer=Battle.net-Setup.exe'
+# The Lutris install script (battlenet-standard) produces "Battle.net Launcher.exe"
+# (the main launcher); "Battle.net.exe" (no space) is also present + some setups
+# prefer it (lutris/docs: "It simply won't start -> change executable from
+# Battle.net Launcher.exe to Battle.net.exe"). We install-detect + launch the
+# Launcher, falling back to Battle.net.exe.
+BN_DIR="$PREFIX/drive_c/Program Files (x86)/Battle.net"
+BN_INST="$BN_DIR/Battle.net Launcher.exe"
+BN_INST_ALT="$BN_DIR/Battle.net.exe"
+BN_EXE='C:\Program Files (x86)\Battle.net\Battle.net Launcher.exe'
+BN_EXE_ALT='C:\Program Files (x86)\Battle.net\Battle.net.exe'
+# The canonical installer URL (Lutris battlenet-standard + the 2026 Ubuntu blog).
+# NOTE: the older getInstaller?installer=Battle.net-Setup.exe endpoint 400s from
+# the OVH/EU IP; getInstallerForGame?os=win&version=LIVE&gameProgram=BATTLENET_APP
+# is the working one. A browser User-Agent avoids CDN edge cases.
+SETUP_URL='https://www.battle.net/download/getInstallerForGame?os=win&version=LIVE&gameProgram=BATTLENET_APP'
+UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'
 SETUP_DIR="$PREFIX/drive_c/battlenet-setup"
 SETUP_EXE="$SETUP_DIR/Battle.net-Setup.exe"
 
+# installed = either launcher exe present
+bn_installed() { [ -f "$BN_INST" ] || [ -f "$BN_INST_ALT" ]; }
+
 # --- first-launch install (one-time per prefix) -------------------------------
-if [ ! -f "$BN_INST" ]; then
-    echo "[battlenet-launch] first launch — downloading + installing Battle.net (the installer window will appear in the stream; ~5-10 min, one-time)" | tee -a "$LOG" >&2
+if ! bn_installed; then
+    echo "[battlenet-launch] first launch — preparing the Wine prefix, then downloading + installing Battle.net (the installer window will appear in the stream; ~5-10 min, one-time)" | tee -a "$LOG" >&2
+
+    # Pre-config the prefix BEFORE the installer (mirrors the Lutris battlenet-
+    # standard script): wineboot -> corefonts + Win10 -> Battle.net.config (disable
+    # HW accel/sound/streaming). Without this the installer's CEF/agent misinits
+    # → the "Object moved"/agent-sleep failure that produces no Battle.net dir.
+    echo "[battlenet-launch] initializing prefix (wineboot)" >> "$LOG"
+    "$WINE" wineboot --init >>"$LOG" 2>&1 || echo "[battlenet-launch] wineboot exited $?" >> "$LOG"
+    # corefonts: the installer's CEF UI needs MS fonts (best-effort — needs
+    # cabextract; if it fails, the install still proceeds, fonts are polish).
+    # win10: sets the Windows version to Win10 (the regedit Battle.net's server
+    # comms + SSL/DNS handling require; the sudowheel 2026 guide's networking fix).
+    # vcrun2022 + d3dcompiler_47: the Blizzard Update Agent (Agent.exe) needs the
+    # VC++ 2022 runtime + the D3D compiler — without them Agent.exe fails to
+    # launch with error=2 (ERROR_FILE_NOT_FOUND on a missing DLL) → the installer
+    # BLZBNTBTS0000005C / BLZBNTAGT00000002 "Failed to communicate with Agent"
+    # stall (the full Lutris battlenet-standard verb set, STORES-PLAN §7).
+    echo "[battlenet-launch] winetricks corefonts win10 vcrun2022 d3dcompiler_47" >> "$LOG"
+    winetricks -q corefonts win10 vcrun2022 d3dcompiler_47 >>"$LOG" 2>&1 || echo "[battlenet-launch] winetricks exited $? (best-effort)" >> "$LOG"
+    # Pre-write the Battle.net config: disable HardwareAcceleration + Sound +
+    # Streaming (the launcher is Chromium/CEF — HW accel in a headless/XWayland
+    # prefix misrenders; sound/streaming are unused server-side). This is the
+    # linchpin Lutris step for headless/Proton installs.
+    bn_user="${USER:-dpad}"
+    bn_cfg_dir="$PREFIX/drive_c/users/$bn_user/AppData/Roaming/Battle.net"
+    mkdir -p "$bn_cfg_dir" 2>/dev/null || true
+    cat > "$bn_cfg_dir/Battle.net.config" <<'BNCFG'
+{"Client":{"GameLaunchWindowBehavior":"2","GameSearch":{"BackgroundSearch":"true"},"HardwareAcceleration":"false","Install":{"DownloadLimitNextPatchInBps":"0"},"Sound":{"Enabled":"false"},"Streaming":{"StreamingEnabled":"false"}},"Games":{"s2":{"AdditionalLaunchArguments":"-Displaymode 1"}}}
+BNCFG
+    chown -R "${USER:-dpad}:${USER:-dpad}" "$bn_cfg_dir" 2>/dev/null || true
+    echo "[battlenet-launch] wrote $bn_cfg_dir/Battle.net.config (HW accel/sound/streaming off)" >> "$LOG"
+
     mkdir -p "$SETUP_DIR" 2>/dev/null || true
-    if ! curl -fsSL -o "$SETUP_EXE" "$SETUP_URL" >>"$LOG" 2>&1; then
+    if ! curl -fsSL -A "$UA" -o "$SETUP_EXE" "$SETUP_URL" >>"$LOG" 2>&1; then
         echo "[battlenet-launch] FATAL: Battle.net-Setup download failed ($SETUP_URL)" | tee -a "$LOG" >&2
         exit 1
     fi
+    echo "[battlenet-launch] downloaded $(ls -l "$SETUP_EXE" 2>/dev/null | awk '{print $5}') bytes — running installer" >> "$LOG"
 
     # Run the Blizzard installer. It is a Chromium GUI: it opens a window on
     # DISPLAY (:0, sway's Xwayland), downloads the Battle.net client, + installs
     # it. The setup stub may hand off to a downloader + exit, or block until
-    # done — either way we then poll for Battle.net.exe to appear. Best-effort:
+    # done — either way we then poll for the launcher to appear. Best-effort:
     # a failed/half install leaves the prefix for inspection; re-launch retries.
     "$WINE" "$SETUP_EXE" >>"$LOG" 2>&1 || echo "[battlenet-launch] installer exited $?" >>"$LOG"
 
-    # Wait (up to 15 min) for the install to produce Battle.net.exe.
+    # Wait (up to 15 min) for the install to produce the launcher.
     i=0
-    while [ $i -lt 90 ] && [ ! -f "$BN_INST" ]; do
+    while [ $i -lt 90 ] && ! bn_installed; do
         sleep 10; i=$((i+1))
     done
     rm -rf "$SETUP_DIR" 2>/dev/null || true
 fi
 
-if [ ! -f "$BN_INST" ]; then
-    echo "[battlenet-launch] FATAL: Battle.net.exe not found after install ($BN_INST)" | tee -a "$LOG" >&2
+if ! bn_installed; then
+    echo "[battlenet-launch] FATAL: Battle.net launcher not found after install ($BN_INST / $BN_INST_ALT)" | tee -a "$LOG" >&2
     exit 1
 fi
 
+# Pick the launch exe: prefer Battle.net Launcher.exe (Lutris standard); fall
+# back to Battle.net.exe (no space) if only that is present.
+if [ -f "$BN_INST" ]; then EXE="$BN_EXE"; else EXE="$BN_EXE_ALT"; fi
 # Battle.net is single-instance: if the installer auto-launched it, this exec
 # just focuses the existing window + the second process exits; otherwise it
 # starts the launcher fresh. Either way the user lands on the Battle.net login.
-echo "[battlenet-launch] launching Battle.net.exe" >> "$LOG"
-exec "$WINE" "$BN_EXE"
+echo "[battlenet-launch] launching $EXE" >> "$LOG"
+exec "$WINE" "$EXE"
