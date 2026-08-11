@@ -17,7 +17,8 @@
 > compositor→Selkies path on a real OVH L4. See the **Current validated state**
 > banner below for what's proven vs. what's still open.
 >
-> **Current validated state (as of §16.7, 2026-08-09):**
+> **Current validated state (as of §16.7, 2026-08-09; Scaleway Paris added 2026-08-11):**
+> - **2026-08-11: Scaleway (Paris) VALIDATED end-to-end on the wayland path** (cloud `5297f1f` + container-gaming `de1f40f`). The `-580-server` → open swap is confirmed required for the compositor's EGL/GBM glamor too (with the swap skipped the compositor EGL-inits off the render node but crashes `driver (null)`/`failed to create dri2 screen` → segfault → "connection error"; after the swap: `GL Renderer: NVIDIA L4`, `EGL hardware-acceleration enabled`, `m=video:9`, sway + the dpad-launcher picker render, image + audio work). The swap is ~2 min (faster than the old 12-18 min estimate). The cloud default is now `DPAD_COMPOSITOR=wayland-display` + `DPAD_WAYLAND_CLIENT=sway` + `DPAD_STORE_SHELL=picker` (flipped 2026-08-11) — so every provider's new sessions boot the wayland path + the dpad-launcher (this was a real fix: the prior deployed default was `picker` + gamescope-headless, which CAN'T capture Electron → no video). The `start_cursor_monitor` latent bug (the §17.2 gap — selkies' own `start_cursor_monitor` derefs `self.xdisplay=None` at startup on the inverted boot) is FIXED (`de1f40f`, a bounded wait-for-`:0` guard in `dpad_input_patch.py`) + ships via the new `dpad_input_patch.py` bind-mount hotfix path (`vm-bootstrap` fetch + `dpad-launch-session` bind-mount — no rebuild). See `cloud/docs/STATUS.md` (the 2026-08-11 Scaleway note) for the full record + the UpCloud handoff.
 > - **Compositor + capture PROVEN** — `gst-wayland-display` runs off the DRM
 >   render node (no DRM master → N-on-N linchpin holds), EGL/GBM glamor works on
 >   the open R580, `waylanddisplaysrc` engages inside selkies' `webrtcbin` at
