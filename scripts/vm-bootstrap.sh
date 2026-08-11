@@ -116,17 +116,27 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # VARIANT issue, NOT a version issue (R580 LTS is the deliberate choice —
 # longest support to Aug 2028; R595 causes severe L4 flicker; R610 is NFB).
 # Scaleway's "Ubuntu Noble GPU OS 12 passthrough" image ships the PROPRIETARY
-# `nvidia-dkms-580-server` (580.126.20) → must swap to open. OVH's "Ubuntu 24.04
-# - NVIDIA - v580" image ships the PLAIN PROPRIETARY `nvidia-driver-580` /
-# `nvidia-dkms-580` (no -server, no -open) → ALSO must swap to open: the
-# gst-wayland-display compositor's EGL/GBM glamor needs the open variant
-# (WAYLAND-ARCHITECTURE.md §16.6 — the proprietary variant hits EGL 'dri2
-# screen' → gamescope-as-Wayland-client crashes), and the swap also unifies the
-# host driver so a warm VM is reusable across the gamescope-headless +
-# wayland-display compositors (N-to-N reuse). Gated on the proprietary variant
-# so UpCloud (already open after its 595->580 downgrade) is untouched. See
-# cloud/docs/STATUS.md §4 #42 + the Paris session note + cloud/docs/DEPLOY-
-# RUNBOOK.md §5 + WAYLAND-ARCHITECTURE.md §16.6.
+# `nvidia-dkms-580-server` (580.126.20) → must swap to open (the SERVER driver
+# build's EGL/GBM glamor black-screens gamescope-headless + crashes the
+# gst-wayland-display compositor). OVH's "Ubuntu 24.04 - NVIDIA - v580" image
+# ships the PLAIN DESKTOP PROPRIETARY `nvidia-driver-580` / `nvidia-dkms-580`
+# (no -server, no -open) → does NOT need the swap: the DESKTOP proprietary
+# build's render-node EGL/GBM glamor works for BOTH compositors — empirically
+# validated 2026-08-11 on an OVH GRA11 l4-90 (580.159.03, license: NVIDIA):
+#   - gamescope-headless + Steam -> frame mean 38.4/255 (content; the -server
+#     variant's black screen is 0.3/255)
+#   - wayland-display + sway + dpad-launcher picker -> the gst-wayland-display
+#     compositor EGL-inits off /dev/dri/renderD128 (the wayland-1 socket
+#     appears), sway stays up, the Electron picker renders + captures, + the
+#     umu/GE-Proton Battle.net prefix init runs.
+# So the swap is gated on the -580-server SERVER variant only; the plain desktop
+# proprietary variant (OVH) is kept as-is (no swap, no reboot — saves ~6-10 min
+# + a reboot on every OVH cold boot). UpCloud is already open post-595-downgrade.
+# (The earlier §16.6 "OVH plain must swap" claim was a misdiagnosis: the §16.1
+# gamescope-as-Wayland-client crash was reattributed in §16.2 to a Mesa
+# EGL-vendor override leak, not the proprietary variant.) See
+# cloud/docs/STATUS.md §4 #42 + cloud/docs/DEPLOY-RUNBOOK.md §5 +
+# WAYLAND-ARCHITECTURE.md §16.6 (the now-disproven OVH-plain-swap rationale).
 # NOTE: the script runs under `set -uo pipefail` (line ~61), so `grep -qE` in a
 # pipeline is a trap: grep -q exits on the first match → SIGPIPE kills the
 # upstream awk → pipefail propagates 141 → the function returns non-zero (false)
@@ -135,12 +145,15 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # `grep -E ... >/dev/null` reads ALL input (no early exit → no SIGPIPE) so the
 # pipeline exit is grep's real status (0=match) under pipefail.
 has_proprietary_580() {
-    # Proprietary (non-open) 580 installed? Two variants, both render EGL/GBM
-    # glamor unusable in headless gamescope (black screen, gamescope #255) AND
-    # in the gst-wayland-display compositor (EGL 'dri2 screen' crash, §16.6):
-    # - server: nvidia-*-580-server / libnvidia-*-580-server (Scaleway's image).
+    # Proprietary (non-open) 580 installed? Two variants, DIFFERENT behavior:
+    # - server: nvidia-*-580-server / libnvidia-*-580-server (Scaleway's image)
+    #   → the SERVER driver build's EGL/GBM glamor is unusable in headless
+    #   gamescope (black screen, gamescope #255, frame mean 0.3/255) AND crashes
+    #   the gst-wayland-display compositor (EGL 'dri2 screen', §16.6) → MUST swap.
     # - plain:  nvidia-(dkms|driver)-580 (OVH's "Ubuntu 24.04 - NVIDIA - v580";
-    #   no -server, no -open).
+    #   no -server, no -open) → the DESKTOP driver build's render-node EGL/GBM
+    #   glamor works for BOTH compositors (validated 2026-08-11, see the header
+    #   comment) → NO swap, keep the proprietary driver.
     # nvidia-utils-580 / nvidia-kernel-common-580 / libnvidia-*-580 are SHARED
     # with the -open variant — NOT matched for the plain case, or an already-
     # open host (nvidia-dkms-580-open installed) would falsely read as
@@ -239,19 +252,30 @@ ensure_driver_580() {
                     fi
                 else
                     # OVH's "Ubuntu 24.04 - NVIDIA - v580" image: the PLAIN
-                    # proprietary nvidia-driver-580 / nvidia-dkms-580 (no -server,
-                    # no -open). Unlike the -server variant, its metapackages have
-                    # clean Conflicts+Replaces to nvidia-driver-580-open /
-                    # nvidia-dkms-580-open, AND the userspace (libnvidia-*-580,
-                    # nvidia-utils-580, nvidia-kernel-common-580) is SHARED with
-                    # -open → `apt install nvidia-driver-580-open` resolves it
-                    # alone (removes the 2 conflicting metapackages, keeps the
-                    # shared libs). No purge needed — confirmed live on OVH (§16.1:
-                    # a manual `apt install nvidia-driver-580-open` loaded the open
-                    # module, license Dual MIT/GPL). Purging here would risk a
-                    # cascade (removing the shared libs) for no benefit.
-                    log "driver is 580 PROPRIETARY (plain nvidia-driver-580/nvidia-dkms-580, e.g. OVH v580 image) — EGL/GBM glamor fails in headless gamescope + the gst-wayland-display compositor (§16.6); swapping to nvidia-driver-580-open (apt resolves via Conflicts+Replaces; shared libnvidia-*-580 / nvidia-utils-580 / nvidia-kernel-common-580 stay — no purge)"
+                    # DESKTOP proprietary nvidia-driver-580 / nvidia-dkms-580
+                    # (no -server, no -open). Unlike the -580-server SERVER build
+                    # (Scaleway, whose EGL/GBM glamor black-screens gamescope-
+                    # headless + crashes the compositor), the DESKTOP proprietary
+                    # build's render-node EGL/GBM glamor works for BOTH
+                    # compositors — empirically validated 2026-08-11 on an OVH
+                    # GRA11 l4-90 (580.159.03, license: NVIDIA):
+                    #   - gamescope-headless + Steam  -> frame mean 38.4/255
+                    #     (content; the -server variant's black screen is 0.3/255)
+                    #   - wayland-display + sway + dpad-launcher picker -> the
+                    #     gst-wayland-display compositor EGL-inits off
+                    #     /dev/dri/renderD128 (the wayland-1 socket appears),
+                    #     sway stays up, the Electron picker renders + captures,
+                    #     + umu/GE-Proton Battle.net prefix init runs.
+                    # No swap, no reboot needed → KEEP the proprietary driver
+                    # (saves ~6-10 min + a reboot on every OVH cold boot). The
+                    # §16.6 "OVH plain must swap" claim was a misdiagnosis: the
+                    # §16.1 gamescope-as-client crash was reattributed in §16.2
+                    # to a Mesa EGL-vendor override leak, not the variant.
+                    log "driver is 580 PROPRIETARY (plain desktop nvidia-driver-580, e.g. OVH v580 image) — render-node EGL/GBM glamor works for both compositors (validated 2026-08-11 on OVH l4-90); keeping the proprietary driver (no swap, no reboot)"
+                    return 0
                 fi
+                # Only the -580-server (Scaleway) branch reaches here — it purged
+                # above + now swaps to the open variant + reboots.
                 install_open_580_and_reboot || return 1
                 return 1   # unreachable (install_open_580_and_reboot reboots or returns 1)
             fi
