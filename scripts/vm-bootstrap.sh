@@ -710,6 +710,20 @@ ensure_image() {
         rm -f /opt/dpadcloud/extract-nvrtc.sh 2>/dev/null || true
         log "extract-nvrtc.sh fetch failed — entrypoint will use the image's baked script"
     fi
+    # Same hotfix path for dpad_input_patch.py (auto-loaded at Python startup via
+    # dpad_input_patch.pth in site-packages; the §17.2 lazy-XTest input open +
+    # the start_cursor_monitor guard live here). Lets the cursor-monitor + lazy-
+    # input fixes ship to EXISTING (pre-bake) images without an image rebuild.
+    # Best-effort: if the fetch fails, the image's baked patch runs (on the
+    # wayland-display path the cursor monitor crashes until the rebuild bakes
+    # the guard — the stream still works, it's a logged thread exception).
+    if curl -fsSL https://raw.githubusercontent.com/ForcesPT/container-gaming/main/scripts/dpad_input_patch.py \
+        -o /opt/dpadcloud/dpad_input_patch.py 2>/dev/null; then
+        log "dpad_input_patch.py fetched to /opt/dpadcloud (bind-mountable hotfix path)"
+    else
+        rm -f /opt/dpadcloud/dpad_input_patch.py 2>/dev/null || true
+        log "dpad_input_patch.py fetch failed — launches use the image's baked patch"
+    fi
 }
 
 # -----------------------------------------------------------------------------

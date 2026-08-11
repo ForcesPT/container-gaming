@@ -27,6 +27,7 @@
 
 import os
 import sys
+import time
 
 def _log(msg):
     print("dpad_input: " + msg, file=sys.stderr, flush=True)
@@ -207,11 +208,37 @@ def _patch():
             pass
         return _orig_on_message(self, msg)
 
+    # --- start_cursor_monitor guard (2026-08-11, wayland-display path) --------
+    # selkies' own start_cursor_monitor runs at startup (in a background thread
+    # via run_in_executor) + dereferences self.xdisplay.has_extension('XFIXES').
+    # On the wayland-display path selkies starts BEFORE sway's Xwayland :0 is up,
+    # so self.xdisplay is None (the lazy _get_dpy returns None until :0 appears)
+    # -> AttributeError: 'NoneType' object has no attribute 'has_extension' (a
+    # logged thread exception that does NOT kill selkies, but leaves the server-
+    # side cursor monitor dead on the wayland path). Wait for :0 to appear
+    # (bounded, so a no-peer session doesn't block the thread forever), then run
+    # the real cursor monitor. Mirrors the send_* lazy-retry pattern. The gamescope
+    # path (:0 already up at selkies start) resolves immediately -> no change.
+    _orig_cursor_monitor = W.start_cursor_monitor
+    def start_cursor_monitor(self):
+        for _ in range(180):  # up to ~3 min
+            d = _get_dpy() or getattr(self, "xdisplay", None)
+            if d is not None:
+                self.xdisplay = d
+                break
+            time.sleep(1)
+        if getattr(self, "xdisplay", None) is None:
+            _log("start_cursor_monitor: %s never came up in 3 min - skipping cursor monitor" % dpy)
+            return
+        _log("start_cursor_monitor: %s up - starting cursor monitor" % dpy)
+        return _orig_cursor_monitor(self)
+
     for cls in classes.values():
         cls.connect = connect
         cls.send_x11_keypress = send_x11_keypress
         cls.send_mouse = send_mouse
         cls.on_message = on_message
+        cls.start_cursor_monitor = start_cursor_monitor
 
     # Try an initial open (succeeds on the gamescope path where :0 is already up;
     # no-op on the wayland-display path until sway launches). Either way the

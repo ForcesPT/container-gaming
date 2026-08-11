@@ -271,6 +271,15 @@ launch() {
     # (the MARK check short-circuits).
     [ -f /opt/dpadcloud/extract-nvrtc.sh ] \
         && entry_mount+=( -v /opt/dpadcloud/extract-nvrtc.sh:/opt/dpadcloud/extract-nvrtc.sh:ro )
+    # Same hotfix path for dpad_input_patch.py (auto-loaded at Python startup via
+    # dpad_input_patch.pth in site-packages; vm-bootstrap fetches it to
+    # /opt/dpadcloud/dpad_input_patch.py). Lets the §17.2 lazy-XTest input open
+    # + the start_cursor_monitor guard ship to EXISTING (pre-bake) images
+    # without an image rebuild. Overlays the site-packages copy so the fixed
+    # patch runs instead of the image's baked (pre-guard) one. A no-op on a
+    # rebuilt image (the baked copy already has the guard).
+    [ -f /opt/dpadcloud/dpad_input_patch.py ] \
+        && entry_mount+=( -v /opt/dpadcloud/dpad_input_patch.py:/usr/local/lib/python3.12/dist-packages/dpad_input_patch.py:ro )
 
     # DPAD_COMPOSITOR=wayland-display needs raw /dev/dri access: the gst-wayland-
     # display compositor opens the DRM render node directly via
