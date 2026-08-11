@@ -197,6 +197,18 @@ install_open_580_and_reboot() {
 }
 
 ensure_driver_580() {
+    # PROBE knob (default off → no regression): skip the driver swap/downgrade
+    # entirely so the SHIPPED driver stays. Used to test whether a given shipped
+    # driver works for the compositor's EGL/GBM glamor without the swap — e.g.
+    # UpCloud's 595 (severe L4 flicker on gamescope-headless, but does it crash
+    # the gst-wayland-display compositor's EGL init like the -580-server variant
+    # did, or just flicker?). Set DPAD_SKIP_DRIVER_SWAP=1 in /etc/environment
+    # before `vm-bootstrap.sh install`. The shipped driver is left untouched
+    # (no apt install, no DKMS build, no reboot) → the fastest possible boot.
+    if [ "${DPAD_SKIP_DRIVER_SWAP:-0}" = "1" ]; then
+        log "DPAD_SKIP_DRIVER_SWAP=1 — skipping the driver swap/downgrade (PROBE; the shipped driver stays)"
+        return 0
+    fi
     local drv
     drv="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | tr -d '[:space:]')"
     log "NVIDIA driver = ${drv:-?} (need 580.x on the L4 pool)"
@@ -345,6 +357,17 @@ EOF
 # AND for the DFP Xorg / DRM-master path. Steam UI needs KMS either way.)
 # -----------------------------------------------------------------------------
 ensure_modeset() {
+    # PROBE knob (default off → no regression): skip the modeset=Y enforce so
+    # the SHIPPED modeset setting stays. Paired with DPAD_SKIP_DRIVER_SWAP for
+    # driver probes where you want zero reboots (the modeset reboot is the one
+    # unavoidable cost on images that ship modeset=0, e.g. Hyperstack R570).
+    # WARNING: gamescope --backend headless + the gst-wayland-display compositor
+    # both need modeset=Y → skipping it is only for isolating a driver question,
+    # not for a real session.
+    if [ "${DPAD_SKIP_MODESET:-0}" = "1" ]; then
+        log "DPAD_SKIP_MODESET=1 — skipping the modeset=Y enforce (PROBE; the shipped modeset setting stays)"
+        return 0
+    fi
     local cur
     cur="$(cat /sys/module/nvidia_drm/parameters/modeset 2>/dev/null || true)"
     log "nvidia_drm.modeset = ${cur:-?} (need Y)"
