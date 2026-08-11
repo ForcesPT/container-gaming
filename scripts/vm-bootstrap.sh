@@ -470,12 +470,31 @@ ensure_docker_xfs_quota() {
     # for the OS + Docker binaries + XFS metadata; the rest is the Docker store
     # (the image + N capped container writable layers). Sparse, so it only
     # consumes boot-disk space as Docker writes.
-    local root_gb xfs_gb
+    local root_gb xfs_gb headroom
     root_gb=$(df --output=size / | awk 'NR==2{print int($1/1024/1024)}')
-    [ "${root_gb:-0}" -lt 120 ] 2>/dev/null \
-        && { err "boot disk too small for XFS Docker store (${root_gb:-?} GB)"; return 1; }
-    xfs_gb=$(( root_gb - 60 ))
-    log "setting up Docker storage on XFS pquota: ${img} (${xfs_gb} GB on the boot disk)"
+    # Minimum root disk to hold the OS + the Docker image (~9 GB) + a small
+    # container writable layer. 30 GB is the floor (the :dpad-SteamOS image alone
+    # is ~8.7 GB) — below this we FATAL (can't even fit the image). 30..120 GB
+    # roots (e.g. Hyperstack's n3-L40x1 root = ~95 GB, which failed the old 120 GB
+    # floor with "boot disk too small" + blocked the whole bootstrap) now proceed
+    # with a smaller XFS. The loopback is sparse; the --storage-opt 200 GB cap is
+    # still enforced by XFS pquota, but the effective cap is the XFS filesystem
+    # size (the backing) — fine for persistent-volume users whose games live on
+    # the volume; ephemeral-only users get a smaller usable cap. The full 725 GB
+    # ephemeral-disk support (mkfs the secondary ephemeral block device + mount
+    # /var/lib/docker on it directly) is a tested follow-up — needs a live VM to
+    # verify the device-detection filters (no-fs + unmounted + not-boot + whole-
+    # disk) before shipping, to avoid mkfs'ing the wrong device.
+    [ "${root_gb:-0}" -lt 30 ] 2>/dev/null \
+        && { err "boot disk too small for XFS Docker store (${root_gb:-?} GB; need >=30 GB to hold the image)"; return 1; }
+    # Headroom for the OS + Docker binaries + XFS metadata. 60 GB on large roots
+    # (preserves the existing sizing on OVH 387 GB / MassedCompute 625 GB); shrink
+    # to 12 GB on small roots (<200 GB, e.g. Hyperstack 95 GB) so xfs_gb stays
+    # positive + usable (95 - 12 = 83 GB XFS, ~74 GB usable after the image).
+    headroom=60
+    [ "$root_gb" -lt 200 ] 2>/dev/null && headroom=12
+    xfs_gb=$(( root_gb - headroom ))
+    log "setting up Docker storage on XFS pquota: ${img} (${xfs_gb} GB on the boot disk, root=${root_gb} GB, headroom=${headroom} GB)"
 
     systemctl stop docker 2>/dev/null || true
     # Preserve any existing Docker state (usually just an init scaffold — the
