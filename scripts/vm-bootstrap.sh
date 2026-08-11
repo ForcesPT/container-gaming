@@ -350,6 +350,25 @@ ensure_modeset() {
     log "nvidia_drm.modeset = ${cur:-?} (need Y)"
     [ "$cur" = "Y" ] && { log "modeset already Y"; return 0; }
 
+    # Some images ship a CONFLICTING nvidia-drm modeset=0 in another modprobe.d
+    # file (e.g. Hyperstack's R570 image: /etc/modprobe.d/nvidia-graphics-drivers-
+    # kms.conf has "options nvidia-drm modeset=0"). modprobe.d files are processed
+    # in lexical order + the LAST option wins → "nvidia-graphics-..." (modeset=0)
+    # is processed AFTER "nvidia-drm-modeset.conf" (modeset=Y) → it OVERRIDES our
+    # modeset=Y on boot. With modeset=0 winning, the reboot the function below
+    # triggers never applies modeset=Y → the oneshot re-runs post-reboot, sees
+    # modeset still N, + reboots again → a ~30s reboot loop (the VM never reaches
+    # vm-ready). Neutralize ANY nvidia_drm/nvidia-drm modeset=0 in modprobe.d so
+    # the modeset=Y we write below is the effective setting (validated on Hyperstack
+    # 2026-08-11, R570 image nvidia-graphics-drivers-kms.conf modeset=0).
+    local f
+    for f in /etc/modprobe.d/*.conf; do
+        [ -f "$f" ] || continue
+        grep -qE 'nvidia[_-]drm[[:space:]]+modeset=0' "$f" 2>/dev/null || continue
+        sed -i -E 's/(nvidia[_-]drm[[:space:]]+modeset=)0/\11/g' "$f"
+        log "neutralized nvidia_drm modeset=0 in $f (rewrote to modeset=1)"
+    done
+
     echo 'options nvidia_drm modeset=Y' > /etc/modprobe.d/nvidia-drm-modeset.conf
     update-initramfs -u >/dev/null 2>&1 || true
 
