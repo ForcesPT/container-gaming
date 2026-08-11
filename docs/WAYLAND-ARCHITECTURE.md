@@ -1726,6 +1726,27 @@ cd dpadplay/container-gaming && git pull
 
 ### 16.6 ✅ FIXED — `ensure_driver_580` now swaps OVH's plain proprietary 580 too
 
+> **⚠️ SUPERSEDED 2026-08-11 — the OVH plain-proprietary swap is REVERTED. It
+> was never needed.** Empirically validated on a fresh OVH GRA11 l4-90
+> (580.159.03, plain desktop `nvidia-driver-580`, license: NVIDIA): the DESKTOP
+> proprietary build's render-node EGL/GBM glamor works for BOTH compositors —
+> gamescope-headless + Steam (frame mean 38.4/255) AND wayland-display + sway +
+> dpad-launcher picker (compositor EGL-inits off /dev/dri/renderD128, sway
+> stable, picker renders + captures, umu/Battle.net prefix init). The §16.6
+> rationale below ("OVH plain must swap for the compositor's EGL/GBM glamor")
+> was a MISDIAGNOSIS — it inferred the compositor need from the §16.1 gamescope-
+> as-client crash, which §16.2 reattributed to a Mesa EGL-vendor override leak,
+> NOT the proprietary variant. The real distinction is the driver BUILD:
+> `nvidia-dkms-580-server` (Scaleway, SERVER build) genuinely black-screens
+> (mean 0.3/255) + crashes the compositor → must swap; `nvidia-driver-580`
+> (OVH, DESKTOP build) works as-is → no swap. **Fix shipped (`c00784a`):**
+> `ensure_driver_580` keeps the plain desktop proprietary 580 (return 0, no swap,
+> no reboot); only the `-580-server` branch still swaps. **OVH cold boot
+> ~12-18 min → ~6.2 min, no reboot.** The §16.6 prose below is kept as the
+> (now-reverted) design record — read it with this correction. The Hyperstack
+> R570-open finding (same session) confirms: an OPEN driver on a different
+> provider also needs no swap — the `*` case keeps R570.
+
 OVH's `Ubuntu 24.04 - NVIDIA - v580` ships `nvidia-dkms-580` + `nvidia-driver-580`
 (the plain proprietary variant, `license: NVIDIA` — no `-server`, no `-open`).
 Previously `vm-bootstrap.sh`'s `has_proprietary_580` gate matched `-580-server`

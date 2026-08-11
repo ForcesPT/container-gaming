@@ -138,6 +138,57 @@
 > wrong URL) is superseded.** The live test VM (still up, ~€0.75/hr) has the fixed
 > wrapper patched in via `docker cp` (a re-provision would pull the new image).
 >
+> **2026-08-11 session — per-provider cold-boot optimization (OVH + Hyperstack)
+> + 3 vm-bootstrap fixes shipped. The OVH proprietary-580 swap is SKIPPED
+> (it was never needed); Hyperstack's 3 stacked bootstrap bugs are fixed.**
+>
+> - **OVH: the plain DESKTOP proprietary `nvidia-driver-580` works for BOTH
+>   compositors — the swap is skipped.** Empirically validated on a fresh GRA11
+>   l4-90 (580.159.03, license: NVIDIA): gamescope-headless + Steam (frame mean
+>   38.4/255) AND wayland-display + sway + dpad-launcher picker (compositor
+>   EGL-inits off /dev/dri/renderD128, sway stable, picker renders + captures,
+>   umu/Battle.net prefix init runs). The §5 note below ("gamescope does NOT
+>   support the NVIDIA proprietary driver") + the §16.6 "OVH plain must swap"
+>   claim are DISPROVEN for the DESKTOP build — they're true ONLY for the
+>   `-580-server` SERVER build (Scaleway, mean 0.3/255). The real distinction is
+>   the driver BUILD, not proprietary-vs-open per se. Fix shipped (`c00784a`):
+>   `ensure_driver_580` keeps the plain desktop proprietary 580 (return 0, no
+>   swap, no reboot); only the `-580-server` branch still swaps. **OVH cold boot
+>   ~12-18 min → ~6.2 min, no reboot.**
+> - **Hyperstack: 3 fixes shipped + R570-open works for both compositors.**
+>   R570-open (570.195.03, `Dual MIT/GPL`) needs NO swap (the `*` case keeps it);
+>   validated gamescope-headless (mean 38.6/255) + wayland+picker (image+audio).
+>   Three stacked bugs had broken Hyperstack in production (never reached
+>   vm-ready / the worker's getVm crashed):
+>   1. **Modeset reboot loop** (`6028238`) — the R570 image ships
+>      `nvidia-graphics-drivers-kms.conf` with `modeset=0`, overriding our
+>      `modeset=Y` on boot (lexical order) → ~30s reboot loop. Fix: `ensure_modeset`
+>      neutralizes any `nvidia_drm modeset=0` in modprobe.d + update-initramfs.
+>   2. **`boot disk too small for XFS Docker store (95 GB)` FATAL** (`fcab859`) —
+>      the n3-L40x1 root is ~95 GB < the old 120 GB floor. Fix: floor 120→30 GB +
+>      adaptive headroom (12 GB on roots <200 GB) → 83 GB XFS, cap enforces.
+>   3. (cloud-side) **Hyperstack adapter `getVm` crashed on the `{instance:...}`
+>      response shape** (cloud `911162f`, deployed) — read `r.instance` first.
+>      Also the adapter `sshUsername:'root'` is wrong (the R570 image forces
+>      `ubuntu`) — a follow-up adapter fix.
+>   - **Hyperstack cold boot now ~4-5 min** (build ~seconds + one modeset reboot
+>     ~1.5 min + bootstrap ~130s + container ~50s). The modeset reboot is the one
+>     unavoidable Hyperstack cost (the image ships modeset=0).
+> - **Snapshot/custom-image route: REJECTED on OVH (net loss).** A 29.44 GB
+>   private snapshot booted in ~11+ min vs the curated v580 image's ~3.5 min (OVH
+>   copies the private snapshot; the curated public image is pre-staged). The
+>   ~80s bootstrap savings is dwarfed by the ~7+ min build increase. The snapshot
+>   route only wins where build-from-snapshot is fast relative to the bootstrap
+>   it saves — UNTESTED on UpCloud/Scaleway (where the required swap/downgrade is
+>   ~6-10 min, so a custom image with open-580 baked could still win).
+> - **Shipped this session:** container-gaming `c00784a` (OVH swap-skip),
+>   `6028238` (modeset-loop), `fcab859` (XFS floor/headroom); cloud `911162f`
+>   (hyperstack getVm) + deployed. All vm-bootstrap fixes ship via the GitHub-fetch
+>   (no image rebuild).
+> - **Next (new chat):** MassedCompute (image 184 driver probe), Scaleway
+>   (`-580-server` swap required — custom-image lever), UpCloud (595 downgrade
+>   required — custom-image with open-580 baked).
+>
 > **2026-08-10 session — the dpad-launcher Electron store-picker shell replaces
 > lutris-gamepad-ui as the session shell (`DPAD_STORE_SHELL=picker`).** Lutris is
 > a *library aggregator* (it imports installed games via each store's
@@ -407,7 +458,17 @@ reverts to the `:2` bridge fallback.
   `cloud/docs/DEPLOY-RUNBOOK.md`. **Severe whole-frame flicker on driver
   595** is a different bug — the host must downgrade 595 → R580 LTS (see §6 #1).
 - **⚠️ NEW 2026-08-05 — headless gamescope renders a BLACK screen on the
-  PROPRIETARY NVIDIA driver (any version); the OPEN variant is required.**
+  PROPRIETARY NVIDIA **`-580-server`** driver (the SERVER build); the OPEN variant
+  is required.** ⚠️ **SUPERSEDED 2026-08-11 for the PLAIN DESKTOP proprietary
+  build** (`nvidia-driver-580`, OVH) — the DESKTOP build's render-node EGL/GBM
+  glamor works for BOTH compositors (validated: gamescope-headless mean 38.4/255
+  + wayland-display + picker on OVH l4-90, 580.159.03, license: NVIDIA). The
+  black screen is specific to the `-580-server` SERVER build (Scaleway), NOT the
+  plain desktop build (OVH). The real distinction is the driver BUILD, not
+  proprietary-vs-open per se. `ensure_driver_580` now swaps only the `-580-server`
+  variant; the plain desktop proprietary 580 is kept (commit `c00784a`). The
+  original §5 note below is kept as the Scaleway-`-server` record — read it with
+  this correction.
   Confirmed on Scaleway Paris L4 (proprietary `580.126.20`, `nvidia-dkms-580-
   server`). Symptom: `vulkan: vkGetPhysicalDeviceFormatProperties2 returned zero
   modifiers for DRM format 0x38344241/0x38344258` → `libEGL warning: egl:
