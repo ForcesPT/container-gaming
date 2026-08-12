@@ -207,22 +207,30 @@ BNCFG
         echo "[battlenet-launch] prebaked prefix present — skipping winetricks + config + Setup download; running the installer" >> "$LOG"
     fi
 
-    # Run the Blizzard installer through umu-run (GE-Proton inside the SLR).
-    # The 32-bit Agent.exe now launches under Valve's tested wow64 → fixes the
-    # "Failed to communicate with Agent" stall. The installer is a Chromium
-    # GUI: it opens a window on DISPLAY (:0, sway's Xwayland), downloads the
-    # Battle.net client, + installs it. The setup stub may hand off to a
-    # downloader + exit, or block until done — either way we then poll for the
-    # launcher to appear. Best-effort: a failed/half install leaves the prefix
-    # for inspection; re-launch retries.
-    "$UMU_RUN" "$SETUP_EXE" >>"$LOG" 2>&1 || echo "[battlenet-launch] installer exited $?" >> "$LOG"
+    # If the prebaked prefix already shipped a FULLY installed Battle.net (the
+    # build-time silent install → Battle.net Launcher.exe / Battle.net.exe
+    # present in the copied prefix), skip the installer entirely + go straight
+    # to launching it — first click → login, no installer window at all.
+    if bn_installed; then
+        echo "[battlenet-launch] Battle.net already installed in the prebaked prefix — skipping the installer; launching directly" >> "$LOG"
+    else
+        # Run the Blizzard installer through umu-run (GE-Proton inside the SLR).
+        # The 32-bit Agent.exe now launches under Valve's tested wow64 → fixes the
+        # "Failed to communicate with Agent" stall. The installer is a Chromium
+        # GUI: it opens a window on DISPLAY (:0, sway's Xwayland), downloads the
+        # Battle.net client, + installs it. The setup stub may hand off to a
+        # downloader + exit, or block until done — either way we then poll for the
+        # launcher to appear. Best-effort: a failed/half install leaves the prefix
+        # for inspection; re-launch retries.
+        "$UMU_RUN" "$SETUP_EXE" >>"$LOG" 2>&1 || echo "[battlenet-launch] installer exited $?" >> "$LOG"
 
-    # Wait (up to 15 min) for the install to produce the launcher.
-    i=0
-    while [ $i -lt 90 ] && ! bn_installed; do
-        sleep 10; i=$((i+1))
-    done
-    rm -rf "$SETUP_DIR" 2>/dev/null || true
+        # Wait (up to 15 min) for the install to produce the launcher.
+        i=0
+        while [ $i -lt 90 ] && ! bn_installed; do
+            sleep 10; i=$((i+1))
+        done
+        rm -rf "$SETUP_DIR" 2>/dev/null || true
+    fi
 fi
 
 if ! bn_installed; then

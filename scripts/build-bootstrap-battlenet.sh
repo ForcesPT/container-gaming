@@ -16,11 +16,28 @@
 # WINEPREFIX on first launch + runs the installer there (with the user).
 #
 # Runs as the dpad user (umu-run + the SLR must land in ~dpad, matching the
-# runtime env) on Xvfb :9 + mesa/llvmpipe (SOFTWARE GL — NO GPU needed, works
-# in a plain `docker build`). Idempotent + best-effort: always exits 0; if the
-# winetricks/SLR download fails (flaky network), the build still succeeds +
-# battlenet-launch falls back to the full runtime winetricks (the prebaked
-# marker is only written on success).
+# runtime env) on Xvfb :9 + mesa/llvmpipe (SOFTWARE GL — NO GPU needed).
+#
+# ⚠️ BAKE METHOD (2026-08-12): this does NOT work under a standard buildkit
+# `docker build` — wineserver/wine crash in buildkit's user-namespace sandbox
+# (the Dockerfile `RUN --security=insecure` entitlement does NOT fix it; umu's
+# pressure-vessel→bwrap needs full privileges). Bake via the privileged-
+# container + commit workflow:
+#   1. docker run --privileged --entrypoint /bin/bash <img> /tmp/this-script
+#      (the script self-re-execs as dpad; Xvfb :9; runs umu-run winetricks + the
+#      Battle.net silent-install below).
+#   2. docker commit -c 'ENTRYPOINT ["/opt/dpadcloud/entrypoint.sh"]' \
+#                     -c 'CMD ["/bin/bash"]' <container> <img>   (RESET the
+#      entrypoint — a bare `docker commit` bakes the `--entrypoint /bin/bash`
+#      override used to run this script, breaking the image's boot).
+#   3. A small FROM-<committed-img> fixup bakes the latest scripts/battlenet-launch
+#      (COPY + chmod + symlink) so the runtime wrapper has the prebake-copy /
+#      skip-installer logic.
+# Idempotent + best-effort: always exits 0; if the winetricks/SLR download or
+# the silent-install fails (flaky network), the build still succeeds +
+# battlenet-launch falls back to the full runtime winetricks/installer (the
+# prebaked marker is only written on winetricks+Setup success; the silent
+# install is a best-effort bonus on top).
 #
 # Bakes:
 #   /opt/dpadcloud/battlenet-prefix         the winetricks-initialized Wine prefix
@@ -80,15 +97,41 @@ if [ "$(id -u)" -ne 0 ]; then
       > "$bn_cfg_dir/Battle.net.config"
     echo "[*] wrote $bn_cfg_dir/Battle.net.config"
 
-    # Download the Blizzard installer into the prefix (do NOT run it — it needs
-    # interaction; the runtime wrapper runs it after copying the prefix). The
-    # getInstallerForGame endpoint (the working one from the live test).
+    # Download the Blizzard installer into the prefix, then SILENT-install
+    # Battle.net (Lever 2): `Battle.net-Setup.exe --lang=enUS
+    # --installpath=...` auto-installs with NO GUI (no clicks, no real display
+    # needed — Xvfb suffices; validated 2026-08-12). The runtime wrapper then
+    # detects the installed launcher + skips the installer entirely → first
+    # click goes straight to login. Best-effort: a silent-install failure
+    # leaves the prefix with winetricks + Setup.exe (Lever 1) — the runtime
+    # wrapper runs the installer then.
     setup_dir="${PREFIX_SRC}/drive_c/battlenet-setup"
     mkdir -p "$setup_dir" 2>/dev/null || true
     if curl -fsSL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36" \
         -o "$setup_dir/Battle.net-Setup.exe" \
         "https://www.battle.net/download/getInstallerForGame?os=win&version=LIVE&gameProgram=BATTLENET_APP" 2>/dev/null; then
       echo "[*] downloaded Battle.net-Setup.exe ($(ls -l "$setup_dir/Battle.net-Setup.exe" 2>/dev/null | awk '{print $5}') bytes)"
+      # Silent-install under umu/GE-Proton. The installer hands off to the Agent
+      # downloader, so background it + poll for the launcher exe (~2-3 min).
+      bn_dir="${PREFIX_SRC}/drive_c/Program Files (x86)/Battle.net"
+      if command -v umu-run >/dev/null 2>&1; then
+        echo "[*] silent-installing Battle.net (umu-run Battle.net-Setup.exe --lang=enUS --installpath=...)..."
+        umu-run "$setup_dir/Battle.net-Setup.exe" --lang=enUS --installpath='C:\Program Files (x86)\Battle.net' >/tmp/bnet-silent-build.log 2>&1 &
+        si_pid=$!
+        si=0
+        while [ "$si" -lt 36 ] && [ ! -f "$bn_dir/Battle.net Launcher.exe" ] && [ ! -f "$bn_dir/Battle.net.exe" ]; do
+          sleep 10; si=$((si+1))
+          kill -0 "$si_pid" 2>/dev/null || break
+        done
+        if [ -f "$bn_dir/Battle.net Launcher.exe" ] || [ -f "$bn_dir/Battle.net.exe" ]; then
+          echo "[*] Battle.net silent-installed OK (launcher exe present — runtime will skip the installer)"
+        else
+          echo "[*] WARNING: Battle.net silent-install did not produce the launcher (Lever 1 prebake only; runtime will run the installer)"
+        fi
+        pkill -9 -u "${USERNAME}" -f 'Battle.net|Agent.exe|wineserver|umu-run' 2>/dev/null || true
+      else
+        echo "[*] WARNING: umu-run not found — skipping the silent install (Lever 1 prebake only)"
+      fi
     else
       echo "[*] WARNING: Battle.net-Setup.exe download failed (the runtime wrapper will download it)"
       ok=0

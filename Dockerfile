@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # =============================================================================
 # DpadCloud Gaming Container — Ubuntu 24.04 (noble) + CUDA 12.5.1
 #
@@ -952,6 +953,18 @@ RUN set -e; \
 #        written + battlenet-launch falls back to the full runtime winetricks).
 #        Placed late so entrypoint/script edits don't invalidate this expensive
 #        (~3-5 min: SLR download + winetricks) layer.
+#        ⚠️ BAKE METHOD (2026-08-12): this build-time prebake does NOT work
+#        under buildkit — wineserver/wine crash in buildkit's user-namespace
+#        sandbox (the `--security=insecure` RUN entitlement does NOT fix it;
+#        umu's pressure-vessel→bwrap needs full privileges). So this RUN is a
+#        graceful no-op on a standard `docker build` (the script exits 0
+#        without the marker). The prebake is baked via the privileged-container
+#        + commit workflow — see scripts/build-bootstrap-battlenet.sh header
+#        (docker run --privileged → build-bootstrap-battlenet.sh →
+#        docker commit -c 'ENTRYPOINT[...]' -c 'CMD[...]' → a FROM-commit
+#        fixup bakes the latest battlenet-launch). Best-effort: a non-privileged
+#        build ships without the prebake + the runtime battlenet-launch falls
+#        back to the full winetricks + installer (no broken image).
 COPY scripts/build-bootstrap-battlenet.sh /tmp/build-bootstrap-battlenet.sh
 RUN chmod +x /tmp/build-bootstrap-battlenet.sh \
     && /tmp/build-bootstrap-battlenet.sh \
