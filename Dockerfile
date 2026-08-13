@@ -770,6 +770,35 @@ RUN set -e; \
     && rm -rf /var/lib/apt/lists/* \
     && command -v heroic
 
+#    (a0) Pre-bake Heroic's Wine tools (DXVK, VKD3D-Proton, DXVK-NVAPI) so
+#         Heroic doesn't try to download them at runtime (which fails on
+#         transient network issues — the vkd3d-proton download from GitHub
+#         socket-hangs ~50% of the time on fresh VMs). Heroic checks for the
+#         existing dir in ~/.config/heroic/tools/ and skips the download if
+#         present. Versions match what Heroic 2.22.0 fetches by default.
+ARG VKD3D_PROTON_VERSION=vkd3d-proton-2.14.1
+ARG DXVK_VERSION=dxvk-3.0.2
+ARG DXVK_NVAPI_VERSION=dxvk-nvapi-v0.9.2
+RUN set -e; \
+    TOOLS_DIR="${HOME}/.config/heroic/tools"; \
+    mkdir -p "${TOOLS_DIR}/vkd3d" "${TOOLS_DIR}/dxvk" "${TOOLS_DIR}/dxvk-nvapi"; \
+    curl -fsSL -o /tmp/vkd3d.tar.xz \
+      "https://github.com/Heroic-Games-Launcher/vkd3d-proton/releases/download/${VKD3D_PROTON_VERSION}/${VKD3D_PROTON_VERSION}.tar.xz" \
+    && tar -xf /tmp/vkd3d.tar.xz -C "${TOOLS_DIR}/vkd3d" --strip-components=1 \
+    && rm -f /tmp/vkd3d.tar.xz \
+    && curl -fsSL -o /tmp/dxvk.tar.gz \
+      "https://github.com/doitsujin/dxvk/releases/download/v3.0.2/${DXVK_VERSION}.tar.gz" \
+    && tar -xzf /tmp/dxvk.tar.gz -C "${TOOLS_DIR}/dxvk" --strip-components=1 \
+    && rm -f /tmp/dxvk.tar.gz \
+    && curl -fsSL -o /tmp/dxvk-nvapi.tar.gz \
+      "https://github.com/jp7677/dxvk-nvapi/releases/download/v0.9.2/${DXVK_NVAPI_VERSION}.tar.gz" \
+    && tar -xzf /tmp/dxvk-nvapi.tar.gz -C "${TOOLS_DIR}/dxvk-nvapi" --strip-components=1 \
+    && rm -f /tmp/dxvk-nvapi.tar.gz \
+    && chown -R ${USERNAME}:${USERNAME} "${TOOLS_DIR}" \
+    && test -d "${TOOLS_DIR}/vkd3d/x64" \
+    && test -d "${TOOLS_DIR}/dxvk/x64" \
+    && test -d "${TOOLS_DIR}/dxvk-nvapi/x64"
+
 #    (a) GE-Proton11-3 into compatibilitytools.d. The Battle.net white-screen
 #        fix is in (GE-Proton11-2 changelog: "Battle.net: fixed Wine Wayland
 #        white-screen behavior" + "--in-process-gpu handling for Wine Wayland
