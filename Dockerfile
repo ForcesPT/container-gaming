@@ -829,7 +829,7 @@ RUN sed -i 's/\r$//' /opt/dpadcloud/lutris-shell && chmod +x /opt/dpadcloud/lutr
 #        libasound/libxss/...) are already present (lutris-gamepad-ui is also
 #        Electron); libSDL3.so.0 below is shared with lutris-gamepad-ui's koffi
 #        path. See launcher/README + WAYLAND-ARCHITECTURE.md.
-COPY --from=forcespt/dpadcloud-launcher:0.1.0 /opt/dpadcloud/launcher /opt/dpadcloud/launcher
+COPY --from=forcespt/dpadcloud-launcher:0.1.1 /opt/dpadcloud/launcher /opt/dpadcloud/launcher
 RUN chmod +x /opt/dpadcloud/launcher/dpad-launcher
 #    launcher-shell wrapper — the entrypoint's DPAD_STORE_SHELL=picker gate
 #    execs this instead of `steam -gamepadui` / `lutris-shell` (--no-sandbox;
