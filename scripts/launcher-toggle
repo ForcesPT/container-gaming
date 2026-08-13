@@ -1,0 +1,39 @@
+#!/bin/bash
+# launcher-toggle — toggle the dpad-launcher visibility (bound to Super+L in
+# the sway config). If the launcher is in the scratchpad, show it. If it's
+# visible, do nothing (it's already on screen). If the launcher process is
+# dead (crashed), relaunch it via launcher-shell.
+#
+# This is the recovery path: if the user loses the launcher (crash, accidental
+# kill), Super+L brings it back.
+set -euo pipefail
+
+LOG=/tmp/launcher-toggle.log
+echo "$(date -Is) launcher-toggle invoked" >> "$LOG"
+
+# Check if the launcher process is running
+if ! pgrep -x dpad-launcher >/dev/null 2>&1; then
+  echo "$(date -Is) launcher process not found — relaunching" >> "$LOG"
+  exec /opt/dpadcloud/launcher-shell
+fi
+
+# Launcher is running — try to show it from scratchpad.
+# Find the sway socket
+SOCK=""
+if [ -n "${SWAYSOCK:-}" ]; then
+  SOCK="$SWAYSOCK"
+else
+  RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  SOCK=$(ls "${RUNTIME_DIR}"/sway-ipc.*.sock 2>/dev/null | head -1 || true)
+fi
+
+if [ -z "$SOCK" ]; then
+  echo "$(date -Is) no sway socket found — cannot toggle" >> "$LOG"
+  exit 1
+fi
+
+# Show from scratchpad + fullscreen
+swaymsg -s "$SOCK" 'scratchpad show' 2>>"$LOG" || true
+sleep 0.2
+swaymsg -s "$SOCK" '[title="DpadPlay"] fullscreen enable' 2>>"$LOG" || true
+echo "$(date -Is) launcher shown from scratchpad" >> "$LOG"

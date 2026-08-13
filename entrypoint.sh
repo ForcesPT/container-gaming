@@ -1076,6 +1076,13 @@ default_border none
 default_floating_border none
 for_window [app_id=".*"] fullscreen enable
 for_window [class=".*"] fullscreen enable
+# Keybinds for store/launcher flow:
+#   Super+L  → toggle the dpad-launcher (show from scratchpad / relaunch if dead)
+#   Super+Q  → kill the focused store window (back to launcher)
+#   Super+K  → same as Super+Q (kill focused, common keybind)
+bindsym Mod4+l exec /opt/dpadcloud/launcher-toggle
+bindsym Mod4+q kill
+bindsym Mod4+k kill
 exec ${SHELL_APP}
 SWAYCFG
             as_user "cd ${USER_HOME}; ${egl_unset}; export ${shared_env} ${egl_set} WLR_BACKENDS=wayland XDG_CURRENT_DESKTOP=sway WLR_LIBINPUT_NO_DEVICES=1; exec sway --unsupported-gpu -c /tmp/dpad-sway.config -d" >>/tmp/sway-client.log 2>&1 &

@@ -9,6 +9,6 @@
 FROM scratch
 COPY dist/linux-unpacked/ /opt/dpadcloud/launcher/
 LABEL org.opencontainers.image.title="dpad-launcher" \
-      org.opencontainers.image.version="0.1.0" \
+      org.opencontainers.image.version="0.1.2" \
       org.opencontainers.image.description="DpadPlay 10-foot store launcher (Linux Electron AppDir)" \
       org.opencontainers.image.source="container-gaming/launcher"

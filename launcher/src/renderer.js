@@ -4,10 +4,11 @@
 // (arrows/Enter/Esc) AND gamepad (d-pad + A/B) navigation, and requests a
 // launch via the dpad.launchStore IPC.
 //
-// Gamepad: uses the Chromium Web Gamepad API (navigator.getGamepads) first.
-// In the container the pads are mknod'd /dev/input/jsN; if Chromium can't see
-// them we add SDL3-via-koffi in v2 (the lutris-gamepad-ui path). Keyboard
-// always works.
+// Launch flow (fix #2): the overlay shows immediately on launch and stays
+// until the main process sends 'store-visible' (the store window appeared in
+// the sway tree). If the store fails to launch, 'store-launch-failed' dismisses
+// the overlay + shows a toast. When the store exits, 'store-exited' refocuses
+// the launcher.
 
 const grid = document.getElementById('grid');
 let cards = [];        // [{ el, store, index }]
@@ -16,28 +17,45 @@ let launching = false; // true while the launch overlay is up
 const overlay = document.getElementById('launchOverlay');
 const launchLogo = document.getElementById('launchLogo');
 const launchName = document.getElementById('launchName');
-let launchTimer = null;
 
-// dismiss the launch overlay (acknowledge / cancel) — called on any input
-// after launch. When the store opened it covered the launcher; on return the
-// user presses a key/pad + the launcher is usable again.
+// dismiss the launch overlay — called when the main process confirms the
+// store window is visible, or on explicit cancel (Esc/B).
 function dismissOverlay() {
   if (!launching) return;
   launching = false;
   overlay.classList.remove('show');
-  clearTimeout(launchTimer);
 }
+
 function showOverlay(store) {
   launching = true;
   launchLogo.src = `logos/${store.id}.svg`;
   launchLogo.alt = store.name;
   launchName.textContent = `Launching ${store.name}…`;
   overlay.classList.add('show');
-  // safety: auto-hide after 25s if the user walks away / the store never opens
-  clearTimeout(launchTimer);
-  launchTimer = setTimeout(dismissOverlay, 25000);
 }
 
+// --- main -> renderer events ---
+window.dpad.onStoreVisible((_id) => {
+  // The store window appeared — dismiss the overlay. The launcher will be
+  // hidden to scratchpad by the main process; when the store exits, the
+  // launcher is restored + refocused, and 'store-exited' fires.
+  dismissOverlay();
+});
+
+window.dpad.onStoreExited((_id) => {
+  // The store exited — the launcher is restored from scratchpad. Just make
+  // sure the overlay is dismissed.
+  dismissOverlay();
+  // Re-render in case store availability changed (e.g. a store got installed)
+  window.dpad.getStores().then(render);
+});
+
+window.dpad.onStoreLaunchFailed((_id, err) => {
+  dismissOverlay();
+  showToast(`Couldn't launch: ${err}`, true);
+});
+
+// --- toast ---
 const toast = document.createElement('div');
 toast.className = 'toast';
 document.body.appendChild(toast);
@@ -48,11 +66,6 @@ function showToast(msg, isError = false) {
   toast.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
-}
-
-function glyphFor(store) {
-  // A clean monogram from the store name (real SVG logos can come later).
-  return store.name.charAt(0).toUpperCase();
 }
 
 function statusPill(store) {
@@ -87,7 +100,6 @@ function render(stores) {
 
 function focus(index) {
   if (!cards.length) return;
-  // clamp/wrap
   if (index < 0) index = cards.length - 1;
   if (index >= cards.length) index = 0;
   focusIndex = index;
@@ -97,7 +109,6 @@ function focus(index) {
 }
 
 function move(dx, dy) {
-  // grid is auto-fit; compute columns from the rendered layout for vertical moves
   const first = cards[0]?.el.getBoundingClientRect();
   const second = cards[1]?.el.getBoundingClientRect();
   const cols = second && Math.abs(second.left - first.left) > 10
@@ -114,19 +125,22 @@ function move(dx, dy) {
 }
 
 async function launch() {
-  if (launching) { dismissOverlay(); return; }  // any input dismisses the overlay
+  if (launching) { dismissOverlay(); return; }
   const { store } = cards[focusIndex];
   if (store.comingSoon) { showToast(`${store.name} — coming soon`); return; }
   if (!store.available) { showToast(`${store.name} not installed`, true); return; }
-  showOverlay(store);   // immediate feedback that the launch is happening
+  showOverlay(store);
   const res = await window.dpad.launchStore(store.id);
-  if (!res.ok) { dismissOverlay(); showToast(`Couldn't launch ${store.name}: ${res.error}`, true); }
+  if (!res.ok) {
+    dismissOverlay();
+    showToast(`Couldn't launch ${store.name}: ${res.error}`, true);
+  }
+  // If ok, the overlay stays until 'store-visible' event from main process.
 }
 
 // ---- keyboard ----
 window.addEventListener('keydown', (e) => {
   if (launching) {
-    // only an explicit cancel dismisses the overlay: Esc.
     if (e.key === 'Escape') dismissOverlay();
     e.preventDefault();
     return;
@@ -141,14 +155,12 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-// ---- gamepad (poll SDL3 via the main process; the Web Gamepad API does
-// not see the mknod'd /dev/input/jsN pads in-container) ----
+// ---- gamepad ----
 let lastBtn = {};
 async function pollGamepad() {
   let pads = [];
   try { pads = await window.dpad.pollGamepads(); } catch (_) {}
   if (launching) {
-    // only an explicit cancel dismisses the overlay: gamepad B (button 1).
     for (const gp of pads) {
       if (!gp) continue;
       const id = gp.index;
@@ -177,13 +189,12 @@ async function pollGamepad() {
     };
     repeat(dx, 'x');
     repeat(dy, 'y');
-    // A (0) = launch, B (1) = back/quit
     if (gp.buttons[0]?.pressed && !lastBtn[id + 'a']) launch();
     if (gp.buttons[1]?.pressed && !lastBtn[id + 'b']) window.dpad.quit();
     lastBtn[id + 'a'] = gp.buttons[0]?.pressed;
     lastBtn[id + 'b'] = gp.buttons[1]?.pressed;
   }
-  setTimeout(pollGamepad, 50);  // ~20Hz; SDL3 state is updated by SDL_UpdateGamepads each call
+  setTimeout(pollGamepad, 50);
 }
 pollGamepad();
 
@@ -191,6 +202,5 @@ pollGamepad();
 (async () => {
   const stores = await window.dpad.getStores();
   render(stores);
-  // re-resolve on focus (in case a store got installed mid-session)
   window.addEventListener('focus', async () => render(await window.dpad.getStores()));
 })();

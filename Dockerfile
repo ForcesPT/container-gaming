@@ -800,6 +800,14 @@ RUN set -e; \
     && test -d "${TOOLS_DIR}/dxvk/x64" \
     && test -d "${TOOLS_DIR}/dxvk-nvapi/x64"
 
+#    (a0b) Suppress Heroic's "new version available" nag. The .deb install
+#          can't auto-update, so the notification is noise. Heroic reads
+#          checkForUpdates from ~/.config/heroic/store/config.json.
+RUN mkdir -p "${HOME}/.config/heroic/store" && \
+    echo '{"checkForUpdates":false,"darkMode":true,"minimizeOnClose":true,"autoUpdateGames":false}' \
+    > "${HOME}/.config/heroic/store/config.json" && \
+    chown -R ${USERNAME}:${USERNAME} "${HOME}/.config/heroic"
+
 #    (a) GE-Proton11-3 into compatibilitytools.d. The Battle.net white-screen
 #        fix is in (GE-Proton11-2 changelog: "Battle.net: fixed Wine Wayland
 #        white-screen behavior" + "--in-process-gpu handling for Wine Wayland
@@ -859,13 +867,17 @@ RUN sed -i 's/\r$//' /opt/dpadcloud/lutris-shell && chmod +x /opt/dpadcloud/lutr
 #        libasound/libxss/...) are already present (lutris-gamepad-ui is also
 #        Electron); libSDL3.so.0 below is shared with lutris-gamepad-ui's koffi
 #        path. See launcher/README + WAYLAND-ARCHITECTURE.md.
-COPY --from=forcespt/dpadcloud-launcher:0.1.1 /opt/dpadcloud/launcher /opt/dpadcloud/launcher
+COPY --from=forcespt/dpadcloud-launcher:0.1.2 /opt/dpadcloud/launcher /opt/dpadcloud/launcher
 RUN chmod +x /opt/dpadcloud/launcher/dpad-launcher
 #    launcher-shell wrapper — the entrypoint's DPAD_STORE_SHELL=picker gate
 #    execs this instead of `steam -gamepadui` / `lutris-shell` (--no-sandbox;
 #    inherits the session's SDL3/interposer env).
 COPY scripts/launcher-shell /opt/dpadcloud/launcher-shell
 RUN sed -i 's/\r$//' /opt/dpadcloud/launcher-shell && chmod +x /opt/dpadcloud/launcher-shell
+#    launcher-toggle — bound to Super+L in the sway config; shows the launcher
+#    from scratchpad or relaunches it if the process died (recovery path).
+COPY scripts/launcher-toggle /opt/dpadcloud/launcher-toggle
+RUN sed -i 's/\r$//' /opt/dpadcloud/launcher-toggle && chmod +x /opt/dpadcloud/launcher-toggle
 
 #    (c2) battlenet-launch — the Battle.net store wrapper the dpad-launcher's
 #         "Battle.net" card spawns (launcher/src/main.js). Runs the Blizzard

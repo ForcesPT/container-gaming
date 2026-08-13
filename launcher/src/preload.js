@@ -1,6 +1,6 @@
 // preload.js — bridges the renderer (index.html) to the main process (main.js)
 // via contextBridge. Keeps nodeIntegration off; the renderer only gets the
-// three IPC calls it needs. Mirrors the lutris-gamepad-ui security model.
+// IPC calls it needs.
 
 const { contextBridge, ipcRenderer } = require('electron');
 
@@ -9,6 +9,10 @@ contextBridge.exposeInMainWorld('dpad', {
   launchStore: (id) => ipcRenderer.invoke('launch-store', id),
   pollGamepads: () => ipcRenderer.invoke('poll-gamepads'),
   quit: () => ipcRenderer.invoke('quit'),
-  // main -> renderer (future: store-exited event to refocus the launcher)
+  getActiveStore: () => ipcRenderer.invoke('get-active-store'),
+  killActiveStore: () => ipcRenderer.invoke('kill-active-store'),
+  // main -> renderer events
+  onStoreVisible: (cb) => ipcRenderer.on('store-visible', (_e, id) => cb(id)),
   onStoreExited: (cb) => ipcRenderer.on('store-exited', (_e, id) => cb(id)),
+  onStoreLaunchFailed: (cb) => ipcRenderer.on('store-launch-failed', (_e, id, err) => cb(id, err)),
 });
