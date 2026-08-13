@@ -1,0 +1,48 @@
+#!/bin/bash
+# gog-launch — launch Heroic Games Launcher for the GOG store in the headless
+# cloud-gaming session. The dpad-launcher's "GOG" store card (launcher/src/main.js)
+# spawns this; it runs IN THE SAME sway/XWayland session (inheriting DISPLAY=:0,
+# the NVIDIA EGL vendor, PULSE_SERVER, the gamepad interposer env) so the Heroic
+# window is captured by the wayland-display compositor + the user interacts via
+# Selkies.
+#
+# Heroic is an Electron app (like the dpad-launcher itself). It bundles `gogdl`
+# (the GOG CLI backend) + handles login, game install, + game launch. The user
+# lands on the Heroic library → clicks the GOG tab → logs in (first time, browser
+# auth via Selkies Desktop mode) → installs / launches games. GOG is DRM-free
+# (cleanest store). Game installs go to ~/Games (-> <vol>/games on a persistent
+# volume via the entrypoint's setup_stores) so they persist across sessions.
+# Heroic config lives at ~/.config/heroic/ (symlinked to <vol>/heroic-config
+# by setup_stores when a persistent volume is attached).
+#
+# Windows games launch via umu/Proton (Heroic's own umu integration, separate
+# from the battlenet-launch umu path). The image already has GE-Proton11-3
+# baked in compatibilitytools.d/; Heroic detects it on first launch.
+#
+# Env inherited from the launcher (the entrypoint's shared_env via launcher-shell):
+#   DISPLAY=:0  WAYLAND_DISPLAY  XDG_RUNTIME_DIR  PULSE_SERVER  HOME  USER
+# Logs: /tmp/gog-launch.log
+set -u
+
+LOG=/tmp/gog-launch.log
+echo "[gog-launch] $(date -Is) start (HOME=${HOME:-} DISPLAY=${DISPLAY:-})" >> "$LOG"
+
+# Heroic binary (the .deb installs /opt/heroic/heroic symlinked to /usr/bin/heroic).
+HEROIC_BIN="${HEROIC_BIN:-heroic}"
+if ! command -v "$HEROIC_BIN" >/dev/null 2>&1; then
+    echo "[gog-launch] FATAL: heroic not found on PATH" | tee -a "$LOG" >&2
+    exit 1
+fi
+
+# --no-sandbox: Electron/Chromium sandbox needs setuid chrome-sandbox (not
+# available in the container); --no-sandbox matches the dpad-launcher + the
+# vast-docker heroic-launch pattern.
+ARGS="--no-sandbox"
+
+# Allow caller overrides / additions (e.g. DPAD_HEROIC_ARGS for extra flags).
+if [ -n "${DPAD_HEROIC_ARGS:-}" ]; then
+    ARGS="${DPAD_HEROIC_ARGS}"
+fi
+
+echo "[gog-launch] launching heroic ($HEROIC_BIN $ARGS)" >> "$LOG"
+exec "$HEROIC_BIN" $ARGS >>"$LOG" 2>&1

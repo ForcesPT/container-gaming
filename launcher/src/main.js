@@ -70,18 +70,25 @@ const STORES = [
     id: 'epic',
     name: 'Epic Games',
     subtitle: 'Epic store',
-    bin: 'legendary',
-    cmd: null, // legendary is CLI-only; v2 will wire an install/launch UI
-    comingSoon: true,
+    // The epic-launch wrapper (baked at /usr/local/bin/epic-launch) spawns
+    // Heroic Games Launcher, which bundles `legendary` (the Epic CLI backend)
+    // + handles login, game install, + game launch. The user logs in via
+    // browser auth (Selkies Desktop mode) on first launch; the login token +
+    // game installs persist on the volume. STORES-PLAN §7.
+    bin: 'epic-launch',
+    cmd: ['epic-launch'],
     color: '#f5f5f5',
   },
   {
     id: 'gog',
     name: 'GOG',
     subtitle: 'DRM-free',
-    bin: 'gogdl',
-    cmd: null,
-    comingSoon: true,
+    // The gog-launch wrapper (baked at /usr/local/bin/gog-launch) spawns
+    // Heroic Games Launcher, which bundles `gogdl` (the GOG CLI backend) +
+    // handles login, game install, + game launch. GOG is DRM-free (cleanest
+    // store). Login token + game installs persist on the volume. STORES-PLAN §7.
+    bin: 'gog-launch',
+    cmd: ['gog-launch'],
     color: '#a060f5',
   },
   {

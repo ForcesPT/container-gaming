@@ -729,15 +729,21 @@ setup_stores() {
     # multi-store-picker value prop for ephemeral users).
     #
     # Gated on DPAD_STORES (comma list from the worker's /etc/environment)
-    # containing a store that uses ~/Games — v1: battlenet. (Steam uses the
-    # install-root-on-volume path in setup_user_volume, not ~/Games.)
+    # containing a store that uses ~/Games — v1: battlenet, epic, gog. (Steam
+    # uses the install-root-on-volume path in setup_user_volume, not ~/Games.)
+    # Epic + GOG also need ~/.config/heroic persisted (Heroic's config holds
+    # the legendary/gogdl login tokens + the library DB so the user is auto-
+    # logged-in on relaunch).
     local vol="${DPAD_VOLUME_MOUNT:-}"
     local stores="${DPAD_STORES:-}"
     [ -z "$stores" ] && return 0
+    local need_games=0 need_heroic=0
     case ",${stores}," in
-        *,battlenet,*) ;;
-        *) return 0 ;;
+        *,battlenet,*) need_games=1 ;;
+        *,epic,*) need_games=1; need_heroic=1 ;;
+        *,gog,*) need_games=1; need_heroic=1 ;;
     esac
+    [ "$need_games" = "0" ] && return 0
     local games_link="${USER_HOME}/Games"
     if [ -n "$vol" ] && [ -d "$vol" ]; then
         local vol_games="$vol/games"
@@ -753,11 +759,33 @@ setup_stores() {
             rm -f "$games_link"; ln -s "$vol_games" "$games_link"
         fi
         chown -h "${USER_NAME}:${USER_NAME}" "$games_link" 2>/dev/null || true
-        echo "    ~/Games -> $vol_games (Battle.net prefix persists on the volume)"
+        echo "    ~/Games -> $vol_games (store state persists on the volume)"
+
+        # Heroic config (Epic + GOG login tokens, library DB, game settings).
+        # ~/.config/heroic -> <vol>/heroic-config so login persists across
+        # End+relaunch — same pattern as the Steam install-root symlink.
+        if [ "$need_heroic" = "1" ]; then
+            local heroic_link="${USER_HOME}/.config/heroic"
+            local vol_heroic="$vol/heroic-config"
+            mkdir -p "$vol_heroic" 2>/dev/null || true
+            chown -R "${USER_NAME}:${USER_NAME}" "$vol_heroic" 2>/dev/null || true
+            if [ ! -e "$heroic_link" ]; then
+                ln -s "$vol_heroic" "$heroic_link"
+            elif [ -L "$heroic_link" ] && [ "$(readlink -f "$heroic_link" 2>/dev/null)" != "$(readlink -f "$vol_heroic" 2>/dev/null)" ]; then
+                rm -f "$heroic_link"; ln -s "$vol_heroic" "$heroic_link"
+            fi
+            chown -h "${USER_NAME}:${USER_NAME}" "$heroic_link" 2>/dev/null || true
+            echo "    ~/.config/heroic -> $vol_heroic (Epic/GOG login persists on the volume)"
+        fi
     else
         mkdir -p "$games_link" 2>/dev/null || true
         chown -R "${USER_NAME}:${USER_NAME}" "$games_link" 2>/dev/null || true
-        echo "    ~/Games on the rootfs (ephemeral; Battle.net prefix will NOT persist)"
+        echo "    ~/Games on the rootfs (ephemeral; store state will NOT persist)"
+        if [ "$need_heroic" = "1" ]; then
+            mkdir -p "${USER_HOME}/.config/heroic" 2>/dev/null || true
+            chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}/.config/heroic" 2>/dev/null || true
+            echo "    ~/.config/heroic on the rootfs (ephemeral; Epic/GOG login will NOT persist)"
+        fi
     fi
 }
 

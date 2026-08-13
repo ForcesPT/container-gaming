@@ -745,6 +745,30 @@ RUN chmod +x /tmp/build-bootstrap-steam.sh \
 #    still reaches DPAD_READY on a Steam session. v1 stores = Steam + Epic +
 #    GOG + Battle.net; EA App + Ubisoft Connect are v1.1 drop-ins (same
 #    pattern as Battle.net). ---
+#
+#    (0) Heroic Games Launcher — the Epic + GOG store backend. Heroic is an
+#        Electron app (like dpad-launcher) that bundles `legendary` (Epic CLI)
+#        + `gogdl` (GOG CLI) for login, game install, + game launch. The
+#        epic-launch / gog-launch wrappers spawn it in the same sway/XWayland
+#        session. The .deb is ~150 MB; the accountsservice dep avoids a D-Bus
+#        degradation warning (Steam-Headless #210). --no-sandbox at runtime
+#        (no setuid chrome-sandbox in the container). Heroic config persists on
+#        the volume via setup_stores (~/.config/heroic -> <vol>/heroic-config).
+#        NOTE: Heroic is also installed in the vast-docker stage (the deprecated
+#        :dpad-heroic image); this vast-vm install is separate so the SteamOS
+#        image has it for the Epic/GOG store cards. The base ARG HEROIC_VERSION
+#        (v2.22.0) is inherited.
+ARG HEROIC_VERSION
+RUN set -e; \
+    HEROIC_VER_STR="${HEROIC_VERSION#v}"; \
+    HEROIC_DEB="Heroic-${HEROIC_VER_STR}-linux-amd64.deb"; \
+    apt-get update && apt-get install -y --no-install-recommends accountsservice curl; \
+    cd /tmp && curl -fsSL -o "/tmp/${HEROIC_DEB}" \
+      "https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher/releases/download/${HEROIC_VERSION}/${HEROIC_DEB}" \
+    && ( dpkg -i "/tmp/${HEROIC_DEB}" || apt-get install -f -y ) \
+    && rm -f "/tmp/${HEROIC_DEB}" \
+    && rm -rf /var/lib/apt/lists/* \
+    && command -v heroic
 
 #    (a) GE-Proton11-3 into compatibilitytools.d. The Battle.net white-screen
 #        fix is in (GE-Proton11-2 changelog: "Battle.net: fixed Wine Wayland
@@ -824,6 +848,23 @@ COPY scripts/battlenet-launch /opt/dpadcloud/battlenet-launch
 RUN sed -i 's/\r$//' /opt/dpadcloud/battlenet-launch && chmod +x /opt/dpadcloud/battlenet-launch \
     && ln -sf /opt/dpadcloud/battlenet-launch /usr/local/bin/battlenet-launch \
     && test -x /usr/local/bin/battlenet-launch
+
+#    (c2a) epic-launch + gog-launch — the Epic + GOG store wrappers the
+#         dpad-launcher's "Epic Games" / "GOG" cards spawn (launcher/src/main.js).
+#         Each spawns Heroic Games Launcher (baked in the base stage, inherited
+#         by vast-vm), which bundles legendary (Epic) / gogdl (GOG) for login +
+#         game install + game launch. On PATH at /usr/local/bin so the launcher's
+#         `which()` availability check resolves it (mirror the battlenet-launch
+#         symlink pattern). The prefix/game installs + Heroic config persist on
+#         the volume via the entrypoint's setup_stores. STORES-PLAN §7.
+COPY scripts/epic-launch /opt/dpadcloud/epic-launch
+COPY scripts/gog-launch /opt/dpadcloud/gog-launch
+RUN sed -i 's/\r$//' /opt/dpadcloud/epic-launch /opt/dpadcloud/gog-launch \
+    && chmod +x /opt/dpadcloud/epic-launch /opt/dpadcloud/gog-launch \
+    && ln -sf /opt/dpadcloud/epic-launch /usr/local/bin/epic-launch \
+    && ln -sf /opt/dpadcloud/gog-launch /usr/local/bin/gog-launch \
+    && test -x /usr/local/bin/epic-launch \
+    && test -x /usr/local/bin/gog-launch
 
 #    (d) libSDL3 for lutris-gamepad-ui's gamepad input (koffi FFI dlopen). SDL3
 #        is NOT in Noble repos; the oracular libsdl3-0 .deb churns the pinned
