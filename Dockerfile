@@ -776,14 +776,15 @@ RUN set -e; \
 #         socket-hangs ~50% of the time on fresh VMs). Heroic checks for the
 #         existing dir in ~/.config/heroic/tools/ and skips the download if
 #         present. Versions match what Heroic 2.22.0 fetches by default.
-ARG VKD3D_PROTON_VERSION=vkd3d-proton-2.14.1
+ARG VKD3D_PROTON_TAG=v2.14.1
+ARG VKD3D_PROTON_FILE=vkd3d-proton-2.14.1
 ARG DXVK_VERSION=dxvk-3.0.2
 ARG DXVK_NVAPI_VERSION=dxvk-nvapi-v0.9.2
 RUN set -e; \
     TOOLS_DIR="${HOME}/.config/heroic/tools"; \
     mkdir -p "${TOOLS_DIR}/vkd3d" "${TOOLS_DIR}/dxvk" "${TOOLS_DIR}/dxvk-nvapi"; \
     curl -fsSL -o /tmp/vkd3d.tar.xz \
-      "https://github.com/Heroic-Games-Launcher/vkd3d-proton/releases/download/${VKD3D_PROTON_VERSION}/${VKD3D_PROTON_VERSION}.tar.xz" \
+      "https://github.com/Heroic-Games-Launcher/vkd3d-proton/releases/download/${VKD3D_PROTON_TAG}/${VKD3D_PROTON_FILE}.tar.xz" \
     && tar -xf /tmp/vkd3d.tar.xz -C "${TOOLS_DIR}/vkd3d" --strip-components=1 \
     && rm -f /tmp/vkd3d.tar.xz \
     && curl -fsSL -o /tmp/dxvk.tar.gz \
