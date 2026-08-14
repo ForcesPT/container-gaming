@@ -258,28 +258,43 @@ ipcMain.handle('launch-store', (event, storeId) => {
 
     // Poll for the store window appearing in the sway tree. Once visible,
     // hide the launcher to scratchpad + notify the renderer to dismiss the
-    // overlay. Timeout after 30s (give up + hide launcher anyway).
+    // overlay. First-launch installs (EA/Ubisoft/Battle.net) run winetricks
+    // + download the installer before any window appears — this can take
+    // 5-10 min. Keep the launcher visible with an "Installing…" message
+    // so the user gets feedback instead of a black screen.
     let pollCount = 0;
-    const maxPolls = 60; // 60 * 500ms = 30s
+    const POLL_MS = 500;
+    const SHORT_TIMEOUT = 30;  // seconds before switching to "installing" message
+    const MAX_TIMEOUT = 900;   // 15 min hard cap (give up + hide launcher)
+    let installingNotified = false;
     if (storeVisibleTimer) clearInterval(storeVisibleTimer);
     storeVisibleTimer = setInterval(() => {
       pollCount++;
+      const elapsedSec = Math.round(pollCount * POLL_MS / 1000);
       const visible = checkStoreWindowVisible(storeId);
       if (visible) {
-        log(`launch-store ${storeId}: store window detected after ${pollCount * 500}ms`);
+        log(`launch-store ${storeId}: store window detected after ${elapsedSec}s`);
         clearInterval(storeVisibleTimer);
         storeVisibleTimer = null;
         hideLauncherToScratchpad();
         // Notify renderer that the store is visible (dismiss overlay)
         if (mainWindow) mainWindow.webContents.send('store-visible', storeId);
-      } else if (pollCount >= maxPolls) {
-        log(`launch-store ${storeId}: window not detected after 30s, hiding launcher anyway`);
+      } else if (!installingNotified && elapsedSec >= SHORT_TIMEOUT) {
+        // No window after 30s — likely a first-launch install. Keep the
+        // launcher visible (do NOT hide to scratchpad) and tell the
+        // renderer to show an "Installing…" message on the overlay.
+        log(`launch-store ${storeId}: no window after ${elapsedSec}s, switching to install overlay`);
+        installingNotified = true;
+        if (mainWindow) mainWindow.webContents.send('store-installing', storeId);
+      } else if (elapsedSec >= MAX_TIMEOUT) {
+        log(`launch-store ${storeId}: no window after ${MAX_TIMEOUT}s, giving up`);
         clearInterval(storeVisibleTimer);
         storeVisibleTimer = null;
+        // Last resort: hide launcher. The store may still appear later.
         hideLauncherToScratchpad();
         if (mainWindow) mainWindow.webContents.send('store-visible', storeId);
       }
-    }, 500);
+    }, POLL_MS);
 
     // When the store client exits, restore the launcher.
     child.on('exit', (code, sig) => {

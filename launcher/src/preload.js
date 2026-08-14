@@ -15,4 +15,5 @@ contextBridge.exposeInMainWorld('dpad', {
   onStoreVisible: (cb) => ipcRenderer.on('store-visible', (_e, id) => cb(id)),
   onStoreExited: (cb) => ipcRenderer.on('store-exited', (_e, id) => cb(id)),
   onStoreLaunchFailed: (cb) => ipcRenderer.on('store-launch-failed', (_e, id, err) => cb(id, err)),
+  onStoreInstalling: (cb) => ipcRenderer.on('store-installing', (_e, id) => cb(id)),
 });

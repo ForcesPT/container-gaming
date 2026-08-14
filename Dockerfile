@@ -1077,6 +1077,19 @@ RUN chmod +x /tmp/build-bootstrap-battlenet.sh \
     && rm -f /tmp/build-bootstrap-battlenet.sh \
     && chown -R ${USERNAME}:${USERNAME} /opt/dpadcloud/battlenet-prefix ${HOME}/.local/share/umu 2>/dev/null || true
 
+#    (f3) EA App prebake — same pattern as Battle.net: winetricks-initialized
+#         prefix + EAappInstaller.exe + the SLR (shared with battlenet). The
+#         runtime ea-launch copies this prefix on first launch → skips the
+#         ~2-min winetricks + SLR download + installer download. Same
+#         privileged-container + commit workflow (see battlenet header).
+#         Best-effort: a non-privileged build ships without the prebake +
+#         ea-launch falls back to the full winetricks + installer.
+COPY scripts/build-bootstrap-ea.sh /tmp/build-bootstrap-ea.sh
+RUN chmod +x /tmp/build-bootstrap-ea.sh \
+    && /tmp/build-bootstrap-ea.sh \
+    && rm -f /tmp/build-bootstrap-ea.sh \
+    && chown -R ${USERNAME}:${USERNAME} /opt/dpadcloud/ea-prefix ${HOME}/.local/share/umu 2>/dev/null || true
+
 EXPOSE 16100/tcp
 # 3478 (coturn TURN) opt-in via -p 3478:3478 at launch. No 8080/47989/47990/41641.
 USER root

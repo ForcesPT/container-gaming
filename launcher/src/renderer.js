@@ -12,6 +12,7 @@
 
 const grid = document.getElementById('grid');
 let cards = [];        // [{ el, store, index }]
+let STORES_LOOKUP = {}; // id -> store (for install overlay lookup)
 let focusIndex = 0;
 let launching = false; // true while the launch overlay is up
 const overlay = document.getElementById('launchOverlay');
@@ -24,6 +25,7 @@ function dismissOverlay() {
   if (!launching) return;
   launching = false;
   overlay.classList.remove('show');
+  overlay.classList.remove('installing');
 }
 
 function showOverlay(store) {
@@ -55,6 +57,17 @@ window.dpad.onStoreLaunchFailed((_id, err) => {
   showToast(`Couldn't launch: ${err}`, true);
 });
 
+window.dpad.onStoreInstalling((id) => {
+  // First-launch install: winetricks + downloading the installer takes
+  // 5-10 min with no visible window. Update the overlay so the user
+  // gets feedback instead of a black screen.
+  const store = STORES_LOOKUP[id];
+  if (store) {
+    launchName.textContent = `Installing ${store.name}… this may take a few minutes`;
+    overlay.classList.add('installing');
+  }
+});
+
 // --- toast ---
 const toast = document.createElement('div');
 toast.className = 'toast';
@@ -77,7 +90,9 @@ function statusPill(store) {
 function render(stores) {
   grid.innerHTML = '';
   cards = [];
+  STORES_LOOKUP = {};
   stores.forEach((store, index) => {
+    STORES_LOOKUP[store.id] = store;
     const el = document.createElement('div');
     el.className = 'card';
     el.tabIndex = -1;
