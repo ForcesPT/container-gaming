@@ -756,7 +756,8 @@ RUN chmod +x /opt/dpadcloud/launcher/dpad-launcher
 #        via GE_PROTON_SHA256 build-arg (empty = skip, for dev; set in prod
 #        builds to verify the download).
 ARG GE_PROTON_VERSION=GE-Proton11-3
-ARG GE_PROTON_SHA256=  # set via --build-arg to enable SHA verification (empty = skip)
+ARG GE_PROTON_SHA256
+# (set GE_PROTON_SHA256 via --build-arg to enable SHA verification; empty/unset = skip)
 RUN set -e; \
     GP_DIR="${HOME}/.steam/debian-installation/compatibilitytools.d/${GE_PROTON_VERSION}"; \
     mkdir -p "${GP_DIR}"; \
@@ -887,7 +888,8 @@ RUN set -e; \
 #        add --security-opt systempaths=unconfined to the docker run (the
 #        fourth bwrap-nest flag) — a runtime-validation item.
 ARG UMU_VERSION=1.4.4
-ARG UMU_SHA256=  # set via --build-arg to enable SHA verification (empty = skip)
+ARG UMU_SHA256
+# (set UMU_SHA256 via --build-arg to enable SHA verification; empty/unset = skip)
 RUN set -e; \
     apt-get update && apt-get install -y --no-install-recommends \
         python3-xlib apparmor-profiles libzstd1 \
