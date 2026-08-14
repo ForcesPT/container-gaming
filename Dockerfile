@@ -907,12 +907,15 @@ RUN sed -i 's/\r$//' /opt/dpadcloud/battlenet-launch && chmod +x /opt/dpadcloud/
 #         header). Live validation required.
 COPY scripts/ea-launch /opt/dpadcloud/ea-launch
 COPY scripts/ubisoft-launch /opt/dpadcloud/ubisoft-launch
-RUN sed -i 's/\r$//' /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
-    && chmod +x /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
+COPY scripts/dpad-open-url /opt/dpadcloud/dpad-open-url
+RUN sed -i 's/\r$//' /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch /opt/dpadcloud/dpad-open-url \
+    && chmod +x /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch /opt/dpadcloud/dpad-open-url \
     && ln -sf /opt/dpadcloud/ea-launch /usr/local/bin/ea-launch \
     && ln -sf /opt/dpadcloud/ubisoft-launch /usr/local/bin/ubisoft-launch \
+    && ln -sf /opt/dpadcloud/dpad-open-url /usr/local/bin/xdg-open \
     && test -x /usr/local/bin/ea-launch \
-    && test -x /usr/local/bin/ubisoft-launch
+    && test -x /usr/local/bin/ubisoft-launch \
+    && test -x /usr/local/bin/xdg-open
 
 #    (c2a) epic-launch + gog-launch — the Epic + GOG store wrappers the
 #         dpad-launcher's "Epic Games" / "GOG" cards spawn (launcher/src/main.js).
