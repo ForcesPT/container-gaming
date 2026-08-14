@@ -255,13 +255,13 @@ relaunch_selkies() {
             return 1
         fi
         err_after="$(grep -ac 'NvEncOpenEncodeSessionEx failed' /tmp/selkies.log 2>/dev/null || echo 0)"
-        if [ "${enc}" = "nvh264enc" ] && [ "${err_after}" -gt "${err_before}" ]; then
+        if [[ "${enc}" =~ ^nv ]] && [ "${err_after}" -gt "${err_before}" ]; then
             if [ "${attempt}" -lt "${max_attempts}" ]; then
                 echo "    [restart] NVENC peer-init race (attempt ${attempt}/${max_attempts}) — retrying"
                 pkill -f selkies-gstreamer 2>/dev/null; sleep 2
                 continue
             fi
-            echo "    WARNING: nvh264enc failed to register on restart after ${max_attempts} attempts (see /tmp/selkies.log)"
+            echo "    WARNING: ${enc} failed to register on restart after ${max_attempts} attempts (see /tmp/selkies.log)"
             tail -8 /tmp/selkies.log 2>/dev/null | sed 's/^/      /'
         fi
         echo "[*] Selkies restarted (attempt ${attempt}/${max_attempts}) — stream recovered (encoder=${enc}, audio_fec=${DPAD_AUDIO_PACKETLOSS:-0}%, video_fec=${DPAD_VIDEO_PACKETLOSS:-0}%)"
@@ -452,6 +452,10 @@ start_gamescope_stream() {
     fi
 
     enc="${DPAD_GAMESCOPE_ENCODER:-nvh264enc}"
+    # AV1 encoding: nvav1enc is available on RTX 40+ (Ada, sm_89) and Blackwell
+    # (sm_120) via GStreamer 1.24.6's nvcodec plugin. ~30% better compression than
+    # H.264 at the same quality. Set DPAD_GAMESCOPE_ENCODER=nvav1enc to use it.
+    # The NVENC peer-init retry below is encoder-agnostic (matches any nv*enc).
 
     # Stage 3a — input routing. Selkies' XTest input normally lands on the
     # capture display (:2, the Xvfb bridge target), which only holds a painted
@@ -505,13 +509,13 @@ start_gamescope_stream() {
             break
         fi
         err_after="$(grep -ac 'NvEncOpenEncodeSessionEx failed' /tmp/selkies.log 2>/dev/null || echo 0)"
-        if [ "${enc}" = "nvh264enc" ] && [ "${err_after}" -gt "${err_before}" ]; then
+        if [[ "${enc}" =~ ^nv ]] && [ "${err_after}" -gt "${err_before}" ]; then
             if [ "${attempt}" -lt "${max_attempts}" ]; then
                 echo "    NVENC encoder failed to register (driver 570+ peer-init race, attempt ${attempt}/${max_attempts}) — restarting Selkies"
                 pkill -f selkies-gstreamer 2>/dev/null; sleep 2
                 continue
             fi
-            echo "    WARNING: nvh264enc failed to register after ${max_attempts} attempts (see /tmp/selkies.log) — video may be broken; set DPAD_GAMESCOPE_ENCODER=x264enc for software fallback"
+            echo "    WARNING: ${enc} failed to register after ${max_attempts} attempts (see /tmp/selkies.log) — video may be broken; set DPAD_GAMESCOPE_ENCODER=x264enc for software fallback"
             tail -8 /tmp/selkies.log 2>/dev/null | sed 's/^/      /'
         fi
         # Capture the resolved encoder + video source for relaunch_selkies()

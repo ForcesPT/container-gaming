@@ -2,24 +2,17 @@
 # =============================================================================
 # DpadCloud Gaming Container — Ubuntu 24.04 (noble) + CUDA 12.5.1
 #
-# Two slim images, ONE Dockerfile (multi-stage):
-#   docker build --target vast-docker -t forcespt/dpadcloud-gaming:dpad-heroic   .
+# One multi-stage Dockerfile, one final image:
 #   docker build --target vast-vm      -t forcespt/dpadcloud-gaming:dpad-SteamOS .
 #
-#   :dpad-heroic   Vast Docker (no userns): Heroic desktop + Selkies stream.
-#                  Steam is blocked on Vast Docker (no userns -> CEF crashes),
-#                  so Heroic (Electron + --no-sandbox, no userns) is the launcher
-#                  for Epic/GOG/Amazon; games run via umu/Proton-direct. A general
-#                  cloud desktop (XFCE + Firefox) for non-Steam games + work.
-#   :dpad-SteamOS  Vast KVM VM (userns): Steam/gamescope (full Steam, Big Picture)
-#                  + Selkies stream. No desktop. Fast-boot: the Steam client is
-#                  pre-bootstrapped at build time (~2.1 GB) so a fresh container
-#                  reaches the stream URL in ~50 s instead of a 3-4 min download.
-#                  Native Steam downloads its own Proton at runtime, so GE-Proton
-#                  is NOT baked in (it was only for the dpad-launch Proton-direct
-#                  path, which is gone).
+#   :dpad-SteamOS  Full-root VM (userns): Steam + gamescope + Selkies stream.
+#                  Fast-boot: the Steam client is pre-bootstrapped at build time
+#                  (~2.1 GB) so a fresh container reaches the stream URL in ~50 s
+#                  instead of a 3-4 min download. Native Steam downloads its own
+#                  Proton at runtime, so GE-Proton is NOT baked in (it was only
+#                  for the dpad-launch Proton-direct path, which is gone).
 #
-# Both images use Selkies-GStreamer as the ONLY browser stream (mws, Sunshine,
+# The image uses Selkies-GStreamer as the ONLY browser stream (mws, Sunshine,
 # and Tailscale/native-Moonlight have been removed).
 #
 # Base is nvidia/cuda:12.5.1-BASE (not -runtime): the runtime base's CUDA math
@@ -551,75 +544,6 @@ RUN set -e; \
     && rm -rf /tmp/gwd
 
 # =============================================================================
-# Stage: vast-docker  ->  :dpad-heroic
-#   Vast Docker: Heroic Games Launcher + XFCE desktop + Firefox (cloud desktop +
-#   non-Steam games). No Steam, no gamescope, no Proton baked in (Heroic
-#   downloads its own Proton at runtime). Default launcher = heroic.
-# =============================================================================
-FROM base AS vast-docker
-ARG DEBIAN_FRONTEND
-ARG HEROIC_VERSION
-LABEL description="DpadCloud Vast Docker: Heroic desktop + Selkies (Ubuntu 24.04)"
-# Default to the Heroic launcher (Steam is blocked on Vast Docker).
-ENV DPAD_LAUNCHER=heroic
-
-# --- XFCE desktop (light) ---
-RUN apt-get update && apt-get install -y --no-install-recommends xfce4 xfce4-goodies \
-    && rm -rf /var/lib/apt/lists/*
-
-# --- Heroic Games Launcher (Epic + GOG + Amazon) ---
-# Heroic is Electron (runs with --no-sandbox, no userns). Games launch via
-# umu-launcher (Proton WITHOUT pressure-vessel) -> the Proton-direct flow.
-# accountsservice: Heroic queries org.freedesktop.Accounts over D-Bus and
-# degrades if it can't reach it (Steam-Headless #210).
-RUN set -e; \
-    HEROIC_VER_STR="${HEROIC_VERSION#v}"; \
-    HEROIC_DEB="Heroic-${HEROIC_VER_STR}-linux-amd64.deb"; \
-    apt-get update && apt-get install -y --no-install-recommends accountsservice curl; \
-    cd /tmp && curl -fsSL -o "/tmp/${HEROIC_DEB}" \
-      "https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher/releases/download/${HEROIC_VERSION}/${HEROIC_DEB}" \
-    && ( dpkg -i "/tmp/${HEROIC_DEB}" || apt-get install -f -y ) \
-    && rm -f "/tmp/${HEROIC_DEB}" \
-    && rm -rf /var/lib/apt/lists/* \
-    && command -v heroic
-
-# --- Firefox (real .deb from Mozilla's apt repo — NOT snap). For Heroic
-#    external "buy on store" links + a desktop browser on the streamed session. ---
-RUN set -e; \
-    install -d -m 0755 /etc/apt/keyrings; \
-    wget -q https://packages.mozilla.org/apt/repo-signing-key.gpg \
-      -O /etc/apt/keyrings/packages.mozilla.org.asc; \
-    echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" \
-      > /etc/apt/sources.list.d/mozilla.list; \
-    # Pin the Mozilla origin above the Ubuntu snap-stub firefox (whose 1: epoch
-    # would otherwise win) so apt installs the real .deb, not the broken snap.
-    printf 'Package: firefox*\nPin: origin packages.mozilla.org\nPin-Priority: 1001\n' > /etc/apt/preferences.d/mozilla; \
-    apt-get update && apt-get install -y --no-install-recommends firefox; \
-    update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/firefox 200 2>/dev/null || true; \
-    rm -rf /var/lib/apt/lists/*
-
-# Heroic launcher wrapper (the entrypoint calls /opt/dpadcloud/heroic-launch).
-COPY scripts/heroic-launch /opt/dpadcloud/heroic-launch
-RUN sed -i 's/\r$//' /opt/dpadcloud/heroic-launch && chmod +x /opt/dpadcloud/heroic-launch
-
-# --- SSH server (B1: dpadplay VPS reverse-proxy tunnel) ---
-# The dpadplay VPS autossh-tunnels to localhost:16100 (Selkies) through the
-# Vast-mapped port 22, so the stream URL can be play-<id>.dpadplay.com instead
-# of trycloudflare.com. Media/input stay direct via coturn — this carries ONLY
-# the signaling WebSocket. Pubkey-only; the key is injected at runtime via
-# DPAD_ORCHESTRATOR_PUBKEY (see entrypoint.sh). Backward-compatible: cloudflared
-# still runs as a fallback until the orchestrator switches to DPAD_TUNNEL=ssh.
-RUN apt-get update && apt-get install -y --no-install-recommends openssh-server \
-    && mkdir -p /run/sshd && rm -rf /var/lib/apt/lists/*
-
-EXPOSE 16100/tcp 22/tcp
-# 3478 (coturn TURN) is opt-in via -p 3478:3478 at launch (not EXPOSE'd — see
-# the ports comment in the base stage). No 8080/47989/47990/41641 (mws/Sunshine/
-# Tailscale removed).
-USER root
-ENTRYPOINT ["/opt/dpadcloud/entrypoint.sh"]
-
-# =============================================================================
 # Stage: vast-vm  ->  :dpad-SteamOS
 #   Vast KVM VM: Steam + gamescope (full Steam, Big Picture) + Selkies stream.
 #   Fast-boot: the Steam client is pre-bootstrapped at build time. No desktop
@@ -754,10 +678,9 @@ RUN chmod +x /tmp/build-bootstrap-steam.sh \
 #        degradation warning (Steam-Headless #210). --no-sandbox at runtime
 #        (no setuid chrome-sandbox in the container). Heroic config persists on
 #        the volume via setup_stores (~/.config/heroic -> <vol>/heroic-config).
-#        NOTE: Heroic is also installed in the vast-docker stage (the deprecated
-#        :dpad-heroic image); this vast-vm install is separate so the SteamOS
-#        image has it for the Epic/GOG store cards. The base ARG HEROIC_VERSION
-#        (v2.22.0) is inherited.
+#        NOTE: Heroic is also installed for the Epic/GOG store cards (was
+#        previously in the deprecated vast-docker stage). The base ARG
+#        HEROIC_VERSION (v2.22.0) is inherited.
 ARG HEROIC_VERSION
 RUN set -e; \
     HEROIC_VER_STR="${HEROIC_VERSION#v}"; \
@@ -808,6 +731,19 @@ RUN mkdir -p "${HOME}/.config/heroic/store" && \
     > "${HOME}/.config/heroic/store/config.json" && \
     chown -R ${USERNAME}:${USERNAME} "${HOME}/.config/heroic"
 
+#    (c) dpad-launcher — the 10-foot Electron store-picker shell (replaces
+#        lutris-gamepad-ui; the entrypoint's DPAD_STORE_SHELL=picker gate execs
+#        launcher-shell). Shipped as the forcespt/dpadcloud-launcher Docker image
+#        (a FROM-scratch file bundle holding the Linux Electron AppDir at
+#        /opt/dpadcloud/launcher, built locally via launcher/scripts/build.sh +
+#        launcher/Dockerfile). The AppDir bundles koffi (native, unpacked) for
+#        the SDL3 gamepad poll. The Electron runtime libs (libnss/libgtk/
+#        libasound/libxss/...) are already present (lutris-gamepad-ui is also
+#        Electron); libSDL3.so.0 below is shared with lutris-gamepad-ui's koffi
+#        path. See launcher/README + WAYLAND-ARCHITECTURE.md.
+COPY --from=forcespt/dpadcloud-launcher:0.1.3 /opt/dpadcloud/launcher /opt/dpadcloud/launcher
+RUN chmod +x /opt/dpadcloud/launcher/dpad-launcher
+
 #    (a) GE-Proton11-3 into compatibilitytools.d. The Battle.net white-screen
 #        fix is in (GE-Proton11-2 changelog: "Battle.net: fixed Wine Wayland
 #        white-screen behavior" + "--in-process-gpu handling for Wine Wayland
@@ -816,15 +752,20 @@ RUN mkdir -p "${HOME}/.config/heroic/store" && \
 #        the same way steam.exe does… helps 3rd-party launchers run the same
 #        way Steam runs them") + the Diablo IV/Marvel Rivals upstream fixes +
 #        the DualSense haptics/hotplug work. All Windows launchers run via
-#        Xwayland (PROTON_ENABLE_WAYLAND unset) — STORES-PLAN §4/§5. Not yet
-#        SHA-pinned (matches the existing curl-download pattern; a future
-#        hardening can add the .sha512sum check + an ARG bump on version rollover).
+#        Xwayland (PROTON_ENABLE_WAYLAND unset) — STORES-PLAN §4/§5. SHA-pinned
+#        via GE_PROTON_SHA256 build-arg (empty = skip, for dev; set in prod
+#        builds to verify the download).
 ARG GE_PROTON_VERSION=GE-Proton11-3
+ARG GE_PROTON_SHA256=  # set via --build-arg to enable SHA verification (empty = skip)
 RUN set -e; \
     GP_DIR="${HOME}/.steam/debian-installation/compatibilitytools.d/${GE_PROTON_VERSION}"; \
     mkdir -p "${GP_DIR}"; \
     curl -fsSL -o /tmp/ge-proton.tar.gz \
       "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/${GE_PROTON_VERSION}/${GE_PROTON_VERSION}.tar.gz" \
+    && if [ -n "${GE_PROTON_SHA256}" ]; then \
+         echo "${GE_PROTON_SHA256}  /tmp/ge-proton.tar.gz" | sha256sum -c - \
+         || { echo "FATAL: GE-Proton SHA256 mismatch — download may be corrupted or tampered"; exit 1; }; \
+       else echo "    NOTE: GE_PROTON_SHA256 not set — skipping SHA verification"; fi \
     && tar -xzf /tmp/ge-proton.tar.gz -C "${GP_DIR}" --strip-components=1 \
     && rm -f /tmp/ge-proton.tar.gz \
     && chown -R ${USERNAME}:${USERNAME} "${GP_DIR}" \
@@ -848,91 +789,6 @@ RUN set -e; \
     && mv /opt/dpadcloud/squashfs-root /opt/dpadcloud/lutris-gamepad-ui \
     && rm -f /tmp/lutris-gamepad-ui.AppImage \
     && test -x /opt/dpadcloud/lutris-gamepad-ui/AppRun  # sanity: extracted AppRun is executable (no FUSE needed at runtime)
-
-#    lutris-shell wrapper — the entrypoint's DPAD_STORE_SHELL gate (a later
-#    commit) execs this instead of `steam -gamepadui` when DPAD_STORE_SHELL=lutris.
-#    Mirrors scripts/heroic-launch (the vast-docker Heroic wrapper): sets
-#    LUTRIS_GAMEPAD_UI_ENABLE_SDL_INPUT=1 + --no-sandbox + runs the extracted
-#    AppRun. See scripts/lutris-shell for the full rationale.
-COPY scripts/lutris-shell /opt/dpadcloud/lutris-shell
-RUN sed -i 's/\r$//' /opt/dpadcloud/lutris-shell && chmod +x /opt/dpadcloud/lutris-shell
-
-#    (c) dpad-launcher — the 10-foot Electron store-picker shell (replaces
-#        lutris-gamepad-ui; the entrypoint's DPAD_STORE_SHELL=picker gate execs
-#        launcher-shell). Shipped as the forcespt/dpadcloud-launcher Docker image
-#        (a FROM-scratch file bundle holding the Linux Electron AppDir at
-#        /opt/dpadcloud/launcher, built locally via launcher/scripts/build.sh +
-#        launcher/Dockerfile). The AppDir bundles koffi (native, unpacked) for
-#        the SDL3 gamepad poll. The Electron runtime libs (libnss/libgtk/
-#        libasound/libxss/...) are already present (lutris-gamepad-ui is also
-#        Electron); libSDL3.so.0 below is shared with lutris-gamepad-ui's koffi
-#        path. See launcher/README + WAYLAND-ARCHITECTURE.md.
-COPY --from=forcespt/dpadcloud-launcher:0.1.3 /opt/dpadcloud/launcher /opt/dpadcloud/launcher
-RUN chmod +x /opt/dpadcloud/launcher/dpad-launcher
-#    launcher-shell wrapper — the entrypoint's DPAD_STORE_SHELL=picker gate
-#    execs this instead of `steam -gamepadui` / `lutris-shell` (--no-sandbox;
-#    inherits the session's SDL3/interposer env).
-COPY scripts/launcher-shell /opt/dpadcloud/launcher-shell
-RUN sed -i 's/\r$//' /opt/dpadcloud/launcher-shell && chmod +x /opt/dpadcloud/launcher-shell
-#    launcher-toggle — bound to Super+L in the sway config; shows the launcher
-#    from scratchpad or relaunches it if the process died (recovery path).
-COPY scripts/launcher-toggle /opt/dpadcloud/launcher-toggle
-RUN sed -i 's/\r$//' /opt/dpadcloud/launcher-toggle && chmod +x /opt/dpadcloud/launcher-toggle
-
-#    (c2) battlenet-launch — the Battle.net store wrapper the dpad-launcher's
-#         "Battle.net" card spawns (launcher/src/main.js). Runs the Blizzard
-#         installer into a Wine prefix on first launch, then launches Battle.net.exe
-#         under GE-Proton11-3 (the white-screen fix). The prefix lives at
-#         ~/Games/battlenet (-> <vol>/games/battlenet via setup_stores). STORES-PLAN §7.
-#         On PATH at /usr/local/bin so the launcher's `which('battlenet-launch')`
-#         availability check resolves it (mirror the gamescope/lutris symlink pattern).
-COPY scripts/battlenet-launch /opt/dpadcloud/battlenet-launch
-RUN sed -i 's/\r$//' /opt/dpadcloud/battlenet-launch && chmod +x /opt/dpadcloud/battlenet-launch \
-    && ln -sf /opt/dpadcloud/battlenet-launch /usr/local/bin/battlenet-launch \
-    && test -x /usr/local/bin/battlenet-launch
-
-#    (c2b) ea-launch + ubisoft-launch — the EA App + Ubisoft Connect store
-#         wrappers the dpad-launcher's "EA App" / "Ubisoft Connect" cards spawn
-#         (launcher/src/main.js). Same pattern as battlenet-launch: run the
-#         Windows installer (EAappInstaller.exe / UbisoftConnectInstaller.exe)
-#         into a Wine prefix on first launch under GE-Proton11-3 via umu-run,
-#         then launch EALauncher.exe / UbisoftConnect.exe with CEF software
-#         compositing (--disable-gpu --in-process-gpu). Prefixes live at
-#         ~/Games/ea-app + ~/Games/ubisoft (-> <vol>/games/ea-app /
-#         <vol>/games/ubisoft via setup_stores). STORES-PLAN §8 (v1.1 drop-ins,
-#         now promoted to v1). On PATH at /usr/local/bin so the launcher's
-#         `which()` availability check resolves it. ⚠️ Ubisoft Connect is
-#         more fragile than EA App (April 2026 client update broke auth under
-#         standard Proton; GE-Proton is the workaround — see ubisoft-launch
-#         header). Live validation required.
-COPY scripts/ea-launch /opt/dpadcloud/ea-launch
-COPY scripts/ubisoft-launch /opt/dpadcloud/ubisoft-launch
-COPY scripts/dpad-open-url /opt/dpadcloud/dpad-open-url
-RUN sed -i 's/\r$//' /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch /opt/dpadcloud/dpad-open-url \
-    && chmod +x /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch /opt/dpadcloud/dpad-open-url \
-    && ln -sf /opt/dpadcloud/ea-launch /usr/local/bin/ea-launch \
-    && ln -sf /opt/dpadcloud/ubisoft-launch /usr/local/bin/ubisoft-launch \
-    && ln -sf /opt/dpadcloud/dpad-open-url /usr/local/bin/xdg-open \
-    && test -x /usr/local/bin/ea-launch \
-    && test -x /usr/local/bin/ubisoft-launch \
-    && test -x /usr/local/bin/xdg-open
-
-#    (c2a) epic-launch + gog-launch — the Epic + GOG store wrappers the
-#         dpad-launcher's "Epic Games" / "GOG" cards spawn (launcher/src/main.js).
-#         Each spawns Heroic Games Launcher (baked in the base stage, inherited
-#         by vast-vm), which bundles legendary (Epic) / gogdl (GOG) for login +
-#         game install + game launch. On PATH at /usr/local/bin so the launcher's
-#         `which()` availability check resolves it (mirror the battlenet-launch
-#         symlink pattern). The prefix/game installs + Heroic config persist on
-#         the volume via the entrypoint's setup_stores. STORES-PLAN §7.
-COPY scripts/epic-launch /opt/dpadcloud/epic-launch
-COPY scripts/gog-launch /opt/dpadcloud/gog-launch
-RUN sed -i 's/\r$//' /opt/dpadcloud/epic-launch /opt/dpadcloud/gog-launch \
-    && chmod +x /opt/dpadcloud/epic-launch /opt/dpadcloud/gog-launch \
-    && ln -sf /opt/dpadcloud/epic-launch /usr/local/bin/epic-launch \
-    && ln -sf /opt/dpadcloud/gog-launch /usr/local/bin/gog-launch \
-    && test -x /usr/local/bin/epic-launch \
-    && test -x /usr/local/bin/gog-launch
 
 #    (d) libSDL3 for lutris-gamepad-ui's gamepad input (koffi FFI dlopen). SDL3
 #        is NOT in Noble repos; the oracular libsdl3-0 .deb churns the pinned
@@ -1031,6 +887,7 @@ RUN set -e; \
 #        add --security-opt systempaths=unconfined to the docker run (the
 #        fourth bwrap-nest flag) — a runtime-validation item.
 ARG UMU_VERSION=1.4.4
+ARG UMU_SHA256=  # set via --build-arg to enable SHA verification (empty = skip)
 RUN set -e; \
     apt-get update && apt-get install -y --no-install-recommends \
         python3-xlib apparmor-profiles libzstd1 \
@@ -1038,12 +895,52 @@ RUN set -e; \
     && rm -rf /var/lib/apt/lists/* \
     && cd /tmp && curl -fsSL -o /tmp/umu.deb \
       "https://github.com/Open-Wine-Components/umu-launcher/releases/download/${UMU_VERSION}/python3-umu-launcher_${UMU_VERSION}-1_amd64_ubuntu-noble.deb" \
+    && if [ -n "${UMU_SHA256}" ]; then \
+         echo "${UMU_SHA256}  /tmp/umu.deb" | sha256sum -c - \
+         || { echo "FATAL: umu-launcher SHA256 mismatch"; exit 1; }; \
+       else echo "    NOTE: UMU_SHA256 not set — skipping SHA verification"; fi \
     && apt-get update && ( apt-get install -y --no-install-recommends /tmp/umu.deb \
                            || ( apt-get install -f -y && dpkg -i /tmp/umu.deb ) ) \
     && rm -f /tmp/umu.deb && rm -rf /var/lib/apt/lists/* \
     && command -v umu-run \
     && test -s /usr/bin/umu-run \
     && python3 -c 'import umu.umu_consts'   # sanity: the launcher imports (do NOT run umu-run — it fetches the ~1-2 GB SLR on first exec)
+
+# --- Consolidated store-launcher scripts (placed AFTER all heavy downloads so
+#     editing a script doesn't invalidate the GE-Proton/Wine/umu layers). ---
+#    lutris-shell, launcher-shell, launcher-toggle, battlenet-launch, ea-launch,
+#    ubisoft-launch, dpad-open-url, epic-launch, gog-launch — all small COPYs
+#    consolidated into one layer group for cache efficiency.
+COPY scripts/lutris-shell /opt/dpadcloud/lutris-shell
+COPY scripts/launcher-shell /opt/dpadcloud/launcher-shell
+COPY scripts/launcher-toggle /opt/dpadcloud/launcher-toggle
+COPY scripts/battlenet-launch /opt/dpadcloud/battlenet-launch
+COPY scripts/ea-launch /opt/dpadcloud/ea-launch
+COPY scripts/ubisoft-launch /opt/dpadcloud/ubisoft-launch
+COPY scripts/dpad-open-url /opt/dpadcloud/dpad-open-url
+COPY scripts/epic-launch /opt/dpadcloud/epic-launch
+COPY scripts/gog-launch /opt/dpadcloud/gog-launch
+RUN set -e; \
+    sed -i 's/\r$//' \
+      /opt/dpadcloud/lutris-shell /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle \
+      /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
+      /opt/dpadcloud/dpad-open-url /opt/dpadcloud/epic-launch /opt/dpadcloud/gog-launch \
+    && chmod +x \
+      /opt/dpadcloud/lutris-shell /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle \
+      /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
+      /opt/dpadcloud/dpad-open-url /opt/dpadcloud/epic-launch /opt/dpadcloud/gog-launch \
+    && ln -sf /opt/dpadcloud/battlenet-launch /usr/local/bin/battlenet-launch \
+    && ln -sf /opt/dpadcloud/ea-launch /usr/local/bin/ea-launch \
+    && ln -sf /opt/dpadcloud/ubisoft-launch /usr/local/bin/ubisoft-launch \
+    && ln -sf /opt/dpadcloud/dpad-open-url /usr/local/bin/xdg-open \
+    && ln -sf /opt/dpadcloud/epic-launch /usr/local/bin/epic-launch \
+    && ln -sf /opt/dpadcloud/gog-launch /usr/local/bin/gog-launch \
+    && test -x /usr/local/bin/battlenet-launch \
+    && test -x /usr/local/bin/ea-launch \
+    && test -x /usr/local/bin/ubisoft-launch \
+    && test -x /usr/local/bin/xdg-open \
+    && test -x /usr/local/bin/epic-launch \
+    && test -x /usr/local/bin/gog-launch
 
 #    (f) Build-time Battle.net prefix prebake (STORES-PLAN §7 piece 2 / §10
 #        piece 2). Runs `umu-run winetricks` (corefonts win10 vcrun2022
