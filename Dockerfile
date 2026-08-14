@@ -891,6 +891,29 @@ RUN sed -i 's/\r$//' /opt/dpadcloud/battlenet-launch && chmod +x /opt/dpadcloud/
     && ln -sf /opt/dpadcloud/battlenet-launch /usr/local/bin/battlenet-launch \
     && test -x /usr/local/bin/battlenet-launch
 
+#    (c2b) ea-launch + ubisoft-launch — the EA App + Ubisoft Connect store
+#         wrappers the dpad-launcher's "EA App" / "Ubisoft Connect" cards spawn
+#         (launcher/src/main.js). Same pattern as battlenet-launch: run the
+#         Windows installer (EAappInstaller.exe / UbisoftConnectInstaller.exe)
+#         into a Wine prefix on first launch under GE-Proton11-3 via umu-run,
+#         then launch EALauncher.exe / UbisoftConnect.exe with CEF software
+#         compositing (--disable-gpu --in-process-gpu). Prefixes live at
+#         ~/Games/ea-app + ~/Games/ubisoft (-> <vol>/games/ea-app /
+#         <vol>/games/ubisoft via setup_stores). STORES-PLAN §8 (v1.1 drop-ins,
+#         now promoted to v1). On PATH at /usr/local/bin so the launcher's
+#         `which()` availability check resolves it. ⚠️ Ubisoft Connect is
+#         more fragile than EA App (April 2026 client update broke auth under
+#         standard Proton; GE-Proton is the workaround — see ubisoft-launch
+#         header). Live validation required.
+COPY scripts/ea-launch /opt/dpadcloud/ea-launch
+COPY scripts/ubisoft-launch /opt/dpadcloud/ubisoft-launch
+RUN sed -i 's/\r$//' /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
+    && chmod +x /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
+    && ln -sf /opt/dpadcloud/ea-launch /usr/local/bin/ea-launch \
+    && ln -sf /opt/dpadcloud/ubisoft-launch /usr/local/bin/ubisoft-launch \
+    && test -x /usr/local/bin/ea-launch \
+    && test -x /usr/local/bin/ubisoft-launch
+
 #    (c2a) epic-launch + gog-launch — the Epic + GOG store wrappers the
 #         dpad-launcher's "Epic Games" / "GOG" cards spawn (launcher/src/main.js).
 #         Each spawns Heroic Games Launcher (baked in the base stage, inherited

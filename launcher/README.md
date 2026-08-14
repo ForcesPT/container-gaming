@@ -2,9 +2,10 @@
 
 A 10-foot, gamepad/keyboard-navigable **store launcher** that runs as the
 session shell (where `lutris-shell` ran before). It's a front door to the
-installed store clients — Steam (available), Battle.net / Epic / GOG / EA /
-Ubisoft ("coming soon") — instead of Lutris's library-aggregator model (which
-showed "no games found" on a fresh VM until each store was logged in + synced).
+installed store clients — Steam, Battle.net, EA App, Ubisoft Connect, Epic /
+GOG (all via launch scripts) — instead of Lutris's library-aggregator model
+(which showed "no games found" on a fresh VM until each store was logged in +
+synced).
 
 Selecting a store card spawns that store's client (e.g. `steam -gamepadui`) in
 the same sway/XWayland session; quitting the store returns to the launcher.
@@ -15,7 +16,9 @@ the same sway/XWayland session; quitting the store returns to the launcher.
 - `src/preload.js` — contextBridge IPC (getStores / launchStore / pollGamepads / quit).
 - `src/renderer.js` — keyboard + gamepad nav, focus, the launch overlay.
 - `src/index.html` + `src/styles.css` — the UI (graphite6 palette, from the live site).
-- `src/stores` — the store registry is in `main.js` (Steam available; rest coming-soon).
+- `src/stores` — the store registry is in `main.js` (Steam, Battle.net, EA
+  App, Ubisoft Connect, Epic, GOG — all auto-detected via `which()` on the
+  launch script).
 - `src/sdl_bindings.cjs` + `src/sdl_manager.cjs` — koffi/SDL3 gamepad (ported from
   lutris-gamepad-ui; the Web Gamepad API doesn't see the mknod'd pads in-container).
 - `src/logos/*.svg` — bundled brand logos (generated from `simple-icons` via

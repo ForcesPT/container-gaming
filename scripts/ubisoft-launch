@@ -1,0 +1,167 @@
+#!/bin/bash
+# ubisoft-launch — launch the Ubisoft Connect Windows client under
+# GE-Proton11-3 via umu-launcher (the Steam Linux Runtime container) in the
+# headless cloud-gaming session. The dpad-launcher's "Ubisoft Connect" store
+# card (launcher/src/main.js) spawns this; it runs IN THE SAME sway/XWayland
+# session (inheriting DISPLAY=:0, the NVIDIA EGL vendor, PULSE_SERVER, the
+# gamepad interposer env) so the Ubisoft Connect window is captured by the
+# wayland-display compositor + the user interacts via Selkies.
+#
+# This follows the battlenet-launch pattern exactly:
+#   1. Wine prefix at ~/Games/ubisoft (-> <vol>/games/ubisoft on a persistent
+#      volume; the capped rootfs on ephemeral sessions).
+#   2. GE-Proton11-3 (already baked in compatibilitytools.d/) — bundles the
+#      NVIDIA compat libs + umu.exe. Ubisoft Connect is a CEF/Electron app →
+#      same Xwayland path as Battle.net (PROTON_ENABLE_WAYLAND unset).
+#   3. First launch: umu-run winetricks initializes the prefix (corefonts/
+#      win10/vcrun2022/d3dcompiler_47) inside the SLR, then downloads +
+#      runs UbisoftConnectInstaller.exe. Every later launch reuses the
+#      installed launcher + the stored login token.
+#   4. CEF software compositing: --disable-gpu --in-process-gpu (same fix as
+#      Battle.net — the CEF GPU present path white-screens under
+#      Xwayland-in-SLR).
+#
+# ⚠️ KNOWN FRAGILITY (2026-08): Ubisoft Connect is more fragile than Battle.net
+# or EA App under Wine/Proton. The April 2026 client update broke auth under
+# standard Valve Proton; GE-Proton is the workaround. The Lutris install
+# script was also broken (lutris/lutris#6599, March 2026). Some games need
+# Steam "Offline Mode" tricks. This script follows the proven battlenet-launch
+# pattern, but LIVE VALIDATION is required — the umu-run path for Ubisoft
+# Connect is not yet community-confirmed. See STORES-PLAN §12 open items.
+#
+# Container nesting: same as battlenet-launch — umu uses pressure-vessel →
+# bwrap, which needs --cap-add SYS_ADMIN + --security-opt seccomp=unconfined
+# apparmor=unconfined systempaths=unconfined (IMAGE-RUNBOOK).
+#
+# Env inherited from the launcher (the entrypoint's shared_env via launcher-shell):
+#   DISPLAY=:0  WAYLAND_DISPLAY  XDG_RUNTIME_DIR  PULSE_SERVER  HOME  USER
+# Logs: /tmp/ubisoft-launch.log (+ UMU_LOG=1 / PROTON_LOG=1 for verbose).
+set -u
+
+LOG=/tmp/ubisoft-launch.log
+echo "[ubisoft-launch] $(date -Is) start (HOME=${HOME:-} DISPLAY=${DISPLAY:-})" >> "$LOG"
+
+# --- umu-run / GE-Proton / prefix paths --------------------------------------
+# The Wine prefix. ~/Games/ubisoft (-> <vol>/games/ubisoft on a persistent
+# volume; the capped rootfs on ephemeral). An explicit WINEPREFIX override is
+# respected (manual tests / probes).
+PREFIX="${WINEPREFIX:-${HOME}/Games/ubisoft}"
+mkdir -p "$PREFIX" 2>/dev/null || true
+export WINEPREFIX="$PREFIX"
+
+# GE-Proton11-3 — same as battlenet-launch. Bundles the NVIDIA compat libs
+# (NVAPI/CUDA/NVENC/NVML) + umu.exe. Ubisoft Connect runs via Xwayland
+# (PROTON_ENABLE_WAYLAND unset) per STORES-PLAN §5.
+GP_DIR="${HOME}/.steam/debian-installation/compatibilitytools.d/GE-Proton11-3"
+if [ ! -x "$GP_DIR/proton" ]; then
+    echo "[ubisoft-launch] FATAL: GE-Proton11-3 not found at $GP_DIR (no proton binary)" | tee -a "$LOG" >&2
+    exit 1
+fi
+export PROTONPATH="$GP_DIR"
+
+# umu-run env: STORE=ubisoft + GAMEID (umu-ubisoft is the conventional id for
+# the Ubisoft Connect launcher — applies any ubisoft-store protonfix if
+# present, else umu-default = no fix, which is fine: the win is the SLR
+# container's tested wow64, not a gamefix).
+export STORE="${STORE:-ubisoft}"
+export GAMEID="${GAMEID:-umu-ubisoft}"
+export PROTON_VERB="${PROTON_VERB:-waitforexitandrun}"
+
+# Locate umu-run (the deb installs /usr/bin/umu-run; allow a PATH override).
+UMU_RUN="${UMU_RUN:-umu-run}"
+if ! command -v "$UMU_RUN" >/dev/null 2>&1; then
+    echo "[ubisoft-launch] FATAL: umu-run not found on PATH (install the umu-launcher deb)" | tee -a "$LOG" >&2
+    exit 1
+fi
+echo "[ubisoft-launch] umu-run=$(command -v "$UMU_RUN") prefix=$PREFIX proton=$GP_DIR store=$STORE gameid=$GAMEID" >> "$LOG"
+
+# 2026 Ubisoft-Connect-on-GE-Proton must-haves. WINE_SIMULATE_WRITECOPY fixes
+# the CEF write-copy mapping that blanks the installer/login UI (same as
+# Battle.net). locationapi=d disables the Windows Location API DLL that can
+# stall init.
+export WINE_SIMULATE_WRITECOPY=1
+export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-locationapi=d}"
+# Quieter Proton/wine spam in the log. Flip to PROTON_LOG=1 for verbose.
+export WINEDEBUG="${WINEDEBUG:--all}"
+
+# Defensive: drop the session's gamepad-interposer LD_PRELOAD before entering
+# the SLR container (same rationale as battlenet-launch).
+unset LD_PRELOAD
+
+# Ubisoft Connect paths. The installer produces "UbisoftConnect.exe" (the
+# main launcher exe, formerly "upc.exe"). Ubisoft installs to
+# "Program Files (x86)\Ubisoft\Ubisoft Game Launcher\".
+UBI_DIR="$PREFIX/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher"
+UBI_INST="$UBI_DIR/UbisoftConnect.exe"
+UBI_INST_ALT="$UBI_DIR/upc.exe"
+UBI_EXE='C:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\UbisoftConnect.exe'
+UBI_EXE_ALT='C:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\upc.exe'
+
+# The canonical installer URL (confirmed via NonSteamLaunchers — uses Ubisoft's
+# ubi.li short-link redirect to their CDN). A browser User-Agent avoids CDN
+# edge cases. The short link redirects to the current installer version.
+SETUP_URL='https://ubi.li/4vxt9'
+UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'
+SETUP_DIR="$PREFIX/drive_c/ubisoft-setup"
+SETUP_EXE="$SETUP_DIR/UbisoftConnectInstaller.exe"
+
+# installed = either launcher exe present
+ubi_installed() { [ -f "$UBI_INST" ] || [ -f "$UBI_INST_ALT" ]; }
+
+# --- first-launch install (one-time per prefix) -------------------------------
+if ! ubi_installed; then
+    echo "[ubisoft-launch] first launch — initializing the Wine prefix under umu/SLR, then downloading + installing Ubisoft Connect (the installer window will appear in the stream; ~5-10 min, one-time)" | tee -a "$LOG" >&2
+
+    # Pre-config the prefix BEFORE the installer (mirrors the Lutris Ubisoft
+    # Connect install script). Running winetricks through umu-run creates the
+    # prefix inside the Steam Linux Runtime container (Proton's wine + Valve's
+    # tested 32/64-bit libs) + applies the verbs in one step.
+    #   corefonts       — the installer's CEF UI needs MS fonts
+    #   win10           — Ubisoft Connect's server comms + SSL/DNS require Win10
+    #   vcrun2022       — the Ubisoft Connect runtime needs the VC++ 2022 runtime
+    #   d3dcompiler_47  — the D3D compiler (CEF rendering needs it)
+    # Best-effort: a winetricks failure leaves the prefix for the installer to
+    # complete (fonts/verbs are polish; the SLR's matched libs are the real fix).
+    echo "[ubisoft-launch] umu-run winetricks -q corefonts win10 vcrun2022 d3dcompiler_47" >> "$LOG"
+    "$UMU_RUN" winetricks -q corefonts win10 vcrun2022 d3dcompiler_47 >>"$LOG" 2>&1 \
+        || echo "[ubisoft-launch] umu-run winetricks exited $? (best-effort — the SLR's matched libs are the real fix)" >> "$LOG"
+
+    mkdir -p "$SETUP_DIR" 2>/dev/null || true
+    # -L to follow the ubi.li redirect to the actual CDN URL.
+    if ! curl -fsSL -A "$UA" -o "$SETUP_EXE" "$SETUP_URL" >>"$LOG" 2>&1; then
+        echo "[ubisoft-launch] FATAL: UbisoftConnectInstaller.exe download failed ($SETUP_URL)" | tee -a "$LOG" >&2
+        exit 1
+    fi
+    echo "[ubisoft-launch] downloaded $(ls -l "$SETUP_EXE" 2>/dev/null | awk '{print $5}') bytes — running installer under umu/SLR" >> "$LOG"
+
+    # Run the Ubisoft Connect installer through umu-run (GE-Proton inside the
+    # SLR). The installer is a Chromium/CEF GUI: it opens a window on DISPLAY
+    # (:0, sway's Xwayland), downloads the Ubisoft Connect client, + installs
+    # it. Best-effort: a failed/half install leaves the prefix for inspection;
+    # re-launch retries.
+    "$UMU_RUN" "$SETUP_EXE" >>"$LOG" 2>&1 || echo "[ubisoft-launch] installer exited $?" >> "$LOG"
+
+    # Wait (up to 15 min) for the install to produce the launcher.
+    i=0
+    while [ $i -lt 90 ] && ! ubi_installed; do
+        sleep 10; i=$((i+1))
+    done
+    rm -rf "$SETUP_DIR" 2>/dev/null || true
+fi
+
+if ! ubi_installed; then
+    echo "[ubisoft-launch] FATAL: Ubisoft Connect launcher not found after install ($UBI_INST / $UBI_INST_ALT)" | tee -a "$LOG" >&2
+    exit 1
+fi
+
+# Pick the launch exe: prefer UbisoftConnect.exe (current name); fall back to
+# upc.exe (legacy Uplay name, still present in some installs).
+if [ -f "$UBI_INST" ]; then EXE="$UBI_EXE"; else EXE="$UBI_EXE_ALT"; fi
+# Ubisoft Connect is a Chromium/CEF app. Under Wine/Proton + Xwayland the CEF
+# GPU present path white-screens (same issue as Battle.net). Force CEF
+# software compositing with --disable-gpu + --in-process-gpu. Env-overridable
+# via DPAD_UBISOFT_CEF_ARGS (e.g. '' to disable, or PROTON_ENABLE_WAYLAND=1 +
+# the GE-Proton11-2 wine-wayland fix path instead).
+UBI_CEF_ARGS="${DPAD_UBISOFT_CEF_ARGS:---disable-gpu --in-process-gpu}"
+echo "[ubisoft-launch] launching $EXE under umu/SLR (cef_args=$UBI_CEF_ARGS)" >> "$LOG"
+exec "$UMU_RUN" "$EXE" $UBI_CEF_ARGS

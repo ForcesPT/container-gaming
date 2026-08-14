@@ -61,8 +61,8 @@ that owns the library + launches each store's games:
 | **Epic** | Lutris source (Legendary) | ❌ No launcher | Just Lutris + the Epic source; first-session browser login |
 | **GOG** | Lutris source (gogdl) | ❌ No launcher (DRM-free) | Just Lutris + the GOG source; first-session login |
 | **Battle.net** | Windows launcher in a Wine prefix | ✅ `Battle.net.exe` | ✅ **NEW** — pre-run the Lutris install script at build (launcher + prefix baked); first-session Battle.net login |
-| *(v1.1)* EA App | Windows launcher in a Wine prefix | ✅ `EADesktop.exe` | same pattern as Battle.net |
-| *(v1.1)* Ubisoft Connect | Windows launcher in a Wine prefix | ✅ `UbisoftConnect.exe` | same pattern as Battle.net |
+| **EA App** | Windows launcher in a Wine prefix | ✅ `EALauncher.exe` | ✅ `scripts/ea-launch` (umu-run, first-launch install) |
+| **Ubisoft Connect** | Windows launcher in a Wine prefix | ✅ `UbisoftConnect.exe` | ✅ `scripts/ubisoft-launch` (umu-run, first-launch install) |
 
 The shared Proton compatibility layer is **GE-Proton11-3** (baked into
 `compatibilitytools.d/`), run via **umu-launcher** (the path the image already
@@ -283,16 +283,31 @@ ui` + the games.
   phase). Diablo IV / WoW / Hearthstone work on Proton; Overwatch 2 (kernel
   AC) is blocked.
 
-## 8. v1.1 drop-ins (same pattern as Battle.net — reserve slots now)
+## 8. EA App + Ubisoft Connect — promoted from v1.1 to v1 (implemented 2026-08-14)
 
-| Store | Launcher | Lutris install script | Volume slot |
-|---|---|---|---|
-| **EA App** | `EADesktop.exe` (from `origin-a.akamaihd.net/EAappInstaller.exe`) | ✅ ~24 k users; create_prefix → winetricks (`corefonts win10 d3dcompiler_47 liberation d3dx9`) → `wineexec /silent` → `winekill` | `<vol>/games/ea-app/` |
-| **Ubisoft Connect** | `UbisoftConnect.exe` | ✅ community script | `<vol>/games/ubisoft/` |
+**Both stores now follow the `battlenet-launch` pattern** (implemented as
+`scripts/ea-launch` + `scripts/ubisoft-launch`, baked into the image via the
+Dockerfile, registered in the dpad-launcher `main.js` store registry with
+`comingSoon` removed). The original v1.1 reservation table is kept below as
+the design record.
+
+| Store | Launcher | Launch script | Volume slot | Status |
+|---|---|---|---|---|
+| **EA App** | `EALauncher.exe` / `EADesktop.exe` | `scripts/ea-launch` (umu-run + GE-Proton11-3) | `<vol>/games/ea-app/` | ✅ Script written, needs live validation |
+| **Ubisoft Connect** | `UbisoftConnect.exe` / `upc.exe` | `scripts/ubisoft-launch` (umu-run + GE-Proton11-3) | `<vol>/games/ubisoft/` | ⚠️ Script written, higher risk — needs live validation |
 
 Both are the **same "Windows launcher in a Wine prefix" pattern** as Battle.net
 → low marginal cost, no re-architecture. EA App-specific note: it's flaky on
 wine-wayland (GE-Proton #188) → the §5 Xwayland rule already covers it.
+Ubisoft Connect-specific note: the April 2026 client update broke auth under
+standard Valve Proton; GE-Proton is the workaround. The Lutris install script
+was also broken (lutris/lutris#6599). The umu-run path for Ubisoft Connect is
+not yet community-confirmed — live validation required.
+
+**Anti-cheat caveat (both stores):** EA AntiCheat (EAAC) is kernel-mode and
+does NOT work on Linux/Proton at all (Battlefield, EA Sports FC, Apex).
+Ubisoft per-title: BattlEye/EAC, some enabled Linux support. Anti-cheat remains
+a website/docs problem (deferred), not a container concern.
 
 ## 9. Volume / state layout (extends the install-root-on-volume fix)
 
@@ -385,6 +400,22 @@ needed — just a UX hint.
    install script at build time; confirm it's reproducible (the script downloads
    `Battle.net-Setup.exe` from EA's/Blizzard's CDN — pin the URL or mirror the
    installer in the image for build determinism).
+8. **Live-validate EA App via `ea-launch`** — probe on one L4/L40S (OVH
+   Gravelines). Confirm: (a) `EAappInstaller.exe` downloads from
+   `origin-a.akamaihd.net` inside the container; (b) the installer runs under
+   umu/SLR + the CEF UI renders (not white-screen) with `--disable-gpu
+   --in-process-gpu`; (c) `EALauncher.exe` is produced; (d) EA App login +
+   game install works. Non-EAAC EA games only (EAAC = kernel-mode, no Linux).
+9. **Live-validate Ubisoft Connect via `ubisoft-launch`** — HIGHER RISK. The
+   April 2026 client update broke auth under standard Proton; GE-Proton is the
+   workaround. The Lutris install script was broken (lutris/lutris#6599). The
+   umu-run path for Ubisoft Connect is not yet community-confirmed. Confirm:
+   (a) `UbisoftConnectInstaller.exe` downloads from the `ubi.li/4vxt9` redirect
+   inside the container; (b) the installer runs under umu/SLR; (c)
+   `UbisoftConnect.exe` is produced; (d) login works under GE-Proton11-3; (e)
+   the "unrecoverable error" doesn't recur. If it does, try: installing with a
+   different Wine version then switching to GE-Proton, or the Steam "Offline
+   Mode" trick (Proton issue #6765).
 
 ## 13. DECISION block (locked 2026-08)
 
@@ -393,10 +424,11 @@ needed — just a UX hint.
   picker if the UX doesn't feel right.
 - **Proton:** GE-Proton11-3 baked in; Xwayland for all Windows launchers
   (`PROTON_ENABLE_WAYLAND` unset).
-- **Stores (v1):** Steam (native, already pre-baked) · Epic (Lutris source) ·
-  GOG (Lutris source) · Battle.net (pre-baked launcher+prefix via Lutris script).
-- **v1.1 (drop-in, same pattern):** EA App · Ubisoft Connect — reserve
-  `<vol>/games/ea-app/` + `<vol>/games/ubisoft/` now.
+- **Stores (v1):** Steam (native, already pre-baked) · Battle.net (umu-run) ·
+  EA App (umu-run, `ea-launch`) · Ubisoft Connect (umu-run, `ubisoft-launch`)
+  · Epic (Heroic/legendary) · GOG (Heroic/gogdl).
+- **v1.1 (drop-in, same pattern):** reserved for future stores (itch.io, Amazon
+  Games, etc.) — EA App + Ubisoft Connect were promoted to v1 on 2026-08-14.
 - **Pre-bake:** Steam (done) + Battle.net launcher+prefix (new). Epic/GOG have
   no launcher to pre-bake.
 - **Anti-cheat:** deferred to the website phase (disclaimer + ProtonDB help
