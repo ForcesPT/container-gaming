@@ -201,8 +201,8 @@ plan.
 
 **Release practice (2026-08-15):** build on an OVHcloud GPU VM and publish an
 immutable release tag before updating the convenience tag. The current release
-is `dpad-SteamOS-2026.08.15-r1`; both it and `dpad-SteamOS` resolve to
-`sha256:1f9282b89eaf305c0193af36365de3ddd9c6a97f61ed3ba60c7a36398bfd6f62`.
+is `dpad-SteamOS-2026.08.15-r2`; both it and `dpad-SteamOS` resolve to
+`sha256:50a8ce28a32b0e2f0ae396e3e9d6523f7509d551f9400279ef6525c263b0aa34`.
 Run `python3 scripts/test_dockerfile_pins.py` and `docker buildx build --check
 --target vast-vm .` before the full build. Selkies, GE-Proton, umu, Wayland, and
 gst-wayland-display release-critical artifacts now have SHA-256 guards; bump a
@@ -211,12 +211,13 @@ the exact downloaded filename and proves that successful verification gates the
 next verification/extraction/install operation. Never bypass it with an empty
 checksum, conditional check, or `|| true`.
 
-The `r1` image was built with all recorded checksums populated and verified.
-Build-policy follow-ups `34313a2` and `bbfffb8` landed after that image was
-published; they make future bypasses fail and strengthen mutation coverage.
-Publish `r2` before claiming exact current-HEAD/image provenance. This slice is
-not a complete dependency lock: see the scope boundary at the top of
-`PROJECT_STATE.md` and the remaining Task 1 list in the roadmap.
+The `r2` image is an exact-provenance build of commit
+`63eb0c037fb79578b9f3cc37c19f8f8f73609927`; the OCI revision label and remote
+digest were read back after push. It extends checksum coverage to SDL3,
+cloudflared, VirtualGL, Heroic, VKD3D-Proton, DXVK, DXVK-NVAPI,
+lutris-gamepad-ui, and Lutris. This is still not a complete dependency lock:
+see the scope boundary at the top of `PROJECT_STATE.md` and the remaining Task
+1 list in the roadmap.
 
 The public `:dpad-SteamOS` tag is **current as of the 2026-08-15 rebuild** and
 includes the live in-stream Resolution dropdown (720p/1080p/1440p/4K), the
@@ -228,7 +229,7 @@ and the reproducible-build hardening recorded in `PROJECT_STATE.md`. A fresh
 web-client/handler fixes can ship without a rebuild.
 
 ```bash
-RELEASE=dpad-SteamOS-2026.08.15-r1
+RELEASE=dpad-SteamOS-2026.08.15-r2
 docker build --target vast-vm \
   -t forcespt/dpadcloud-gaming:${RELEASE} \
   -t forcespt/dpadcloud-gaming:dpad-SteamOS .

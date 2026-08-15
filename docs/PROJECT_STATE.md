@@ -14,6 +14,24 @@
 > **`WAYLAND-ARCHITECTURE.md`** (the 2026-08-08 compositor pivot decision —
 > adopts `gst-wayland-display`, retires the §6 #11 Lutris-capture blocker).
 >
+> **2026-08-15 `r2` exact-provenance release — CURRENT.** Commit
+> `63eb0c037fb79578b9f3cc37c19f8f8f73609927` was cloned cleanly on an OVH
+> GRA11 `l4-90`, validated with `docker buildx build --check`, built with OCI
+> revision label set to that full commit, structurally smoke-tested, GPU-tested
+> on an NVIDIA L4/driver 580.159.03, and pushed as both
+> `forcespt/dpadcloud-gaming:dpad-SteamOS-2026.08.15-r2` and `:dpad-SteamOS`.
+> Both remote tags resolve to OCI digest
+> `sha256:50a8ce28a32b0e2f0ae396e3e9d6523f7509d551f9400279ef6525c263b0aa34`
+> (amd64 manifest `sha256:1d7026273a359641b41d931bdce5dd292a9bd5262e7944256ef26a94aa898fcc`),
+> and the remote image revision label was read back and verified. In addition to
+> the `r1` guards, `r2` pins/checksums SDL3, cloudflared, VirtualGL, Heroic,
+> VKD3D-Proton, DXVK, DXVK-NVAPI, lutris-gamepad-ui, and Lutris; every guarded
+> download uses bounded retries, an exact URL template, an in-scope version/hash
+> ARG, exact checksum target, and failure-gated consumption. Smoke checks passed
+> for Selkies 1.6.2, SDL3, cloudflared 2025.7.0, VirtualGL, Heroic, Lutris,
+> lutris-gamepad-ui, all three Heroic compatibility-tool directories, umu,
+> GE-Proton, the Wayland plugin, launcher, and NVIDIA runtime.
+>
 > **2026-08-15 reproducible-build slice — COMPLETE, BUILT + PUSHED from OVHcloud GRA11.**
 > The first item in `.hermes/plans/2026-08-15_195142-container-gaming-stack-roadmap.md`
 > is partially implemented: Selkies is pinned to `1.6.2` and all four consumed release assets
@@ -44,13 +62,12 @@
 > consumption before verification, missing downloads/retries, and `curl | tar`.
 > The published `r1` image was built with the recorded non-empty checksums and
 > passed all artifact/GPU smoke checks; these follow-up commits harden the build
-> policy and validator for subsequent releases. They post-date the `r1` image,
-> so create `r2` if exact image-to-current-HEAD provenance is required.
+> policy and validator for subsequent releases. `r2` above supersedes it and
+> provides exact source/image provenance.
 >
 > **Scope boundary:** this completes the first safe reproducibility slice, not
 > every item in roadmap Task 1. Still unpinned/unlocked include base/external
-> image digests, SDL3, NVRTC selection, cloudflared, VirtualGL, Rust/cargo,
-> Steam bootstrap, Heroic, VKD3D/DXVK/DXVK-NVAPI, Lutris assets, APT snapshots,
+> image digests, NVRTC selection, Rust/cargo, Steam bootstrap, APT snapshots,
 > and conditional store-prefix installers. Roadmap Task 2 is also partial:
 > immutable tag + digest publication are done, but control-plane digest pinning,
 > canary rollout, and rollback wiring remain.

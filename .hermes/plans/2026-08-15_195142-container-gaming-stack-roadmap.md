@@ -108,8 +108,10 @@ validated on OVH: explicit Selkies 1.6.2, SHA-256 guards for its four consumed
 assets, Wayland 1.23.1, pinned gst-wayland-display source, GE-Proton11-3, and
 umu-launcher 1.4.4; bounded retries; no `curl | tar`; mandatory checksum gating;
 exact checksum-to-filename and verification-chain regression checks. Commits:
-`000e750`, `34313a2`, `bbfffb8`. Remaining work includes item 4 below plus base
-image digests, SDL3, NVRTC, VirtualGL/Rust/Steam inputs, APT snapshots, and
+`000e750`, `34313a2`, `bbfffb8`, `63eb0c0`. The second slice additionally pins
+SDL3, cloudflared, VirtualGL, Heroic, VKD3D-Proton, DXVK, DXVK-NVAPI,
+lutris-gamepad-ui, and Lutris. Remaining work includes base/external image
+digests, NVRTC, Rust/cargo/Steam inputs, APT snapshots, and
 conditional installer/prebake inputs. Do not mark Task 1 fully complete yet.
 
 **Objective:** Make image builds reproducible and prevent an untested upstream release from silently entering production.
@@ -131,11 +133,11 @@ conditional installer/prebake inputs. Do not mark Task 1 fully complete yet.
 ### Task 2: Introduce immutable image releases and staged rollout
 
 **Status (2026-08-15): PARTIAL.** Published
-`dpad-SteamOS-2026.08.15-r1` and convenience tag `dpad-SteamOS`; both resolve to
-OCI digest `sha256:1f9282b89eaf305c0193af36365de3ddd9c6a97f61ed3ba60c7a36398bfd6f62`.
+`dpad-SteamOS-2026.08.15-r2` and convenience tag `dpad-SteamOS`; both resolve to
+OCI digest `sha256:50a8ce28a32b0e2f0ae396e3e9d6523f7509d551f9400279ef6525c263b0aa34`.
 Still required: pin that digest in the control plane, canary one provider/session,
-and implement/test rollback. Follow-up build-policy commits post-date `r1`; use
-`r2` for exact current-HEAD/image provenance.
+and implement/test rollback. `r2` is labeled and remotely verified against full
+source commit `63eb0c037fb79578b9f3cc37c19f8f8f73609927`.
 
 **Objective:** Production must use a known digest instead of depending on mutable `:dpad-SteamOS`.
 
