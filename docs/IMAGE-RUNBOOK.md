@@ -211,6 +211,11 @@ the exact downloaded filename and proves that successful verification gates the
 next verification/extraction/install operation. Never bypass it with an empty
 checksum, conditional check, or `|| true`.
 
+Also run `python3 scripts/test_dockerfile_pins_mutations.py`. It must reject all
+unsafe fixtures (negation, nonfatal OR/semicolon masking, wrong target/URL/ARG
+scope, missing retries, version-only rollover, extra unapproved curl, and
+`curl | tar`) while the unmodified Dockerfile remains green.
+
 The `r2` image is an exact-provenance build of commit
 `63eb0c037fb79578b9f3cc37c19f8f8f73609927`; the OCI revision label and remote
 digest were read back after push. It extends checksum coverage to SDL3,

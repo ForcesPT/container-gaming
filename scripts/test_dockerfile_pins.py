@@ -168,6 +168,7 @@ def shell_control_errors(command: str) -> list[str]:
 errors: list[str] = []
 runs = docker_runs(text)
 checked_shell_blocks: set[str] = set()
+approved_urls_by_block: dict[str, set[str]] = {}
 
 for name, expected in expected_args.items():
     if not re.search(rf"^ARG {re.escape(name)}={re.escape(expected)}$", text, re.MULTILINE):
@@ -189,6 +190,7 @@ for checksum, marker, checksum_target, successor, allows_fatal, exact_url, requi
         errors.append(f"{stage} lacks in-scope ARGs for {checksum}: {', '.join(missing_args)}")
 
     normalized = block.replace("\\\n", " ")
+    approved_urls_by_block.setdefault(normalized, set()).add(exact_url)
     if normalized not in checked_shell_blocks:
         for issue in shell_control_errors(normalized):
             errors.append(f"{checksum} RUN: {issue}")
@@ -228,6 +230,18 @@ for checksum, marker, checksum_target, successor, allows_fatal, exact_url, requi
             errors.append(f"download for {marker} does not use exact URL template {exact_url}")
         if not all(flag in curl_command for flag in ("--retry 8", "--retry-all-errors", "--retry-delay 3")):
             errors.append(f"download for {marker} lacks bounded curl retries")
+
+for block, approved_urls in approved_urls_by_block.items():
+    curl_commands = [command for command in block.split("&&") if "curl " in command]
+    if len(curl_commands) != len(approved_urls):
+        errors.append(
+            f"guarded RUN has {len(curl_commands)} curl commands but "
+            f"{len(approved_urls)} approved URLs"
+        )
+    for command in curl_commands:
+        matched_urls = [url for url in approved_urls if url in command]
+        if len(matched_urls) != 1:
+            errors.append("guarded RUN contains a curl command without one exact approved URL")
 
 if errors:
     print("Dockerfile pin validation failed:", file=sys.stderr)

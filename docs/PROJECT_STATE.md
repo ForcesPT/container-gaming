@@ -31,6 +31,10 @@
 > for Selkies 1.6.2, SDL3, cloudflared 2025.7.0, VirtualGL, Heroic, Lutris,
 > lutris-gamepad-ui, all three Heroic compatibility-tool directories, umu,
 > GE-Proton, the Wayland plugin, launcher, and NVIDIA runtime.
+> Permanent regression commands are `python3 scripts/test_dockerfile_pins.py`
+> and `python3 scripts/test_dockerfile_pins_mutations.py`; the latter currently
+> proves 12 unsafe mutations are rejected, including the two late independent-
+> review findings (`! sha256sum` and arbitrary successful `||` fallbacks).
 >
 > **2026-08-15 reproducible-build slice — COMPLETE, BUILT + PUSHED from OVHcloud GRA11.**
 > The first item in `.hermes/plans/2026-08-15_195142-container-gaming-stack-roadmap.md`
