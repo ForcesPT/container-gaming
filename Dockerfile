@@ -29,7 +29,9 @@ ARG CUDA_VERSION=12.5.1
 ARG CUDA_PKG=12-5
 ARG DEBIAN_FRONTEND=noninteractive
 ARG CLOUDFLARED_VERSION=2025.7.0
+ARG CLOUDFLARED_SHA256=51e3909335fd7ba2ed5c696b0a6fb7d4a74f6a15bf36615cea0fccba620cfb3f
 ARG VIRTUALGL_VERSION=3.1.4
+ARG VIRTUALGL_SHA256=02edc6b599571c385389af1a006f07a70c298e1d97c580a9bfd4b39d835c51e6
 ARG HEROIC_VERSION=v2.22.0
 ARG SELKIES_VERSION=1.6.2
 ARG SELKIES_GSTREAMER_SHA256=339ca3ab35eb8c2ad7de9a8a3dc59292a9cffe11ebf4bc6bc6a9397de23f9b90
@@ -152,6 +154,7 @@ RUN git clone --depth 1 --branch 3.16.25 --recurse-submodules --shallow-submodul
 FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS sdl3-builder
 ARG DEBIAN_FRONTEND
 ARG SDL3_VERSION=3.2.28
+ARG SDL3_SHA256=1330671214d146f8aeb1ed399fc3e081873cdb38b5189d1f8bb6ab15bbc04211
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake ninja-build pkg-config curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -170,8 +173,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # only). The sanctioned skip per SDL3 docs/README-cmake.md.
 RUN set -e; \
     mkdir -p /tmp/sdl3 && cd /tmp/sdl3 \
-    && curl -fsSL -o SDL3.tar.gz \
+    && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o SDL3.tar.gz \
       "https://github.com/libsdl-org/SDL/releases/download/release-${SDL3_VERSION}/SDL3-${SDL3_VERSION}.tar.gz" \
+    && echo "${SDL3_SHA256}  SDL3.tar.gz" | sha256sum -c - \
     && tar -xzf SDL3.tar.gz --strip-components=1 \
     && cmake -S . -B build -GNinja \
         -DCMAKE_BUILD_TYPE=Release \
@@ -203,7 +207,9 @@ ARG CUDA_VERSION
 ARG CUDA_PKG
 ARG DEBIAN_FRONTEND
 ARG CLOUDFLARED_VERSION
+ARG CLOUDFLARED_SHA256
 ARG VIRTUALGL_VERSION
+ARG VIRTUALGL_SHA256
 ARG SELKIES_VERSION
 ARG SELKIES_GSTREAMER_SHA256
 ARG SELKIES_WHEEL_SHA256
@@ -388,10 +394,11 @@ RUN chmod +x /opt/dpadcloud/patch_live_resolution.py \
     && /opt/dpadcloud/patch_live_resolution.py
 
 # --- 5. cloudflared (HTTPS tunnel front for Selkies) ---
-RUN cd /tmp && curl -fsSL -o cloudflared \
+RUN cd /tmp && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o cloudflared \
       "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64" && \
+    echo "${CLOUDFLARED_SHA256}  cloudflared" | sha256sum -c - && \
     install -m 0755 cloudflared /usr/local/bin/cloudflared && rm -f cloudflared && \
-    cloudflared --version || true
+    cloudflared --version
 
 # --- 6. NVENC #1249 fix (libnvenc_fix.so from interposer-builder) ---
 # Fixes nvidia-container-toolkit #1249 on driver >=570 when only a slice of a
@@ -402,9 +409,11 @@ COPY --from=interposer-builder /out/x86_64/libnvenc_fix.so /opt/dpadcloud/libnve
 #    doesn't need it, but the Xvfb debug fallback / vgl-steam / proton-wined3d
 #    launchers do). Small (~3 MB); kept in base for the debug path. ---
 RUN apt-get update && apt-get install -y --no-install-recommends libglu1-mesa && \
-    cd /tmp && wget -q --show-progress \
+    cd /tmp && curl -fL --retry 8 --retry-all-errors --retry-delay 3 \
+      -o vgl.deb \
       "https://github.com/VirtualGL/virtualgl/releases/download/${VIRTUALGL_VERSION}/virtualgl_${VIRTUALGL_VERSION}_amd64.deb" \
-      -O vgl.deb && \
+    && echo "${VIRTUALGL_SHA256}  vgl.deb" | sha256sum -c - \
+    && \
     (dpkg -i vgl.deb || true) && apt-get install -f -y --no-install-recommends && \
     rm -f vgl.deb && rm -rf /var/lib/apt/lists/* && \
     (command -v vglrun >/dev/null 2>&1 && echo "VirtualGL ${VIRTUALGL_VERSION} installed: $(command -v vglrun)") || \
@@ -712,12 +721,14 @@ RUN chmod +x /tmp/build-bootstrap-steam.sh \
 #        previously in the deprecated vast-docker stage). The base ARG
 #        HEROIC_VERSION (v2.22.0) is inherited.
 ARG HEROIC_VERSION
+ARG HEROIC_SHA256=4c8585ad7c7a76bd3c8058aa995b9064f457603f3b6afbd9114433cf4af7ecd2
 RUN set -e; \
     HEROIC_VER_STR="${HEROIC_VERSION#v}"; \
     HEROIC_DEB="Heroic-${HEROIC_VER_STR}-linux-amd64.deb"; \
     apt-get update && apt-get install -y --no-install-recommends accountsservice curl; \
-    cd /tmp && curl -fsSL -o "/tmp/${HEROIC_DEB}" \
+    cd /tmp && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o "/tmp/${HEROIC_DEB}" \
       "https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher/releases/download/${HEROIC_VERSION}/${HEROIC_DEB}" \
+    && echo "${HEROIC_SHA256}  /tmp/${HEROIC_DEB}" | sha256sum -c - \
     && ( dpkg -i "/tmp/${HEROIC_DEB}" || apt-get install -f -y ) \
     && rm -f "/tmp/${HEROIC_DEB}" \
     && rm -rf /var/lib/apt/lists/* \
@@ -731,21 +742,27 @@ RUN set -e; \
 #         present. Versions match what Heroic 2.22.0 fetches by default.
 ARG VKD3D_PROTON_TAG=v2.14.1
 ARG VKD3D_PROTON_FILE=vkd3d-proton-2.14.1
+ARG VKD3D_PROTON_SHA256=03c354bed971a3e35b73ca2d626658f67999626c4e99626ce2a39734a86e7dbd
 ARG DXVK_VERSION=dxvk-3.0.2
+ARG DXVK_SHA256=9c538924110a7cdef871ca36dee218c0774124374ffdeb38af4b76be55bdf7c2
 ARG DXVK_NVAPI_VERSION=dxvk-nvapi-v0.9.2
+ARG DXVK_NVAPI_SHA256=60c284223530d643c446c263f1e1a96c6de7b5ff21796219646da734d97a70d6
 RUN set -e; \
     TOOLS_DIR="${HOME}/.config/heroic/tools"; \
     mkdir -p "${TOOLS_DIR}/vkd3d" "${TOOLS_DIR}/dxvk" "${TOOLS_DIR}/dxvk-nvapi"; \
-    curl -fsSL -o /tmp/vkd3d.tar.xz \
+    curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o /tmp/vkd3d.tar.xz \
       "https://github.com/Heroic-Games-Launcher/vkd3d-proton/releases/download/${VKD3D_PROTON_TAG}/${VKD3D_PROTON_FILE}.tar.xz" \
+    && echo "${VKD3D_PROTON_SHA256}  /tmp/vkd3d.tar.xz" | sha256sum -c - \
     && tar -xf /tmp/vkd3d.tar.xz -C "${TOOLS_DIR}/vkd3d" --strip-components=1 \
     && rm -f /tmp/vkd3d.tar.xz \
-    && curl -fsSL -o /tmp/dxvk.tar.gz \
-      "https://github.com/doitsujin/dxvk/releases/download/v3.0.2/${DXVK_VERSION}.tar.gz" \
+    && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o /tmp/dxvk.tar.gz \
+      "https://github.com/doitsujin/dxvk/releases/download/v${DXVK_VERSION#dxvk-}/${DXVK_VERSION}.tar.gz" \
+    && echo "${DXVK_SHA256}  /tmp/dxvk.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/dxvk.tar.gz -C "${TOOLS_DIR}/dxvk" --strip-components=1 \
     && rm -f /tmp/dxvk.tar.gz \
-    && curl -fsSL -o /tmp/dxvk-nvapi.tar.gz \
-      "https://github.com/jp7677/dxvk-nvapi/releases/download/v0.9.2/${DXVK_NVAPI_VERSION}.tar.gz" \
+    && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o /tmp/dxvk-nvapi.tar.gz \
+      "https://github.com/jp7677/dxvk-nvapi/releases/download/${DXVK_NVAPI_VERSION#dxvk-nvapi-}/${DXVK_NVAPI_VERSION}.tar.gz" \
+    && echo "${DXVK_NVAPI_SHA256}  /tmp/dxvk-nvapi.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/dxvk-nvapi.tar.gz -C "${TOOLS_DIR}/dxvk-nvapi" --strip-components=1 \
     && rm -f /tmp/dxvk-nvapi.tar.gz \
     && chown -R ${USERNAME}:${USERNAME} "${TOOLS_DIR}" \
@@ -808,9 +825,11 @@ RUN set -e; \
 #        24.04 fallbacks in its Python wrapper (aligns with this image's base).
 #        Lutris itself (the backend) is installed in a later commit (piece 1b).
 ARG LUTRIS_GAMEPAD_UI_VERSION=v0.2.0
+ARG LUTRIS_GAMEPAD_UI_SHA256=b5f8df70cc15efd9be070ac77c10b0dec6d0433489055a5784da5baad6deff6f
 RUN set -e; \
-    curl -fsSL -o /tmp/lutris-gamepad-ui.AppImage \
+    curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o /tmp/lutris-gamepad-ui.AppImage \
       "https://github.com/andrew-ld/lutris-gamepad-ui/releases/download/${LUTRIS_GAMEPAD_UI_VERSION}/lutris-gamepad-ui-x64.AppImage" \
+    && echo "${LUTRIS_GAMEPAD_UI_SHA256}  /tmp/lutris-gamepad-ui.AppImage" | sha256sum -c - \
     && chmod +x /tmp/lutris-gamepad-ui.AppImage \
     && test -s /tmp/lutris-gamepad-ui.AppImage \
     && cd /opt/dpadcloud && /tmp/lutris-gamepad-ui.AppImage --appimage-extract >/dev/null 2>&1 \
@@ -877,12 +896,14 @@ RUN python3 /opt/dpadcloud/patch_selkies_waylanddisplay.py /usr/local/lib/python
 #        uses runner: wine, so the Wine stack alone makes Lutris functional
 #        for the v1 Battle.net pre-bake (piece 2). STORES-PLAN §7.
 ARG LUTRIS_VERSION=v0.5.22
+ARG LUTRIS_SHA256=88a350357e0438b423cdf93108f27942de094dc19f973df73839f3b0b0bafaa0
 RUN set -e; \
     apt-get update && apt-get install -y --no-install-recommends wine wine32 wine64 winetricks \
     && rm -rf /var/lib/apt/lists/* \
     && command -v wine && command -v winetricks \
-    && cd /tmp && curl -fsSL -o /tmp/lutris.deb \
+    && cd /tmp && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o /tmp/lutris.deb \
       "https://github.com/lutris/lutris/releases/download/${LUTRIS_VERSION}/lutris_${LUTRIS_VERSION#v}_all.deb" \
+    && echo "${LUTRIS_SHA256}  /tmp/lutris.deb" | sha256sum -c - \
     && apt-get update && ( apt-get install -y --no-install-recommends /tmp/lutris.deb \
                            || ( apt-get install -f -y && dpkg -i /tmp/lutris.deb ) ) \
     && rm -f /tmp/lutris.deb && rm -rf /var/lib/apt/lists/* \
