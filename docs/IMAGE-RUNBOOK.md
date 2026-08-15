@@ -206,7 +206,17 @@ is `dpad-SteamOS-2026.08.15-r1`; both it and `dpad-SteamOS` resolve to
 Run `python3 scripts/test_dockerfile_pins.py` and `docker buildx build --check
 --target vast-vm .` before the full build. Selkies, GE-Proton, umu, Wayland, and
 gst-wayland-display release-critical artifacts now have SHA-256 guards; bump a
-version and its checksum together.
+version and its checksum together. The validator also binds each checksum to
+the exact downloaded filename and proves that successful verification gates the
+next verification/extraction/install operation. Never bypass it with an empty
+checksum, conditional check, or `|| true`.
+
+The `r1` image was built with all recorded checksums populated and verified.
+Build-policy follow-ups `34313a2` and `bbfffb8` landed after that image was
+published; they make future bypasses fail and strengthen mutation coverage.
+Publish `r2` before claiming exact current-HEAD/image provenance. This slice is
+not a complete dependency lock: see the scope boundary at the top of
+`PROJECT_STATE.md` and the remaining Task 1 list in the roadmap.
 
 The public `:dpad-SteamOS` tag is **current as of the 2026-08-15 rebuild** and
 includes the live in-stream Resolution dropdown (720p/1080p/1440p/4K), the
@@ -224,6 +234,10 @@ docker build --target vast-vm \
   -t forcespt/dpadcloud-gaming:dpad-SteamOS .
 docker push forcespt/dpadcloud-gaming:${RELEASE}
 docker push forcespt/dpadcloud-gaming:dpad-SteamOS
+
+# Verify both remote references resolve to the same immutable digest.
+docker buildx imagetools inspect forcespt/dpadcloud-gaming:${RELEASE}
+docker buildx imagetools inspect forcespt/dpadcloud-gaming:dpad-SteamOS
 
 # Blackwell variant
 docker build --target vast-vm --build-arg CUDA_VERSION=12.8.1 --build-arg CUDA_PKG=12-8 \

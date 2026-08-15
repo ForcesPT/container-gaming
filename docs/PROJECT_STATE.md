@@ -14,9 +14,9 @@
 > **`WAYLAND-ARCHITECTURE.md`** (the 2026-08-08 compositor pivot decision —
 > adopts `gst-wayland-display`, retires the §6 #11 Lutris-capture blocker).
 >
-> **2026-08-15 reproducible-build slice — BUILT + PUSHED from OVHcloud GRA11.**
+> **2026-08-15 reproducible-build slice — COMPLETE, BUILT + PUSHED from OVHcloud GRA11.**
 > The first item in `.hermes/plans/2026-08-15_195142-container-gaming-stack-roadmap.md`
-> is underway: Selkies is pinned to `1.6.2` and all four consumed release assets
+> is partially implemented: Selkies is pinned to `1.6.2` and all four consumed release assets
 > (GStreamer bundle, Python wheel, web bundle, joystick-interposer deb) are
 > SHA-256 verified; GE-Proton11-3 and umu-launcher 1.4.4 now have non-empty
 > checksum defaults. The Wayland 1.23.1 and pinned gst-wayland-display source
@@ -34,6 +34,26 @@
 > pressure-vessel/bwrap needs the documented privileged-container + commit
 > workflow; runtime fallback remains intact. Regression guard:
 > `python3 scripts/test_dockerfile_pins.py`.
+>
+> **Post-build review hardening (commits `34313a2`, `bbfffb8`):** future builds
+> cannot bypass GE-Proton or umu verification with an empty build argument.
+> Every guarded checksum is bound to its exact downloaded filename, each curl
+> command has bounded retries, and verification must exclusively gate the next
+> verification/extraction/install command. Mutation checks reject wrong targets,
+> swapped Selkies targets, conditional checks, `|| true`, `&& true || true`,
+> consumption before verification, missing downloads/retries, and `curl | tar`.
+> The published `r1` image was built with the recorded non-empty checksums and
+> passed all artifact/GPU smoke checks; these follow-up commits harden the build
+> policy and validator for subsequent releases. They post-date the `r1` image,
+> so create `r2` if exact image-to-current-HEAD provenance is required.
+>
+> **Scope boundary:** this completes the first safe reproducibility slice, not
+> every item in roadmap Task 1. Still unpinned/unlocked include base/external
+> image digests, SDL3, NVRTC selection, cloudflared, VirtualGL, Rust/cargo,
+> Steam bootstrap, Heroic, VKD3D/DXVK/DXVK-NVAPI, Lutris assets, APT snapshots,
+> and conditional store-prefix installers. Roadmap Task 2 is also partial:
+> immutable tag + digest publication are done, but control-plane digest pinning,
+> canary rollout, and rollback wiring remain.
 >
 > **2026-08-10 Battle.net session — the `battlenet-launch` wrapper + launcher
 > card shipped + were live-tested on an OVH Gravelines L4; the install stalls at
