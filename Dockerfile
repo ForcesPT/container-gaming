@@ -310,10 +310,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && SELKIES_INTERPOSER="selkies-js-interposer_v${SELKIES_VERSION}_ubuntu${UBUNTU_VER}_${ARCH}.deb" \
     && echo "Installing pinned Selkies-GStreamer v${SELKIES_VERSION} (ubuntu${UBUNTU_VER})..." \
     && cd /tmp \
-    && curl -fsSL -o "${SELKIES_GSTREAMER}" "${SELKIES_BASE}/${SELKIES_GSTREAMER}" \
-    && curl -fsSL -o "${SELKIES_WHEEL}" "${SELKIES_BASE}/${SELKIES_WHEEL}" \
-    && curl -fsSL -o "${SELKIES_WEB}" "${SELKIES_BASE}/${SELKIES_WEB}" \
-    && curl -fsSL -o "${SELKIES_INTERPOSER}" "${SELKIES_BASE}/${SELKIES_INTERPOSER}" \
+    && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o "${SELKIES_GSTREAMER}" "${SELKIES_BASE}/${SELKIES_GSTREAMER}" \
+    && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o "${SELKIES_WHEEL}" "${SELKIES_BASE}/${SELKIES_WHEEL}" \
+    && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o "${SELKIES_WEB}" "${SELKIES_BASE}/${SELKIES_WEB}" \
+    && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o "${SELKIES_INTERPOSER}" "${SELKIES_BASE}/${SELKIES_INTERPOSER}" \
     && echo "${SELKIES_GSTREAMER_SHA256}  ${SELKIES_GSTREAMER}" | sha256sum -c - \
     && echo "${SELKIES_WHEEL_SHA256}  ${SELKIES_WHEEL}" | sha256sum -c - \
     && echo "${SELKIES_WEB_SHA256}  ${SELKIES_WEB}" | sha256sum -c - \
@@ -790,12 +790,10 @@ ARG GE_PROTON_SHA256=861c2edc8d40d051fb1e7a692deb953be52bd339c46d90f2b7dde50ddad
 RUN set -e; \
     GP_DIR="${HOME}/.steam/debian-installation/compatibilitytools.d/${GE_PROTON_VERSION}"; \
     mkdir -p "${GP_DIR}"; \
-    curl -fsSL -o /tmp/ge-proton.tar.gz \
+    curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o /tmp/ge-proton.tar.gz \
       "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/${GE_PROTON_VERSION}/${GE_PROTON_VERSION}.tar.gz" \
-    && if [ -n "${GE_PROTON_SHA256}" ]; then \
-         echo "${GE_PROTON_SHA256}  /tmp/ge-proton.tar.gz" | sha256sum -c - \
-         || { echo "FATAL: GE-Proton SHA256 mismatch — download may be corrupted or tampered"; exit 1; }; \
-       else echo "    NOTE: GE_PROTON_SHA256 not set — skipping SHA verification"; fi \
+    && echo "${GE_PROTON_SHA256}  /tmp/ge-proton.tar.gz" | sha256sum -c - \
+       || { echo "FATAL: GE-Proton SHA256 mismatch — download may be corrupted or tampered"; exit 1; } \
     && tar -xzf /tmp/ge-proton.tar.gz -C "${GP_DIR}" --strip-components=1 \
     && rm -f /tmp/ge-proton.tar.gz \
     && chown -R ${USERNAME}:${USERNAME} "${GP_DIR}" \
@@ -923,12 +921,10 @@ RUN set -e; \
         python3-xlib apparmor-profiles libzstd1 \
         libgl1-mesa-dri:i386 libglx-mesa0:i386 \
     && rm -rf /var/lib/apt/lists/* \
-    && cd /tmp && curl -fsSL -o /tmp/umu.deb \
+    && cd /tmp && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o /tmp/umu.deb \
       "https://github.com/Open-Wine-Components/umu-launcher/releases/download/${UMU_VERSION}/python3-umu-launcher_${UMU_VERSION}-1_amd64_ubuntu-noble.deb" \
-    && if [ -n "${UMU_SHA256}" ]; then \
-         echo "${UMU_SHA256}  /tmp/umu.deb" | sha256sum -c - \
-         || { echo "FATAL: umu-launcher SHA256 mismatch"; exit 1; }; \
-       else echo "    NOTE: UMU_SHA256 not set — skipping SHA verification"; fi \
+    && echo "${UMU_SHA256}  /tmp/umu.deb" | sha256sum -c - \
+       || { echo "FATAL: umu-launcher SHA256 mismatch"; exit 1; } \
     && apt-get update && ( apt-get install -y --no-install-recommends /tmp/umu.deb \
                            || ( apt-get install -f -y && dpkg -i /tmp/umu.deb ) ) \
     && rm -f /tmp/umu.deb && rm -rf /var/lib/apt/lists/* \
