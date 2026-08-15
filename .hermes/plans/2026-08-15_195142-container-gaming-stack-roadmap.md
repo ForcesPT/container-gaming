@@ -6,7 +6,7 @@
 
 **Architecture:** One NVIDIA CDI Docker container per gaming session on an Ubuntu GPU VM. The production desktop uses `gst-wayland-display` as a render-node compositor/capture source, nested Sway for window management and XWayland, the custom Electron DpadPlay store picker, and Selkies/GStreamer/NVENC/WebRTC/coturn for browser delivery. Steam is native; other Windows stores use Heroic or `umu-launcher` + GE-Proton.
 
-**Tech Stack:** Ubuntu 24.04, NVIDIA CUDA 12.5.1/12.8.1, Docker + NVIDIA CDI, gst-wayland-display/Smithay, Sway/wlroots, XWayland, Electron 33, SDL3 + Koffi, Steam, Heroic, Lutris, Wine, GE-Proton11-3, umu-launcher 1.4.4, PipeWire, GStreamer, Selkies, NVENC, WebRTC, coturn, cloudflared/Caddy.
+**Tech Stack:** Ubuntu 24.04, NVIDIA CUDA 12.5.1/12.8.1, Docker + NVIDIA CDI, gst-wayland-display/Smithay, Sway/wlroots, XWayland, Electron 33, SDL3 + Koffi, Steam, Heroic, Lutris, Wine, GE-Proton11-3, umu-launcher 1.4.4, PipeWire, GStreamer, Selkies, NVENC, WebRTC, coturn, Caddy, and stream-bridge.
 
 ---
 
@@ -132,12 +132,12 @@ conditional installer/prebake inputs. Do not mark Task 1 fully complete yet.
 
 ### Task 2: Introduce immutable image releases and staged rollout
 
-**Status (2026-08-15): PARTIAL.** Published
-`dpad-SteamOS-2026.08.15-r2` and convenience tag `dpad-SteamOS`; both resolve to
-OCI digest `sha256:50a8ce28a32b0e2f0ae396e3e9d6523f7509d551f9400279ef6525c263b0aa34`.
+**Status (2026-08-15): PARTIAL.** Published cleanup release
+`dpad-SteamOS-2026.08.15-r3` and convenience tag `dpad-SteamOS`; both resolve to
+OCI digest `sha256:f0017b8a115a870eb733c715d5917e2ccfaa4ff85e2d0555ade4dee141ec3762`.
 Still required: pin that digest in the control plane, canary one provider/session,
-and implement/test rollback. `r2` is labeled and remotely verified against full
-source commit `63eb0c037fb79578b9f3cc37c19f8f8f73609927`.
+and implement/test rollback. `r3` is labeled and remotely verified against full
+source commit `6699b5ffef6de628604fd103fdcb756364d3bf40`.
 
 **Objective:** Production must use a known digest instead of depending on mutable `:dpad-SteamOS`.
 

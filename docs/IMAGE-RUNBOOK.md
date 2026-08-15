@@ -224,12 +224,12 @@ the retired in-image tunnel and alternate-shell binaries, runtime branches,
 environment knobs, wrapper, and validator entries do not return while retaining
 the Lutris backend, SDL3 input library, and DpadPlay picker path.
 
-The `r2` image is an exact-provenance build of commit
-`63eb0c037fb79578b9f3cc37c19f8f8f73609927`; the OCI revision label and remote
-digest were read back after push. That historical image included components
-removed by the subsequent source cleanup. It also extended checksum coverage to
-SDL3, VirtualGL, Heroic, VKD3D-Proton, DXVK, DXVK-NVAPI, and Lutris. This is
-still not a complete dependency lock:
+The current `r3` image is an exact-provenance build of commit
+`6699b5ffef6de628604fd103fdcb756364d3bf40`. Both remote tags resolve to
+`sha256:f0017b8a115a870eb733c715d5917e2ccfaa4ff85e2d0555ade4dee141ec3762`
+(amd64 manifest `sha256:2c08d1df621d204b1d4252748942eb6344e2dfa0b0f7914475b103cbd356f20d`).
+The remote image was pulled back and its OCI revision label was verified.
+This is still not a complete dependency lock:
 see the scope boundary at the top of `PROJECT_STATE.md` and the remaining Task
 1 list in the roadmap.
 
@@ -243,7 +243,7 @@ and the reproducible-build hardening recorded in `PROJECT_STATE.md`. A fresh
 web-client/handler fixes can ship without a rebuild.
 
 ```bash
-RELEASE=dpad-SteamOS-2026.08.15-r2
+RELEASE=dpad-SteamOS-2026.08.15-r3
 docker build --target vast-vm \
   -t forcespt/dpadcloud-gaming:${RELEASE} \
   -t forcespt/dpadcloud-gaming:dpad-SteamOS .

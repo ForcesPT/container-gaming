@@ -14,7 +14,7 @@
 > **`WAYLAND-ARCHITECTURE.md`** (the 2026-08-08 compositor pivot decision —
 > adopts `gst-wayland-display`, retires the §6 #11 Lutris-capture blocker).
 >
-> **2026-08-15 component cleanup — SOURCE COMPLETE, IMAGE REBUILD PENDING.**
+> **2026-08-15 `r3` component-cleanup release — CURRENT.**
 > The gaming image no longer installs or starts an in-container tunnel daemon:
 > production HTTPS is `play-<session>.dpadplay.com` → Caddy → stream-bridge →
 > the VM's published Selkies port. The retired alternate gamepad shell and its
@@ -23,10 +23,18 @@
 > compatibility/backend component, and SDL3 remains because dpad-launcher uses
 > it through koffi for gamepad input.** Run
 > `python3 scripts/test_obsolete_components_removed.py` to guard this boundary.
-> The published `r2` image predates this source cleanup; publish a later immutable
-> image before claiming the binaries are absent in production.
+> Commit `6699b5ffef6de628604fd103fdcb756364d3bf40` was cloned cleanly on an
+> OVH GRA11 `l4-90`, passed all three source validators and BuildKit validation,
+> and was built with that exact OCI revision label. Runtime checks on NVIDIA L4
+> driver 580.159.03 verified Selkies 1.6.2, SDL3, Lutris, and the DpadPlay
+> launcher remain while both retired binaries/wrappers are absent. The immutable
+> `forcespt/dpadcloud-gaming:dpad-SteamOS-2026.08.15-r3` and convenience
+> `:dpad-SteamOS` tags both resolve to
+> `sha256:f0017b8a115a870eb733c715d5917e2ccfaa4ff85e2d0555ade4dee141ec3762`
+> (amd64 manifest `sha256:2c08d1df621d204b1d4252748942eb6344e2dfa0b0f7914475b103cbd356f20d`).
+> The remote image was pulled back and its revision label reverified.
 >
-> **2026-08-15 `r2` exact-provenance release — CURRENT.** Commit
+> **2026-08-15 `r2` exact-provenance release — SUPERSEDED BY `r3`.** Commit
 > `63eb0c037fb79578b9f3cc37c19f8f8f73609927` was cloned cleanly on an OVH
 > GRA11 `l4-90`, validated with `docker buildx build --check`, built with OCI
 > revision label set to that full commit, structurally smoke-tested, GPU-tested
