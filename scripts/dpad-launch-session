@@ -293,11 +293,8 @@ launch() {
     # on /newroot/proc". Needed whenever a session runs umu (Battle.net via
     # battlenet-launch, regardless of compositor). Live-validated on OVH L4.
 
-    # Multi-store shell (STORES-PLAN.md). DPAD_STORE_SHELL=lutris switches the
-    # gamescope session from `steam -gamepadui` to the lutris-shell wrapper
-    # (the Lutris gamepad-UI store picker). DPAD_STORES lists the stores the
-    # entrypoint should wire/symlink (steam,epic,gog,battlenet). Both default
-    # empty → the validated Steam path (entrypoint DPAD_STORE_SHELL gate).
+    # Multi-store shell (STORES-PLAN.md). DPAD_STORE_SHELL=picker selects the
+    # DpadPlay launcher; DPAD_STORES lists the store integrations to wire.
     # NOTE: keep these comments OUT of the `\`-continuation block below — an
     # inline `#` inside a continued command terminates it (bash pitfall; it broke
     # the docker run with "-e: command not found" + "requires at least 1 argument").
@@ -314,7 +311,6 @@ launch() {
         -v "/tmp/nvidia-mps:/tmp/nvidia-mps" \
         -e CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps \
         -e DPAD_GAMESCOPE=1 \
-        -e DPAD_TUNNEL=ssh \
         -e DPAD_SLOT="$slot" \
         -e DPAD_COTURN_PORT="$port" \
         -e DPAD_SELKIES_BIND="${DPAD_SELKIES_BIND:-0.0.0.0}" \
@@ -326,11 +322,6 @@ launch() {
         -e DPAD_STORE_SHELL="${DPAD_STORE_SHELL:-}" \
         -e DPAD_STORES="${DPAD_STORES:-}" \
         -e DPAD_VIDEO_SRC="${DPAD_VIDEO_SRC:-}" \
-        -e DPAD_LUTRIS_DISABLE_GPU="${DPAD_LUTRIS_DISABLE_GPU:-}" \
-        -e DPAD_LUTRIS_OZONE="${DPAD_LUTRIS_OZONE:-}" \
-        -e DPAD_LUTRIS_USE_GL="${DPAD_LUTRIS_USE_GL:-}" \
-        -e DPAD_LUTRIS_EXTRA_ARGS="${DPAD_LUTRIS_EXTRA_ARGS:-}" \
-        -e DPAD_LUTRIS_SHELL_ARGS="${DPAD_LUTRIS_SHELL_ARGS:-}" \
         -e DPAD_COMPOSITOR="${DPAD_COMPOSITOR:-}" \
         -e DPAD_WAYLAND_CLIENT="${DPAD_WAYLAND_CLIENT:-}" \
         -e DPAD_GAMESCOPE_ENCODER="${DPAD_GAMESCOPE_ENCODER:-}" \

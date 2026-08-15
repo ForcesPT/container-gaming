@@ -15,8 +15,8 @@
 #   4. detect GPU count N, launch N containers (one per GPU):
 #        container i  ->  --gpus '"device=i"'  -p (3478+i):(3478+i)
 #                        DPAD_COTURN_PORT=3478+i  DPAD_TURN_EXTERNAL_PORT=VAST_TCP_PORT_(3478+i)
-#                        unique per-session password, its own Selkies (cloudflared) URL
-#   5. wait for each container's Selkies tunnel URL and print them all
+#                        unique per-session password, published Selkies port
+#   5. wait for each container's DPAD_READY marker and print direct endpoints
 #
 # Vast maps each exposed internal port to a RANDOM external port and injects
 # VAST_TCP_PORT_<internal>. So at VM creation expose one TCP port per GPU:
@@ -999,7 +999,7 @@ run_all_containers() {
 }
 
 # -----------------------------------------------------------------------------
-# Phase 5: wait for each container's Selkies tunnel URL and announce them
+# Phase 5: wait for each container's Selkies readiness and announce endpoints
 # -----------------------------------------------------------------------------
 report_all_urls() {
     local n i
@@ -1011,26 +1011,26 @@ report_all_urls() {
     done
     [ "${#pending[@]}" -eq 0 ] && { err "no running containers to report"; return 1; }
 
-    log "waiting for Selkies tunnel URLs (up to 7 min) for containers: ${pending[*]}"
+    log "waiting for Selkies readiness (up to 7 min) for containers: ${pending[*]}"
     : > "$URL_FILE"
     local deadline=$(( $(date +%s) + 420 ))
     while [ "$(date +%s)" -lt "$deadline" ] && [ "${#pending[@]}" -gt 0 ]; do
         local -a next=()
         for idx in "${pending[@]}"; do
             local name="${CONTAINER_PREFIX}-${idx}"
-            local url; url="$(docker logs "$name" 2>&1 | grep -oiE 'https://[a-z0-9.-]+\.trycloudflare\.com' | tail -1)"
-            if [ -n "$url" ]; then
+            if docker logs "$name" 2>&1 | grep -q '^DPAD_READY '; then
                 local port=$(( TURN_BASE_PORT + idx ))
                 local vast_var="VAST_TCP_PORT_${port}"
                 local ext="${!vast_var:-${port}}"
                 local sess_pass; sess_pass="$(session_password "$idx")"
                 {
                     echo "---- User $idx (GPU $idx) ----"
-                    echo "  Selkies tunnel URL: $url"
+                    echo "  Selkies container endpoint: http://${name}:16100"
+                    echo "  HTTPS URL: assigned by DpadPlay stream-bridge/Caddy"
                     echo "  Browser login: ${SELKIES_USER} / ${sess_pass}"
                     echo "  TURN (direct, no tunnel): ${PUBLIC_IPADDR:-<?>}:${ext}"
                 } | tee -a "$URL_FILE" | tee /dev/console 2>/dev/null || true
-                log "ready[$idx]: $url"
+                log "ready[$idx]: ${name}:16100"
             else
                 next+=( "$idx" )
             fi
@@ -1040,7 +1040,7 @@ report_all_urls() {
     done
 
     if [ "${#pending[@]}" -gt 0 ]; then
-        err "timed out waiting for URLs for containers: ${pending[*]}"
+        err "timed out waiting for readiness for containers: ${pending[*]}"
         for idx in "${pending[@]}"; do
             err "--- last 40 lines of ${CONTAINER_PREFIX}-${idx} ---"
             docker logs --tail 40 "${CONTAINER_PREFIX}-${idx}" 2>&1 || true
@@ -1049,8 +1049,8 @@ report_all_urls() {
     fi
     {
         echo "============================================================"
-        echo "  DpadCloud READY — $(grep -c 'Selkies tunnel URL' "$URL_FILE" 2>/dev/null) session(s)."
-        echo "  URLs listed in $URL_FILE. Open each in a browser — no SSH tunnel needed."
+        echo "  DpadCloud READY — $(grep -c 'Selkies container endpoint' "$URL_FILE" 2>/dev/null) session(s)."
+        echo "  Container endpoints listed in $URL_FILE; user-facing HTTPS comes from DpadPlay."
         echo "============================================================"
     } | tee /dev/console 2>/dev/null || true
     return 0

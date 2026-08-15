@@ -24,8 +24,6 @@ expected_args = {
     "UMU_SHA256": "86b7a234f77fbcd13699654656192a12ed3852ec2bcc721506ae4f91436b3793",
     "SDL3_VERSION": "3.2.28",
     "SDL3_SHA256": "1330671214d146f8aeb1ed399fc3e081873cdb38b5189d1f8bb6ab15bbc04211",
-    "CLOUDFLARED_VERSION": "2025.7.0",
-    "CLOUDFLARED_SHA256": "51e3909335fd7ba2ed5c696b0a6fb7d4a74f6a15bf36615cea0fccba620cfb3f",
     "VIRTUALGL_VERSION": "3.1.4",
     "VIRTUALGL_SHA256": "02edc6b599571c385389af1a006f07a70c298e1d97c580a9bfd4b39d835c51e6",
     "HEROIC_VERSION": "v2.22.0",
@@ -37,8 +35,6 @@ expected_args = {
     "DXVK_SHA256": "9c538924110a7cdef871ca36dee218c0774124374ffdeb38af4b76be55bdf7c2",
     "DXVK_NVAPI_VERSION": "dxvk-nvapi-v0.9.2",
     "DXVK_NVAPI_SHA256": "60c284223530d643c446c263f1e1a96c6de7b5ff21796219646da734d97a70d6",
-    "LUTRIS_GAMEPAD_UI_VERSION": "v0.2.0",
-    "LUTRIS_GAMEPAD_UI_SHA256": "b5f8df70cc15efd9be070ac77c10b0dec6d0433489055a5784da5baad6deff6f",
     "LUTRIS_VERSION": "v0.5.22",
     "LUTRIS_SHA256": "88a350357e0438b423cdf93108f27942de094dc19f973df73839f3b0b0bafaa0",
 }
@@ -55,13 +51,11 @@ artifacts = (
     ("GE_PROTON_SHA256", "/tmp/ge-proton.tar.gz", "/tmp/ge-proton.tar.gz", "tar -xzf /tmp/ge-proton.tar.gz", True, '"https://github.com/GloriousEggroll/proton-ge-custom/releases/download/${GE_PROTON_VERSION}/${GE_PROTON_VERSION}.tar.gz"', ("GE_PROTON_VERSION", "GE_PROTON_SHA256")),
     ("UMU_SHA256", "/tmp/umu.deb", "/tmp/umu.deb", "apt-get update && (", True, '"https://github.com/Open-Wine-Components/umu-launcher/releases/download/${UMU_VERSION}/python3-umu-launcher_${UMU_VERSION}-1_amd64_ubuntu-noble.deb"', ("UMU_VERSION", "UMU_SHA256")),
     ("SDL3_SHA256", "SDL3.tar.gz", "SDL3.tar.gz", "tar -xzf SDL3.tar.gz", False, '"https://github.com/libsdl-org/SDL/releases/download/release-${SDL3_VERSION}/SDL3-${SDL3_VERSION}.tar.gz"', ("SDL3_VERSION", "SDL3_SHA256")),
-    ("CLOUDFLARED_SHA256", "cloudflared-linux-amd64", "cloudflared", "install -m 0755 cloudflared", False, '"https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64"', ("CLOUDFLARED_VERSION", "CLOUDFLARED_SHA256")),
     ("VIRTUALGL_SHA256", "virtualgl_${VIRTUALGL_VERSION}_amd64.deb", "vgl.deb", "(dpkg -i vgl.deb", False, '"https://github.com/VirtualGL/virtualgl/releases/download/${VIRTUALGL_VERSION}/virtualgl_${VIRTUALGL_VERSION}_amd64.deb"', ("VIRTUALGL_VERSION", "VIRTUALGL_SHA256")),
     ("HEROIC_SHA256", "/tmp/${HEROIC_DEB}", "/tmp/${HEROIC_DEB}", '( dpkg -i "/tmp/${HEROIC_DEB}"', False, '"https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher/releases/download/${HEROIC_VERSION}/${HEROIC_DEB}"', ("HEROIC_VERSION", "HEROIC_SHA256")),
     ("VKD3D_PROTON_SHA256", "/tmp/vkd3d.tar.xz", "/tmp/vkd3d.tar.xz", "tar -xf /tmp/vkd3d.tar.xz", False, '"https://github.com/Heroic-Games-Launcher/vkd3d-proton/releases/download/${VKD3D_PROTON_TAG}/${VKD3D_PROTON_FILE}.tar.xz"', ("VKD3D_PROTON_TAG", "VKD3D_PROTON_FILE", "VKD3D_PROTON_SHA256")),
     ("DXVK_SHA256", "/tmp/dxvk.tar.gz", "/tmp/dxvk.tar.gz", "tar -xzf /tmp/dxvk.tar.gz", False, '"https://github.com/doitsujin/dxvk/releases/download/v${DXVK_VERSION#dxvk-}/${DXVK_VERSION}.tar.gz"', ("DXVK_VERSION", "DXVK_SHA256")),
     ("DXVK_NVAPI_SHA256", "/tmp/dxvk-nvapi.tar.gz", "/tmp/dxvk-nvapi.tar.gz", "tar -xzf /tmp/dxvk-nvapi.tar.gz", False, '"https://github.com/jp7677/dxvk-nvapi/releases/download/${DXVK_NVAPI_VERSION#dxvk-nvapi-}/${DXVK_NVAPI_VERSION}.tar.gz"', ("DXVK_NVAPI_VERSION", "DXVK_NVAPI_SHA256")),
-    ("LUTRIS_GAMEPAD_UI_SHA256", "/tmp/lutris-gamepad-ui.AppImage", "/tmp/lutris-gamepad-ui.AppImage", "chmod +x /tmp/lutris-gamepad-ui.AppImage", False, '"https://github.com/andrew-ld/lutris-gamepad-ui/releases/download/${LUTRIS_GAMEPAD_UI_VERSION}/lutris-gamepad-ui-x64.AppImage"', ("LUTRIS_GAMEPAD_UI_VERSION", "LUTRIS_GAMEPAD_UI_SHA256")),
     ("LUTRIS_SHA256", "/tmp/lutris.deb", "/tmp/lutris.deb", "apt-get update && (", False, '"https://github.com/lutris/lutris/releases/download/${LUTRIS_VERSION}/lutris_${LUTRIS_VERSION#v}_all.deb"', ("LUTRIS_VERSION", "LUTRIS_SHA256")),
 )
 

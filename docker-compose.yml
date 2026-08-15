@@ -33,21 +33,15 @@ services:
       - SUNSHINE_PASSWORD=dpadcloud
       - SELKIES_BASIC_AUTH_USER=dpad
       - SELKIES_BASIC_AUTH_PASSWORD=dpadcloud
-      # --- B2b: Cloudflare Tunnel for HTTPS click-and-play ---
-      # Leave unset to use a quick trycloudflare.com tunnel (MVP/testing).
-      # For production set both, configured on the Cloudflare side to route
-      # your hostname -> http://localhost:16100:
-      # - CLOUDFLARED_TUNNEL_TOKEN=
-      # - CLOUDFLARED_HOSTNAME=https://play.example.com
+
       # --- Native-Moonlight enthusiast path (optional) ---
       # - TAILSCALE_AUTH_KEY=tskey-...
       # - TAILSCALE_HOSTNAME=dpadcloud-1
 
     ports:
-      # moonlight-web-stream — PRIMARY browser path (Sunshine NVENC -> WebRTC).
-      # In-container it binds 0.0.0.0:8080; cloudflared fronts it for HTTPS.
+      # Legacy moonlight-web-stream port.
       - "8080:8080/tcp"
-      # Selkies browser UI (localhost only in-container; cloudflared fronts it).
+      # Selkies browser UI; production HTTPS is provided by stream-bridge/Caddy.
       - "16100:16100/tcp"
       # In-image coturn TURN (WebRTC media relay). Default 3478.
       # On Vast.ai request the 73478 identity tag so external==internal:

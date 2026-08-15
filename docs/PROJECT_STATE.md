@@ -14,6 +14,18 @@
 > **`WAYLAND-ARCHITECTURE.md`** (the 2026-08-08 compositor pivot decision —
 > adopts `gst-wayland-display`, retires the §6 #11 Lutris-capture blocker).
 >
+> **2026-08-15 component cleanup — SOURCE COMPLETE, IMAGE REBUILD PENDING.**
+> The gaming image no longer installs or starts an in-container tunnel daemon:
+> production HTTPS is `play-<session>.dpadplay.com` → Caddy → stream-bridge →
+> the VM's published Selkies port. The retired alternate gamepad shell and its
+> wrapper/env branches were also removed; `DPAD_STORE_SHELL=picker` remains the
+> authoritative DpadPlay launcher path. **Lutris remains installed as a possible
+> compatibility/backend component, and SDL3 remains because dpad-launcher uses
+> it through koffi for gamepad input.** Run
+> `python3 scripts/test_obsolete_components_removed.py` to guard this boundary.
+> The published `r2` image predates this source cleanup; publish a later immutable
+> image before claiming the binaries are absent in production.
+>
 > **2026-08-15 `r2` exact-provenance release — CURRENT.** Commit
 > `63eb0c037fb79578b9f3cc37c19f8f8f73609927` was cloned cleanly on an OVH
 > GRA11 `l4-90`, validated with `docker buildx build --check`, built with OCI

@@ -31,7 +31,7 @@
 #                     nested Wayland client of gst-wayland-display, more stable
 #                     than gamescope --backend wayland on Nvidia. Needs sway baked
 #                     into the image — use a spike tag, e.g. IMAGE=...:dpad-SteamOS-wd-spike)
-#   EXTRA_ENV        extra -e flags (e.g. DPAD_LUTRIS_DISABLE_GPU=1 for the probe)
+#   EXTRA_ENV        extra docker environment flags for the probe
 set -euo pipefail
 
 VM_IP="${VM_IP:?VM_IP is required (the VM public IP for TURN)}"
@@ -77,7 +77,6 @@ docker run -d --name "$NAME" \
     -e DPAD_COMPOSITOR=wayland-display \
     -e DPAD_WAYLAND_CLIENT="${DPAD_WAYLAND_CLIENT:-gamescope}" \
     -e DPAD_STORE_SHELL="$SHELL_SEL" \
-    -e DPAD_TUNNEL=ssh \
     -e DPAD_SELKIES_BIND=0.0.0.0 \
     -e DPAD_COTURN_PORT="$PORT" \
     -e DPAD_TURN_PUBLIC_IP="$VM_IP" \

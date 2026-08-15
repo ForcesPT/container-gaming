@@ -1,8 +1,7 @@
 #!/bin/bash
 # launcher-shell — start the dpad-launcher Electron app (the store-picker
 # shell) in the headless cloud-gaming container. The entrypoint's sway/wayland
-# session launches THIS instead of `steam -gamepadui` / `lutris-shell` when
-# DPAD_STORE_SHELL=picker (wired in entrypoint.sh). Replaces lutris-gamepad-ui.
+# session launches this authoritative picker when DPAD_STORE_SHELL=picker.
 #
 # Gamepad: the launcher polls SDL3 via koffi (the Web Gamepad API doesn't see
 # the mknod'd /dev/input/jsN pads in-container). It needs the classic-joystick
@@ -27,5 +26,5 @@ if [ ! -x "${APPRUN}" ]; then
 fi
 
 # Electron sandbox off (the container has userns; --no-sandbox avoids the
-# setuid chrome-sandbox requirement, matching the lutris-shell / heroic path).
+# setuid chrome-sandbox requirement, matching the other Electron clients).
 exec "${APPRUN}" --no-sandbox >/tmp/launcher.log 2>&1

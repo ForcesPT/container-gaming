@@ -19,7 +19,7 @@ One multi-stage Dockerfile, two final images:
 | `:dpad-SteamOS-rtx50` | `vast-vm` + CUDA 12.8.1 | RTX 50 / Blackwell variant |
 | `:dpad-heroic` | `vast-docker` | Heroic desktop + Selkies (deprecated for v2) |
 
-Base: Ubuntu 24.04 + CUDA 12.5.1, Selkies-GStreamer 1.24.6 (WebRTC + NVENC), coturn, cloudflared, Xorg/Xvfb, Mesa, Vulkan, PulseAudio.
+Base: Ubuntu 24.04 + CUDA 12.5.1, Selkies-GStreamer 1.24.6 (WebRTC + NVENC), coturn, Xorg/Xvfb, Mesa, Vulkan, PulseAudio. HTTPS is external via Caddy + stream-bridge.
 
 ## Build & push
 
@@ -41,7 +41,7 @@ docker push   forcespt/dpadcloud-gaming:dpad-SteamOS-rtx50
 | File | Purpose |
 |------|---------|
 | `Dockerfile` | Multi-stage: interposer-builder -> base -> vast-vm / vast-docker |
-| `entrypoint.sh` | Boot orchestration: coturn -> NVENC -> display -> Selkies -> cloudflared |
+| `entrypoint.sh` | Boot orchestration: coturn -> NVENC -> display -> Selkies |
 | `scripts/vm-bootstrap.sh` | VM host setup (driver, modeset, Docker, XFS quota, image pull) |
 | `scripts/dpad-launch-session` | Session container launcher (volume mount, CDI, env injection) |
 | `scripts/nvenc_fix.c` | NVENC #1249 flexgrip interposer |

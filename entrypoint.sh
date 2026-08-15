@@ -4,8 +4,8 @@
 # Boot order:
 #   dbus -> Xvfb -> XFCE -> PulseAudio(null-sink) -> coturn
 #        -> NVENC topology + flexgrip LD_PRELOAD
-#        -> Selkies-GStreamer (127.0.0.1:16100, TURN=coturn) [browser stream]
-#        -> cloudflared (HTTPS tunnel for Selkies)
+#        -> Selkies-GStreamer (0.0.0.0:16100, TURN=coturn) [browser stream]
+#        -> DpadPlay stream-bridge/Caddy (HTTPS is external to this image)
 # =============================================================================
 
 set -o pipefail
@@ -79,8 +79,7 @@ done
 # the SAME coturn, media relays internally over their two control connections to
 # coturn's listening port; the per-allocation relay ports are never contacted
 # externally. So only coturn's listening port needs to be reachable. The web UI
-# still rides on cloudflared quick tunnels (outbound HTTPS -> zero inbound HTTP
-# ports), exactly like Vast.
+# is published by the DpadPlay stream-bridge/Caddy path.
 DPAD_PROVIDER="${DPAD_PROVIDER:-}"
 if [ -z "$DPAD_PROVIDER" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then
     DPAD_PROVIDER="runpod"
@@ -354,7 +353,7 @@ bootstrap_steam_on_xvfb() {
 # headless Xwayland has no root pixmap (ximagesrc on gamescope's :0 is black).
 # So we bridge: Xvfb :2 + (pipewiresrc target-object=gamescope ! videoconvert !
 # ximagesink display=:2), then Selkies ximagesrc-captures :2 -> nvh264enc ->
-# WebRTC -> coturn -> cloudflared. Validated on-instance: the bridge paints real
+# WebRTC -> coturn. Validated on-instance: the bridge paints real
 # gamescope UI content onto :2 (1.1MB captured frame). Needs gstreamer1.0-tools
 # (gst-launch-1.0) in the image — added in the Dockerfile gamescope step.
 start_gamescope_stream() {
@@ -367,7 +366,7 @@ start_gamescope_stream() {
     # socket @/tmp/.X11-unix/X2 persist across restarts; a stale Xvfb :2 holding it
     # makes a new Xvfb :2 fail with 'Cannot establish any listening sockets' -> :2
     # never comes up -> bridge paints into nothing -> ximagesrc-captures :2 black).
-    rm -f /tmp/selkies.log /tmp/bridge.log /tmp/coturn.log /tmp/cloudflared-selkies.log /tmp/xvfb2.log /tmp/rtc_config.json /tmp/.X2-lock /tmp/.X11-unix/X2 2>/dev/null
+    rm -f /tmp/selkies.log /tmp/bridge.log /tmp/coturn.log /tmp/xvfb2.log /tmp/rtc_config.json /tmp/.X2-lock /tmp/.X11-unix/X2 2>/dev/null
     pkill -9 -f "Xvfb :2" 2>/dev/null || true
     pkill -9 -f "pipewiresrc target-object=gamescope ! videoconvert" 2>/dev/null || true
     sleep 1
@@ -531,18 +530,7 @@ start_gamescope_stream() {
         break
     done
 
-    if [ "${DPAD_TUNNEL:-cloudflared}" = "ssh" ]; then
-        echo "    ▶ gamescope stream: dpadplay VPS reverse-proxy (DPAD_TUNNEL=ssh) — Selkies on 127.0.0.1:16100"
-    else
-        cloudflared tunnel --no-autoupdate --url http://localhost:16100 >/tmp/cloudflared-selkies.log 2>&1 &
-        sleep 10
-        url="$(grep -oE 'https://[a-z0-9.-]+trycloudflare.com' /tmp/cloudflared-selkies.log 2>/dev/null | head -1)"
-        if [ -n "$url" ]; then
-            echo "    ▶ gamescope browser stream: ${url}  (login ${SELKIES_USER} / ${SELKIES_PASS})"
-        else
-            echo "    Selkies tunnel URL not captured (see /tmp/cloudflared-selkies.log)"
-        fi
-    fi
+    echo "    ▶ gamescope stream: Selkies on ${DPAD_SELKIES_BIND:-0.0.0.0}:16100 (HTTPS via DpadPlay stream-bridge/Caddy)"
 }
 
 # --- DPAD_GAMESCOPE mode: gamescope --backend headless + Steam (multi-tenant) ---
@@ -917,15 +905,10 @@ start_wayland_display_session() {
         SHELL_APP="/opt/dpadcloud/launcher-shell"
         SHELL_PROC="dpad-launcher"
         echo "[*] DPAD_STORE_SHELL=picker — DpadPlay launcher (the store-picker shell)"
-    elif [ "${DPAD_STORE_SHELL:-steam}" = "lutris" ]; then
-        SHELL_APP="/opt/dpadcloud/lutris-shell"
-        SHELL_PROC="lutris-gamepad-ui"
-        echo "[*] DPAD_STORE_SHELL=lutris — Lutris gamepad-UI shell (Epic+GOG+Battle.net, STORES-PLAN.md)"
     else
         SHELL_APP="steam ${STEAM_ARGS}"
         SHELL_PROC="steam"
     fi
-    local LUTRIS_ENV="DPAD_LUTRIS_DISABLE_GPU='${DPAD_LUTRIS_DISABLE_GPU:-}' DPAD_LUTRIS_OZONE='${DPAD_LUTRIS_OZONE:-}' DPAD_LUTRIS_USE_GL='${DPAD_LUTRIS_USE_GL:-}' DPAD_LUTRIS_EXTRA_ARGS='${DPAD_LUTRIS_EXTRA_ARGS:-}' DPAD_LUTRIS_SHELL_ARGS='${DPAD_LUTRIS_SHELL_ARGS:-}' DPAD_LUTRIS_SDL3='${DPAD_LUTRIS_SDL3:-}'"
 
     # --- shared session prep (mirrors start_gamescope_session) ---
     setup_user_volume
@@ -1033,7 +1016,7 @@ start_wayland_display_session() {
     echo "    NOTE: video appears when a peer connects (starts the compositor) + gamescope boots (~30-40s)"
 
     # gamescope-as-Wayland-client launcher. Nested function (bash dynamic scoping:
-    # sees the caller's locals — GS_W/GS_H/SHELL_APP/SDL_GP_ENV/LUTRIS_ENV/etc.).
+    # sees the caller's locals — GS_W/GS_H/SHELL_APP/SDL_GP_ENV/etc.).
     # Reused for the initial launch + the restart-on-death path in the health loop.
     # DPAD_WAYLAND_CLIENT selects the Wayland client of gst-wayland-display:
     # - gamescope (default): gamescope --backend wayland -- <shell> (provides XWayland
@@ -1051,7 +1034,7 @@ start_wayland_display_session() {
         local client="${DPAD_WAYLAND_CLIENT:-gamescope}"
         local egl_unset="unset DISPLAY __EGL_VENDOR_LIBRARY_FILENAMES"
         local egl_set="__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
-        local shared_env="WAYLAND_DISPLAY=${wl_name} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} ${LUTRIS_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'"
+        local shared_env="WAYLAND_DISPLAY=${wl_name} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'"
         if [ "$client" = "sway" ] && ! command -v sway >/dev/null 2>&1; then
             echo "[*] WARNING: DPAD_WAYLAND_CLIENT=sway but 'sway' is not installed — falling back to gamescope"
             client="gamescope"
@@ -1119,7 +1102,7 @@ SWAYCFG
         # Restart the wayland client if it died (and the socket is still there).
         if [ $gs_launched -eq 1 ] && [ -n "$gs_pid" ] && ! kill -0 "$gs_pid" 2>/dev/null; then
             echo "[*] WARNING: wayland client died — restarting..."
-            kill "$gs_pid" 2>/dev/null; pkill -9 -x steam 2>/dev/null; pkill -9 -x steamwebhelper 2>/dev/null; pkill -9 -x sway 2>/dev/null; pkill -9 -f lutris-gamepad-ui 2>/dev/null; sleep 2
+            kill "$gs_pid" 2>/dev/null; pkill -9 -x steam 2>/dev/null; pkill -9 -x steamwebhelper 2>/dev/null; pkill -9 -x sway 2>/dev/null; sleep 2
             rm -f "${USER_HOME}/.steam/steam/steam.pid" "${USER_HOME}/.steam/debian-installation/steam.pid" 2>/dev/null
             if [ -n "$wl_name" ] && [ -S "$wl_sock" ]; then
                 _launch_wayland_client "$wl_name"
@@ -1182,37 +1165,18 @@ start_gamescope_session() {
     [ -z "$GS_W" ] && GS_W=1920
     [ -z "$GS_H" ] && GS_H=1080
     STEAM_ARGS="${DPAD_STEAM_ARGS:--gamepadui}"
-    # The app launched inside gamescope headless. Default = Steam (the validated
-    # v2 path, UNCHANGED when DPAD_STORE_SHELL is unset). DPAD_STORE_SHELL=lutris
-    # switches to the Lutris gamepad-UI store-picker shell (STORES-PLAN.md
-    # Option B2: Epic + GOG + Battle.net, no forced Steam login). SHELL_PROC is
-    # the process name the ready-check + health-loop target (steam via pgrep -x;
-    # the gamepad-UI via pgrep -f).
+    # The app launched inside gamescope headless. The production picker uses the
+    # DpadPlay launcher; unset/other values retain Steam as a compatibility path.
     local SHELL_APP SHELL_PROC
     if [ "${DPAD_STORE_SHELL:-steam}" = "picker" ]; then
         SHELL_APP="/opt/dpadcloud/launcher-shell"
         SHELL_PROC="dpad-launcher"   # pgrep -f matches the Electron binary
         echo "[*] DPAD_STORE_SHELL=picker — DpadPlay launcher (the store-picker shell)"
-    elif [ "${DPAD_STORE_SHELL:-steam}" = "lutris" ]; then
-        SHELL_APP="/opt/dpadcloud/lutris-shell"
-        SHELL_PROC="lutris-gamepad-ui"   # pgrep -f matches the AppRun cmdline
-        echo "[*] DPAD_STORE_SHELL=lutris — Lutris gamepad-UI shell (Epic+GOG+Battle.net, STORES-PLAN.md)"
     else
         SHELL_APP="steam ${STEAM_ARGS}"
         SHELL_PROC="steam"
     fi
 
-    # Re-export the Lutris capture-probe knobs into the gamescope child env.
-    # `as_user` (su) strips the parent env (the documented gamepad gotcha —
-    # LD_PRELOAD/SDL_JOYSTICK_* are re-exported in the launch line below), so
-    # the DPAD_LUTRIS_* vars the lutris-shell wrapper reads (STORES-PLAN.md §17.3
-    # probe knobs — disable-gpu / ozone / use-gl / extra-args / shell-args) must
-    # be re-exported here or they never reach the wrapper. Empty-safe: an unset
-    # var exports as '' which the wrapper's `${VAR:-}` / `[ -n "${VAR:-}" ]`
-    # checks treat as unset. No-op for the steam shell (the wrapper isn't exec'd).
-    # DPAD_LUTRIS_SDL3 forwards the SDL3-gamepad ON/OFF A/B to the wrapper
-    # (the §16.9 sway-SIGTRAP isolation knob); empty = wrapper defaults to 1.
-    local LUTRIS_ENV="DPAD_LUTRIS_DISABLE_GPU='${DPAD_LUTRIS_DISABLE_GPU:-}' DPAD_LUTRIS_OZONE='${DPAD_LUTRIS_OZONE:-}' DPAD_LUTRIS_USE_GL='${DPAD_LUTRIS_USE_GL:-}' DPAD_LUTRIS_EXTRA_ARGS='${DPAD_LUTRIS_EXTRA_ARGS:-}' DPAD_LUTRIS_SHELL_ARGS='${DPAD_LUTRIS_SHELL_ARGS:-}' DPAD_LUTRIS_SDL3='${DPAD_LUTRIS_SDL3:-}'"
 
     # Bind the user's persistent library volume (if mounted) BEFORE bootstrapping
     # Steam — the library subpaths (steamapps/config/userdata) must point at the
@@ -1328,7 +1292,7 @@ start_gamescope_session() {
     setup_nvenc_fix
     setup_gamepad_interposer
     echo "[*] Launching gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}"
-    as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} ${LUTRIS_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}" >/tmp/gamescope-steam.log 2>&1 &
+    as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}" >/tmp/gamescope-steam.log 2>&1 &
     local gs_pid=$!
 
     # Steam takes ~30-40s to launch through pressure-vessel + steamwebhelper
@@ -1367,9 +1331,9 @@ start_gamescope_session() {
         sleep 30
         if ! kill -0 "$gs_pid" 2>/dev/null; then
             echo "[*] WARNING: gamescope died — restarting session..."
-            kill $gs_pid 2>/dev/null; pkill -9 -x steam 2>/dev/null; pkill -9 -x steamwebhelper 2>/dev/null; pkill -9 -f lutris-gamepad-ui 2>/dev/null; sleep 2
+            kill $gs_pid 2>/dev/null; pkill -9 -x steam 2>/dev/null; pkill -9 -x steamwebhelper 2>/dev/null; sleep 2
             rm -f ${USER_HOME}/.steam/steam/steam.pid ${USER_HOME}/.steam/debian-installation/steam.pid 2>/dev/null
-            as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} ${LUTRIS_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}" >/tmp/gamescope-steam.log 2>&1 &
+            as_user "cd ${USER_HOME}; unset DISPLAY WAYLAND_DISPLAY; export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'; exec gamescope --backend headless -e -W ${GS_W} -H ${GS_H} -- ${SHELL_APP}" >/tmp/gamescope-steam.log 2>&1 &
             gs_pid=$!
             # the old selkies was bound to the dead gamescope's PipeWire node →
             # it'd stream black/garbage; kill it so the supervisor (below)
@@ -1571,54 +1535,8 @@ mkdir -p "${XDG_RUNTIME_DIR}" /tmp/.X11-unix /tmp/.ICE-unix
 chmod 1777 "${XDG_RUNTIME_DIR}" /tmp/.X11-unix /tmp/.ICE-unix
 find "${XDG_RUNTIME_DIR}" ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -exec chown "${USER_NAME}:${USER_NAME}" {} + 2>/dev/null || true
 
-# --- SSH server (B1: dpadplay VPS reverse-proxy tunnel) ---
-# Vast maps 22 -> VAST_TCP_PORT_22; the dpadplay VPS autossh-tunnels
-# localhost:16100 (Selkies signaling) through this port. Pubkey-only, the key
-# injected via DPAD_ORCHESTRATOR_PUBKEY. Media/input stay direct via coturn —
-# this carries only the signaling WebSocket. Starts early so the VPS can
-# connect as soon as the container boots (eager tunnel = no cold-start on Play).
-if command -v sshd >/dev/null 2>&1; then
-    mkdir -p /run/sshd
-    [ ! -e /etc/ssh/ssh_host_ed25519_key ] && ssh-keygen -A >/dev/null 2>&1 || true
-    # Authorize the orchestrator pubkey for the dpad user (idempotent).
-    if [ -n "${DPAD_ORCHESTRATOR_PUBKEY:-}" ]; then
-        install -d -m 700 "${USER_HOME}/.ssh"
-        grep -qxF "${DPAD_ORCHESTRATOR_PUBKEY}" "${USER_HOME}/.ssh/authorized_keys" 2>/dev/null \
-            || echo "${DPAD_ORCHESTRATOR_PUBKEY}" >> "${USER_HOME}/.ssh/authorized_keys"
-        chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}/.ssh"
-        chmod 600 "${USER_HOME}/.ssh/authorized_keys" 2>/dev/null || true
-    fi
-    # Hardened config: pubkey only, no passwords, no root, only the dpad user.
-    if [ ! -f /etc/ssh/sshd_config.d/dpad.conf ]; then
-        mkdir -p /etc/ssh/sshd_config.d
-        cat > /etc/ssh/sshd_config.d/dpad.conf <<EOF
-Port 22
-ListenAddress 0.0.0.0
-PubkeyAuthentication yes
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-PermitRootLogin no
-AllowUsers ${USER_NAME}
-EOF
-    fi
-    if /usr/sbin/sshd -t 2>/tmp/sshd-configtest.log; then
-        /usr/sbin/sshd >/tmp/sshd.log 2>&1 \
-            && echo "[*] SSH server on :22 (pubkey only, user=${USER_NAME}) — dpadplay VPS reverse-proxy tunnel" \
-            || echo "    WARNING: sshd failed to start (see /tmp/sshd.log)"
-        # Print the externally-reachable SSH endpoint (Vast maps 22 ->
-        # VAST_TCP_PORT_22 on PUBLIC_IPADDR). The dpadplay orchestrator greps
-        # this line from the boot log to point stream-bridge's autossh at it
-        # (the Vast SSH proxy ssh_host/ssh_port isn't populated for
-        # runtype=args instances). Vast guarantees the 22 map is reachable.
-        if [ -n "${PUBLIC_IP:-}" ] && [ -n "${VAST_TCP_PORT_22:-}" ]; then
-            echo "[*] DPAD_SSH_ENDPOINT=${PUBLIC_IP}:${VAST_TCP_PORT_22}"
-        fi
-    else
-        echo "    WARNING: sshd config test failed (see /tmp/sshd-configtest.log); sshd not started"
-    fi
-else
-    echo "[*] sshd not installed — VPS reverse-proxy tunnel disabled (cloudflared remains)"
-fi
+# The v2 control plane reaches Selkies directly through the VM's published
+# port. The container does not run an SSH server or reverse signaling tunnel.
 
 # --- D-Bus (system + session) ---
 echo "[*] Starting D-Bus..."
@@ -2421,30 +2339,8 @@ pgrep -f "selkies-gstreamer" >/dev/null && echo "    Selkies running on ${DPAD_S
 
 # (mws + mws-autopair removed — Selkies is the only browser stream.)
 
-# --- cloudflared (HTTPS tunnel for Selkies) ---
-# Selkies (:16100) gets an HTTPS tunnel so the secure-context gaming APIs
-# (gamepad, WebCodecs, keyboard lock) work with no inbound port. Production:
-# a named tunnel — pass CLOUDFLARED_TUNNEL_TOKEN + CLOUDFLARED_HOSTNAME.
-# MVP: a quick trycloudflare.com URL (one cloudflared process).
-start_quick_tunnel() {
-  local local_url="$1" logfile="$2"
-  cloudflared tunnel --no-autoupdate --url "$local_url" >"$logfile" 2>&1 &
-  sleep 8
-  grep -oE 'https://[a-z0-9.-]+trycloudflare\.com' "$logfile" 2>/dev/null | head -1
-}
-SELKIES_URL=""
-if [ "${DPAD_TUNNEL:-cloudflared}" = "ssh" ]; then
-    echo "[*] DPAD_TUNNEL=ssh — skipping cloudflared (the dpadplay VPS reverse-proxies via SSH). Selkies stays on 127.0.0.1:16100."
-elif [ -n "${CLOUDFLARED_TUNNEL_TOKEN:-}" ]; then
-    echo "[*] Starting cloudflared named tunnel (-> Selkies :16100)..."
-    cloudflared tunnel --no-autoupdate run --token "${CLOUDFLARED_TUNNEL_TOKEN}" >/tmp/cloudflared.log 2>&1 &
-    SELKIES_URL="${CLOUDFLARED_HOSTNAME:-https://<your-tunnel-hostname>}"
-    echo "    Selkies tunnel URL: ${SELKIES_URL}"
-elif command -v cloudflared >/dev/null 2>&1; then
-    echo "[*] Starting cloudflared quick tunnel (Selkies :16100)..."
-    SELKIES_URL="$(start_quick_tunnel http://localhost:16100 /tmp/cloudflared-selkies.log)"
-    [ -n "$SELKIES_URL" ] && echo "    Selkies tunnel URL: ${SELKIES_URL}" || { echo "    Selkies tunnel URL not captured (see /tmp/cloudflared-selkies.log):"; tail -n 15 /tmp/cloudflared-selkies.log; }
-fi
+# HTTPS is provided outside the image by Caddy + stream-bridge. Selkies binds
+# to the VM's published port and does not create or manage a tunnel itself.
 
 # (Tailscale / native Moonlight removed — Selkies is the only stream.)
 
@@ -2459,13 +2355,8 @@ echo "  Encoder:           ${SELKIES_ENC}"
 [ -n "$PUBLIC_IP" ] && echo "  Public IP:        ${PUBLIC_IP}"
 echo ""
 echo "  ▶ Browser click-and-play (Selkies):"
-if [ -n "$SELKIES_URL" ]; then
-    echo "      ${SELKIES_URL}"
-    echo "      Login: ${SELKIES_USER} / ${SELKIES_PASS}"
-else
-    echo "      (no tunnel — Selkies quick-tunnel failed)"
-    echo "      Local fallback: http://localhost:16100  (Login: ${SELKIES_USER} / ${SELKIES_PASS})"
-fi
+echo "      HTTPS URL is assigned by DpadPlay stream-bridge/Caddy"
+echo "      Upstream: http://${PUBLIC_IP:-<vm-ip>}:16100  (Login: ${SELKIES_USER} / ${SELKIES_PASS})"
 echo ""
 echo "  TURN (WebRTC media relay): ${PUBLIC_IP:-<ip>}:${TURN_PORT_EXT}  (${SELKIES_TURN_PROTOCOL}, ${TURN_USER}/<token>)"
 echo ""

@@ -16,7 +16,6 @@ docker run -d --name wd-probe \
   -e DPAD_COMPOSITOR=wayland-display \
   -e DPAD_WAYLAND_CLIENT=sway \
   -e DPAD_STORE_SHELL=steam \
-  -e DPAD_TUNNEL=ssh \
   -e DPAD_SELKIES_BIND=0.0.0.0 \
   -e DPAD_COTURN_PORT=3478 \
   -e DPAD_TURN_PUBLIC_IP="$IP" \

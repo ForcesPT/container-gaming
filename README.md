@@ -25,7 +25,7 @@ Two slim cloud-gaming images, **one Dockerfile (multi-stage)**, both with
 ## What's inside
 
 **Both images (base):** Selkies-GStreamer 1.24.6 (WebRTC + NVENC), coturn (TURN),
-cloudflared (HTTPS tunnel), the flexgrip NVENC interposer (`libnvenc_fix.so` —
+the flexgrip NVENC interposer (`libnvenc_fix.so` —
 auto on multi-GPU slices, driver 570..609, fixes nvidia-container-toolkit #1249),
 `cuda-cudart` + `cuda-nvrtc`, Xorg/Xvfb + Mesa/EGL + Vulkan loader, PulseAudio,
 VirtualGL 3.1 (Xvfb debug path), the `dpad` user.
@@ -112,7 +112,7 @@ covers hosts with low hard caps):
 On boot, read the Vast **Logs** tab for:
 ```
 ▶ Browser click-and-play (Selkies):
-    https://<random>.trycloudflare.com   (Login: dpad / <SELKIES_BASIC_AUTH_PASSWORD>)
+    https://play-<session>.dpadplay.com   (Caddy → stream-bridge → VM:16100)
 ```
 
 ### Vast KVM VM → `:dpad-SteamOS`
@@ -120,7 +120,7 @@ On boot, read the Vast **Logs** tab for:
 Use `scripts/vm-bootstrap.sh` run **inside** the VM — it auto-selects the tag by
 GPU arch (`:dpad-SteamOS` or `:dpad-SteamOS-rtx50` for Blackwell), exposes one
 coturn port per GPU, sets the gamescope + TURN env, launches one CDI container
-per GPU, and prints each Selkies URL. Full recipe in
+per GPU, and reports each Selkies readiness marker. Full recipe in
 [`docs/VAST-VM-DEPLOY.md`](docs/VAST-VM-DEPLOY.md). (This is the validated
 N-on-N-GPUs multi-tenant full-Steam path.)
 
@@ -132,23 +132,18 @@ Steam) → use `:dpad-SteamOS`; **Community Cloud** (no userns → Heroic) → u
 `:dpad-heroic`. See [`docs/RUNPOD.md`](docs/RUNPOD.md). (mws/Sunshine/Tailscale
 are removed — Selkies only.)
 
-## Production (named Cloudflare tunnel)
+## Production HTTPS
 
-Replace the quick tunnel with a named tunnel for a stable URL:
-```
--e CLOUDFLARED_TUNNEL_TOKEN=<token> -e CLOUDFLARED_HOSTNAME=https://play-<id>.dpadcloud.com -p 3478:3478
-```
-The entrypoint runs the named tunnel for Selkies. Your orchestrator creates the
-tunnel + DNS CNAME per session, provisions the instance with the token, and
-returns the HTTPS URL. Per-session auth: set `SELKIES_BASIC_AUTH_PASSWORD` to a
-session token (or front with Cloudflare Access).
+The container exposes Selkies on the VM's published port. The control plane
+registers that upstream with stream-bridge and returns
+`https://play-<session>.dpadplay.com`; Caddy terminates TLS. Per-session auth is
+provided with `SELKIES_BASIC_AUTH_PASSWORD`.
 
 ## Config (env)
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `SELKIES_BASIC_AUTH_USER` / `_PASSWORD` | `dpad` / `OPEN_BUTTON_TOKEN` | Selkies browser login gate (set the password to a per-session token in production) |
-| `CLOUDFLARED_TUNNEL_TOKEN` + `_HOSTNAME` | (unset → quick tunnel) | Named tunnel (production) |
 | `TURN_USERNAME` / `TURN_PASSWORD` | `turnuser` / `OPEN_BUTTON_TOKEN` | coturn creds (shared by the in-container peer + the browser) |
 | `DPAD_COTURN_PORT` | auto (`3478`) | Internal port coturn binds; auto-detected from `VAST_TCP_PORT_3478`/`VAST_UDP_PORT_3478` |
 | `DPAD_TURN_PUBLIC_IP` / `DPAD_TURN_EXTERNAL_PORT` / `DPAD_TURN_UDP_EXTERNAL_PORT` | auto | Override the browser-facing TURN address/port (auto from `PUBLIC_IPADDR` + `VAST_*_PORT_3478`) |
@@ -169,7 +164,7 @@ session token (or front with Cloudflare Access).
 | File | Purpose |
 |------|---------|
 | `Dockerfile` | Multi-stage: `interposer-builder` → `base` → `vast-docker` (`:dpad-heroic`) / `vast-vm` (`:dpad-SteamOS`) |
-| `entrypoint.sh` | Boot orchestration (shared): coturn → NVENC/flexgrip → display (Xorg or gamescope) → Selkies → cloudflared. mws/Sunshine/Tailscale blocks removed. |
+| `entrypoint.sh` | Boot orchestration (shared): coturn → NVENC/flexgrip → display (Xorg or gamescope) → Selkies. HTTPS is external via Caddy + stream-bridge. |
 | `scripts/vm-bootstrap.sh` | Vast VM host setup + one-CDI-container-per-GPU launcher (pulls `:dpad-SteamOS[-rtx50]`) |
 | `scripts/nvenc_fix.c` | flexgrip NVENC #1249 interposer (built in `interposer-builder` → `/opt/dpadcloud/libnvenc_fix.so`) |
 | `scripts/joystick_interposer_v162.c` | Patched Selkies v1.6.2 gamepad interposer (built for x86_64 + i386) |

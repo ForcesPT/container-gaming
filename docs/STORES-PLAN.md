@@ -22,6 +22,11 @@
 > original B2/Lutris prose below is kept as the design record; the Lutris shell
 > itself is now retired (the `lutris` *package* may still serve as a silent
 > backend for Epic/GOG's legendary/gogdl when those land).
+> **2026-08-15 cleanup:** the retired shell's AppImage, wrapper, entrypoint gate,
+> and probe environment knobs have now been deleted from source. SDL3 stays for
+> dpad-launcher's own koffi gamepad input; the Lutris package stays as a possible
+> compatibility/backend component. Everything below describing the old shell is
+> historical design context, not a supported runtime option.
 
 > **Spec (2026-08).** The plan to add non-Steam stores (Epic + GOG + Battle.net,
 > with EA App + Ubisoft Connect reserved as v1.1 drop-ins) to the

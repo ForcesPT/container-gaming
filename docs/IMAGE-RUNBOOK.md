@@ -87,14 +87,13 @@ docker logs -f dpad-0
 | Variable | Default | Purpose |
 |---|---|---|
 | `DPAD_GAMESCOPE` | `0` | `1` = gamescope headless mode (the validated path). |
-| `DPAD_STORE_SHELL` | `steam` | **Multi-store (STORES-PLAN.md, 2026-08-07).** `steam` (default) = the validated `gamescope ... -- steam -gamepadui` shell. `lutris` = the **Lutris gamepad-UI store-picker shell** (`gamescope ... -- /opt/dpadcloud/lutris-shell`; Epic+GOG+Battle.net, no forced Steam login). The entrypoint `DPAD_STORE_SHELL` gate is shell-aware (ready-check + health-loop). The image bakes GE-Proton11-3 + Lutris + the `lutris-gamepad-ui` AppImage; `scripts/lutris-shell` wraps it (`LUTRIS_GAMEPAD_UI_ENABLE_SDL_INPUT=1` + `--no-sandbox`). Passed per-session: the cloud worker writes it to `/etc/environment` at bootstrap (opt-in via `deploy/vps/docker-compose.yml`) + `dpad-launch-session` forwards it to the container. **Live validation PENDING** (blocked by a pre-existing worker<->Scaleway bootstrap-SSH issue, STORES-PLAN section 16). |
+| `DPAD_STORE_SHELL` | `steam` | `picker` = the production DpadPlay Electron store launcher; `steam` = compatibility fallback (`steam -gamepadui`). The retired alternate shell is no longer shipped. The cloud worker writes `picker` to `/etc/environment`, and `dpad-launch-session` forwards it. |
 | `DPAD_STORES` | (unset) | The stores the entrypoint should wire/symlink (e.g. `steam,epic,gog,battlenet`). v1.1 reserved: `ea-app`,`ubisoft`. Same plumbing as `DPAD_STORE_SHELL` (worker -> `/etc/environment` -> `dpad-launch-session`). |
 | `DPAD_GAMEPAD_INTERPOSER` | (unset) | `evdev` = the **evdev gamepad path** (fake-libudev + evdev interposer + `evdev_bridge.py`; SDL3 auto-detects 4 X-Box 360 pads, no GUID hack; see `scripts/gamepad-evdev-fallback/README.md`). Unset = the classic joystick path (the default; the v1.6.2 interposer + `SDL_JOYSTICK_LINUX_CLASSIC` + the hardcoded GUID). **VALIDATED END-TO-END with a real controller 2026-08-04** (Steam Big Picture navigates); two blocking bugs fixed (i386 fake-libudev SONAME + bridge socket chmod) — **needs an image rebuild + push to ship**. NOTE: the control plane does NOT pass this per-session (the worker writes only a fixed `/etc/environment` list at bootstrap) — to test/use evdev on a normal dpadplay session, wire it into the control plane (cloud `apps/worker/src/index.ts:711-726`) or run a manual container (below). |
 | `DPAD_COMPOSITOR` | `gamescope` | **gst-wayland-display path (WAYLAND-ARCHITECTURE.md §14).** `gamescope` (default) = the unchanged gamescope-headless compositor (no regression). `wayland-display` = the Smithay micro-compositor runs AS the GStreamer source (`waylanddisplaysrc`): it inits EGL off the DRM render node (NO DRM master → N-on-N) + a Wayland client (gamescope `--backend wayland` OR sway) renders into it; the compositor is the capture source. Inverted boot: selkies (the compositor) launches FIRST → `DPAD_READY` (listening) → a peer connects → compositor starts → `wayland-N` socket appears → the wayland client launches. Gate `start_wayland_display_session` in entrypoint.sh. `dpad-launch-session` adds `--device /dev/dri` (the compositor opens the render node directly via `EGL_EXT_device_drm_render_node`). PENDING full live validation (§16: compositor+capture+webrtcbin proven `m=video:9`; the gamescope-wayland client connection drop §16.3 is the remaining layer). |
 | `DPAD_WAYLAND_CLIENT` | `gamescope` | **The Wayland client of gst-wayland-display (§16.4).** `gamescope` (default) = `gamescope --backend wayland -- <shell>` (provides XWayland to Steam/Lutris) — hits the §16.3 client-connection drop on Nvidia after Steam launches (`IWaitable hung up`). `sway` = the §16.4 fallback: `sway --unsupported-gpu -c /tmp/dpad-sway.config` run NESTED as a Wayland client (`WLR_BACKENDS=wayland` → no DRM master → N-on-N preserved), the games-on-whales `RUN_SWAY=1` model — more stable on Nvidia. sway provides XWayland; the compositor still captures it. Needs `sway`+`xwayland` baked (Dockerfile vast-vm stage; a spike-tag rebuild) — if `sway` is missing the entrypoint falls back to gamescope with a warning. PENDING live validation. |
 | `DPAD_VIDEO_SRC` | `pipewiresrc` | `pipewiresrc` = direct PipeWire capture (zero-copy-ish). `ximagesrc` = the `:2` Xvfb bridge fallback. Under `DPAD_COMPOSITOR=wayland-display`, the entrypoint sets this to `waylanddisplaysrc` (the compositor IS the capture source) — see `DPAD_COMPOSITOR`. |
-| `DPAD_SELKIES_BIND` | `127.0.0.1` | Selkies signaling bind. `127.0.0.1` for the SSH-tunnel path; **`0.0.0.0` for direct-IP providers** (UpCloud/Hyperstack/MassedCompute) so Caddy reverse-proxies HTTP straight to `<public-ip>:16100`. |
-| `DPAD_TUNNEL` | (unset) | `ssh` gates cloudflared OFF (the B1 self-hosted `play-<id>.dpadplay.com` path). Unset = cloudflared quick tunnel (legacy). |
+| `DPAD_SELKIES_BIND` | `127.0.0.1` | Selkies signaling bind. Production sets **`0.0.0.0`** so stream-bridge proxies HTTP straight to `<public-ip>:16100`. |
 | `DPAD_DEFAULT_GAMING_MODE` | `0` | `1` = default the browser to **Gaming mode** (pointer lock ON → relative mouse for FPS aim) on stream load; `0` = Desktop mode (visible cursor + absolute mouse for Steam UI). The user can still toggle at runtime (floating button / `Ctrl+Shift+G`). Wired through `patch_gst_web_cursors.sh`; the control plane can set it per region/tier. |
 | `DPAD_INPUT_HOTFIX` | `0` | The 2026-08-05 image rebuild baked the input fixes (scroll direction + Gaming-mode toggle), so the boot-time overlay from repo `main` is **OFF by default** (avoids a `main`-regression overwriting the just-pushed image). Set `=1` to re-overlay `dpad_input_patch.py` + `patch_gst_web_cursors.sh` from `main` (useful to ship a NEW input hotfix before the next rebuild); on fetch failure it falls back to the baked copies. |
 | `DPAD_WD_WIDTH` / `DPAD_WD_HEIGHT` | `1920` / `1080` | **Stream resolution (wayland-display path, §18.6/§18.7).** Sets the compositor's caps (`DPAD_STREAM_WIDTH/HEIGHT` in the selkies launch) + sway's `output * mode --custom` (the no-letterbox fix — sway's nested wayland backend ignores the compositor's `wl_output.mode` + defaults to 720p without it). The cloud worker reads `preferences.resolution` + passes these per-session via an `env` prefix on `dpad-launch-session`; `dpad-launch-session` forwards them to `docker run -e`. |
@@ -120,7 +119,7 @@ docker logs -f dpad-0
 ## Networking — coturn TURN
 
 ```
-Browser ──HTTPS──▶ (cloudflared tunnel OR direct-IP Caddy) ──▶ Selkies 127.0.0.1:16100  (signalling + WebRTC)
+Browser ──HTTPS──▶ Caddy ──▶ stream-bridge ──▶ Selkies <vm-public-ip>:16100
                                                                 │
                                 WebRTC media ──▶ coturn (0.0.0.0:3478, UDP + TCP)
                                                                 │
@@ -155,9 +154,9 @@ region (lower RTT); the transport is no longer the bottleneck.
     Selkies running on 127.0.0.1:16100 (gamescope bridge, encoder=nvh264enc)
 ```
 
-Cold-boot budget (fresh `docker run`, RTX 3060): **~50s** to the stream URL
-(NVIDIA driver `.run` install ~14s · gamescope+Steam ~12s · Selkies ~6s ·
-cloudflared ~10s · the rest ~8s).
+Cold-boot budget must be re-measured after the current cleanup. The retired
+in-container tunnel previously added about 10 seconds to the historical ~50s
+budget; HTTPS route registration now happens in the control plane.
 
 ## Troubleshooting (the rows that still bite)
 
@@ -203,6 +202,10 @@ plan.
 immutable release tag before updating the convenience tag. The current release
 is `dpad-SteamOS-2026.08.15-r2`; both it and `dpad-SteamOS` resolve to
 `sha256:50a8ce28a32b0e2f0ae396e3e9d6523f7509d551f9400279ef6525c263b0aa34`.
+That published `r2` predates the source cleanup which removes the in-image
+tunnel daemon and retired alternate gamepad shell. Rebuild and publish a later
+immutable tag before rolling this cleanup into production. HTTPS remains owned
+by Caddy + stream-bridge; Lutris and SDL3 intentionally remain in the image.
 Run `python3 scripts/test_dockerfile_pins.py` and `docker buildx build --check
 --target vast-vm .` before the full build. Selkies, GE-Proton, umu, Wayland, and
 gst-wayland-display release-critical artifacts now have SHA-256 guards; bump a
@@ -216,11 +219,17 @@ unsafe fixtures (negation, nonfatal OR/semicolon masking, wrong target/URL/ARG
 scope, missing retries, version-only rollover, extra unapproved curl, and
 `curl | tar`) while the unmodified Dockerfile remains green.
 
+Run `python3 scripts/test_obsolete_components_removed.py` as well. It verifies
+the retired in-image tunnel and alternate-shell binaries, runtime branches,
+environment knobs, wrapper, and validator entries do not return while retaining
+the Lutris backend, SDL3 input library, and DpadPlay picker path.
+
 The `r2` image is an exact-provenance build of commit
 `63eb0c037fb79578b9f3cc37c19f8f8f73609927`; the OCI revision label and remote
-digest were read back after push. It extends checksum coverage to SDL3,
-cloudflared, VirtualGL, Heroic, VKD3D-Proton, DXVK, DXVK-NVAPI,
-lutris-gamepad-ui, and Lutris. This is still not a complete dependency lock:
+digest were read back after push. That historical image included components
+removed by the subsequent source cleanup. It also extended checksum coverage to
+SDL3, VirtualGL, Heroic, VKD3D-Proton, DXVK, DXVK-NVAPI, and Lutris. This is
+still not a complete dependency lock:
 see the scope boundary at the top of `PROJECT_STATE.md` and the remaining Task
 1 list in the roadmap.
 
@@ -281,7 +290,7 @@ docker run -d --name evdev-pad-test --runtime=nvidia \
   --shm-size 2g --ulimit nofile=1048576:1048576 \
   -p 3478:3478/udp -p 16100:16100 \
   -e DPAD_GAMESCOPE=1 -e DPAD_GAMEPAD_INTERPOSER=evdev \
-  -e DPAD_SELKIES_BIND=0.0.0.0 -e DPAD_TUNNEL=ssh \
+  -e DPAD_SELKIES_BIND=0.0.0.0 \
   -e DPAD_TURN_PUBLIC_IP=$VM_IP -e DPAD_TURN_UDP_EXTERNAL_PORT=3478 \
   -e SELKIES_BASIC_AUTH_USER=dpad -e SELKIES_BASIC_AUTH_PASSWORD=testpass \
   forcespt/dpadcloud-gaming:dpad-SteamOS

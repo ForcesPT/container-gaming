@@ -28,8 +28,6 @@
 ARG CUDA_VERSION=12.5.1
 ARG CUDA_PKG=12-5
 ARG DEBIAN_FRONTEND=noninteractive
-ARG CLOUDFLARED_VERSION=2025.7.0
-ARG CLOUDFLARED_SHA256=51e3909335fd7ba2ed5c696b0a6fb7d4a74f6a15bf36615cea0fccba620cfb3f
 ARG VIRTUALGL_VERSION=3.1.4
 ARG VIRTUALGL_SHA256=02edc6b599571c385389af1a006f07a70c298e1d97c580a9bfd4b39d835c51e6
 ARG HEROIC_VERSION=v2.22.0
@@ -132,14 +130,11 @@ RUN git clone --depth 1 --branch 3.16.25 --recurse-submodules --shallow-submodul
 # =============================================================================
 # Stage: sdl3-builder
 #   Builds SDL3 from source with MINIMAL backends — only the subsystems
-#   lutris-gamepad-ui needs for gamepad INPUT via its koffi FFI dlopen
+#   dpad-launcher needs for gamepad INPUT via its koffi FFI dlopen
 #   (joystick/hidapi/events). Video/audio/render/GPU/OpenGL/Vulkan are OFF —
-#   the Electron app does the rendering; SDL3 is only on the input path. This
-#   fixes PROJECT_STATE.md §6 #12 / STORES-PLAN.md §17.4: lutris-gamepad-ui's
-#   koffi dlopen can't find libSDL3 (it lives only in Steam's runtime dirs, not
-#   on the system library path) → the SDL3 gamepad path
-#   (LUTRIS_GAMEPAD_UI_ENABLE_SDL_INPUT=1) is broken → gamepad won't navigate
-#   the Lutris UI. See WAYLAND-ARCHITECTURE.md §5.6.
+#   the Electron app does the rendering; SDL3 is only on the input path. The
+#   DpadPlay launcher polls this library directly because the browser Web
+#   Gamepad API cannot see the container's synthetic joystick devices.
 #
 #   SDL3 is NOT in Ubuntu 24.04 (Noble) repos (landed in 24.10 oracular); the
 #   oracular libsdl3-0 .deb drags a newer libpipewire-0.3-0t64 +
@@ -149,7 +144,7 @@ RUN git clone --depth 1 --branch 3.16.25 --recurse-submodules --shallow-submodul
 #   bump SDL3_VERSION on rollover. SDL3's SOVERSION is 0 (deliberate — kept
 #   across the 3.x series; only bumps on an incompatible change, which would
 #   rename the lib to SDL4), so `cmake --install` emits libSDL3.so.0 directly —
-#   the exact SONAME lutris-gamepad-ui's koffi dlopens (§17.4). No symlink games.
+#   the exact SONAME dpad-launcher's koffi integration dlopens. No symlink games.
 # =============================================================================
 FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS sdl3-builder
 ARG DEBIAN_FRONTEND
@@ -199,15 +194,13 @@ RUN set -e; \
 
 # =============================================================================
 # Stage: base — shared by both final images
-#   Selkies-GStreamer + coturn + cloudflared + NVENC fix + display/audio/Mesa/
+#   Selkies-GStreamer + coturn + NVENC fix + display/audio/Mesa/
 #   X/Python + the dpad user. No launcher, no desktop — those are per-target.
 # =============================================================================
 FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS base
 ARG CUDA_VERSION
 ARG CUDA_PKG
 ARG DEBIAN_FRONTEND
-ARG CLOUDFLARED_VERSION
-ARG CLOUDFLARED_SHA256
 ARG VIRTUALGL_VERSION
 ARG VIRTUALGL_SHA256
 ARG SELKIES_VERSION
@@ -393,14 +386,7 @@ COPY scripts/patch_live_resolution.py /opt/dpadcloud/patch_live_resolution.py
 RUN chmod +x /opt/dpadcloud/patch_live_resolution.py \
     && /opt/dpadcloud/patch_live_resolution.py
 
-# --- 5. cloudflared (HTTPS tunnel front for Selkies) ---
-RUN cd /tmp && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o cloudflared \
-      "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64" && \
-    echo "${CLOUDFLARED_SHA256}  cloudflared" | sha256sum -c - && \
-    install -m 0755 cloudflared /usr/local/bin/cloudflared && rm -f cloudflared && \
-    cloudflared --version
-
-# --- 6. NVENC #1249 fix (libnvenc_fix.so from interposer-builder) ---
+# --- 5. NVENC #1249 fix (libnvenc_fix.so from interposer-builder) ---
 # Fixes nvidia-container-toolkit #1249 on driver >=570 when only a slice of a
 # multi-GPU host is assigned (filters GET_ATTACHED_IDS to mounted GPUs).
 COPY --from=interposer-builder /out/x86_64/libnvenc_fix.so /opt/dpadcloud/libnvenc_fix.so
@@ -778,16 +764,15 @@ RUN mkdir -p "${HOME}/.config/heroic/store" && \
     > "${HOME}/.config/heroic/store/config.json" && \
     chown -R ${USERNAME}:${USERNAME} "${HOME}/.config/heroic"
 
-#    (c) dpad-launcher — the 10-foot Electron store-picker shell (replaces
-#        lutris-gamepad-ui; the entrypoint's DPAD_STORE_SHELL=picker gate execs
+#    (c) dpad-launcher — the authoritative 10-foot Electron store-picker shell;
+#        the entrypoint's DPAD_STORE_SHELL=picker gate execs
 #        launcher-shell). Shipped as the forcespt/dpadcloud-launcher Docker image
 #        (a FROM-scratch file bundle holding the Linux Electron AppDir at
 #        /opt/dpadcloud/launcher, built locally via launcher/scripts/build.sh +
 #        launcher/Dockerfile). The AppDir bundles koffi (native, unpacked) for
 #        the SDL3 gamepad poll. The Electron runtime libs (libnss/libgtk/
-#        libasound/libxss/...) are already present (lutris-gamepad-ui is also
-#        Electron); libSDL3.so.0 below is shared with lutris-gamepad-ui's koffi
-#        path. See launcher/README + WAYLAND-ARCHITECTURE.md.
+#        libasound/libxss/...) are already present; libSDL3.so.0 below supplies
+#        the launcher's koffi input path. See launcher/README.
 COPY --from=forcespt/dpadcloud-launcher:0.1.3 /opt/dpadcloud/launcher /opt/dpadcloud/launcher
 RUN chmod +x /opt/dpadcloud/launcher/dpad-launcher
 
@@ -816,40 +801,16 @@ RUN set -e; \
     && chown -R ${USERNAME}:${USERNAME} "${GP_DIR}" \
     && test -x "${GP_DIR}/proton"  # sanity: the runner binary is present + executable
 
-#    (b) lutris-gamepad-ui AppImage (v0.2.0) — the Option-B2 store-picker shell
-#        (a gamepad-navigable 10-foot-UI frontend over Lutris). Downloaded but
-#        NOT launched yet (the entrypoint DPAD_STORE_SHELL gate is a later
-#        commit). v0.2.0 migrated to SDL3 input (aligns with
-#        LUTRIS_GAMEPAD_UI_ENABLE_SDL_INPUT=1, which the entrypoint will set —
-#        the Web Gamepad API default won't work in-container) + has Ubuntu-
-#        24.04 fallbacks in its Python wrapper (aligns with this image's base).
-#        Lutris itself (the backend) is installed in a later commit (piece 1b).
-ARG LUTRIS_GAMEPAD_UI_VERSION=v0.2.0
-ARG LUTRIS_GAMEPAD_UI_SHA256=b5f8df70cc15efd9be070ac77c10b0dec6d0433489055a5784da5baad6deff6f
-RUN set -e; \
-    curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o /tmp/lutris-gamepad-ui.AppImage \
-      "https://github.com/andrew-ld/lutris-gamepad-ui/releases/download/${LUTRIS_GAMEPAD_UI_VERSION}/lutris-gamepad-ui-x64.AppImage" \
-    && echo "${LUTRIS_GAMEPAD_UI_SHA256}  /tmp/lutris-gamepad-ui.AppImage" | sha256sum -c - \
-    && chmod +x /tmp/lutris-gamepad-ui.AppImage \
-    && test -s /tmp/lutris-gamepad-ui.AppImage \
-    && cd /opt/dpadcloud && /tmp/lutris-gamepad-ui.AppImage --appimage-extract >/dev/null 2>&1 \
-    && mv /opt/dpadcloud/squashfs-root /opt/dpadcloud/lutris-gamepad-ui \
-    && rm -f /tmp/lutris-gamepad-ui.AppImage \
-    && test -x /opt/dpadcloud/lutris-gamepad-ui/AppRun  # sanity: extracted AppRun is executable (no FUSE needed at runtime)
-
-#    (d) libSDL3 for lutris-gamepad-ui's gamepad input (koffi FFI dlopen). SDL3
+#    (d) libSDL3 for dpad-launcher's gamepad input (koffi FFI dlopen). SDL3
 #        is NOT in Noble repos; the oracular libsdl3-0 .deb churns the pinned
 #        GStreamer/PipeWire stack → built from source in the sdl3-builder stage
 #        with MINIMAL backends (joystick/hidapi/events only — the Electron app
-#        renders; SDL3 is only on the input path). Fixes §17.4: the app's koffi
-#        dlopen("libSDL3.so.0") couldn't find libSDL3 (it lived only in Steam's
-#        runtime dirs) → gamepad wouldn't navigate the Lutris UI. SDL3's SOVERSION
+#        renders; SDL3 is only on the input path). The app's koffi integration
+#        dlopens libSDL3.so.0. SDL3's SOVERSION
 #        is 0 (deliberate, stays 0 across 3.x — see the SDL3 CMakeLists.txt), so
 #        cmake --install already emits libSDL3.so.0 (the exact SONAME the app
-#        dlopens) + the bare libSDL3.so link; the COPY glob carries both. See
-#        WAYLAND-ARCHITECTURE.md §5.6. Independent of the compositor: ships
-#        gamepad nav for the Lutris shell under BOTH the current gamescope-
-#        headless path AND the new wayland-display path.
+#        dlopens) + the bare libSDL3.so link; the COPY glob carries both. It
+#        supplies launcher gamepad navigation on every compositor path.
 COPY --from=sdl3-builder /out/lib/libSDL3.so.0.2.28 /usr/lib/x86_64-linux-gnu/libSDL3.so.0.2.28
 # Recreate the SONAME + bare-link symlinks (Docker COPY derefs symlinks on a
 # glob, which would duplicate the ~1.5MB lib as 3 real files + spew ldconfig
@@ -955,10 +916,9 @@ RUN set -e; \
 
 # --- Consolidated store-launcher scripts (placed AFTER all heavy downloads so
 #     editing a script doesn't invalidate the GE-Proton/Wine/umu layers). ---
-#    lutris-shell, launcher-shell, launcher-toggle, battlenet-launch, ea-launch,
+#    launcher-shell, launcher-toggle, battlenet-launch, ea-launch,
 #    ubisoft-launch, dpad-open-url, epic-launch, gog-launch — all small COPYs
 #    consolidated into one layer group for cache efficiency.
-COPY scripts/lutris-shell /opt/dpadcloud/lutris-shell
 COPY scripts/launcher-shell /opt/dpadcloud/launcher-shell
 COPY scripts/launcher-toggle /opt/dpadcloud/launcher-toggle
 COPY scripts/battlenet-launch /opt/dpadcloud/battlenet-launch
@@ -969,11 +929,11 @@ COPY scripts/epic-launch /opt/dpadcloud/epic-launch
 COPY scripts/gog-launch /opt/dpadcloud/gog-launch
 RUN set -e; \
     sed -i 's/\r$//' \
-      /opt/dpadcloud/lutris-shell /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle \
+      /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle \
       /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
       /opt/dpadcloud/dpad-open-url /opt/dpadcloud/epic-launch /opt/dpadcloud/gog-launch \
     && chmod +x \
-      /opt/dpadcloud/lutris-shell /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle \
+      /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle \
       /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
       /opt/dpadcloud/dpad-open-url /opt/dpadcloud/epic-launch /opt/dpadcloud/gog-launch \
     && ln -sf /opt/dpadcloud/battlenet-launch /usr/local/bin/battlenet-launch \
