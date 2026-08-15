@@ -24,17 +24,18 @@ expected_args = {
     "UMU_SHA256": "86b7a234f77fbcd13699654656192a12ed3852ec2bcc721506ae4f91436b3793",
 }
 
-# Each tuple associates one fetched artifact with the RUN instruction that must
-# download, verify, and only then extract/install it.
+# Each tuple binds a checksum to its exact downloaded filename and the next
+# command that may run only after verification succeeds. Shared Selkies assets
+# deliberately form one explicit verification chain.
 artifacts = (
-    ("SELKIES_GSTREAMER_SHA256", "${SELKIES_GSTREAMER}", "tar -xzf \"${SELKIES_GSTREAMER}\""),
-    ("SELKIES_WHEEL_SHA256", "${SELKIES_WHEEL}", "pip3 install"),
-    ("SELKIES_WEB_SHA256", "${SELKIES_WEB}", "tar -xzf \"${SELKIES_WEB}\""),
-    ("SELKIES_INTERPOSER_SHA256", "${SELKIES_INTERPOSER}", '"./${SELKIES_INTERPOSER}"'),
-    ("WAYLAND_SHA256", "gitlab.freedesktop.org/wayland/wayland", "tar -xzf \"/tmp/${WAYLAND_ARCHIVE}\""),
-    ("GST_WAYLAND_DISPLAY_SHA256", "github.com/games-on-whales/gst-wayland-display/archive", "tar -xzf \"/tmp/${GWD_ARCHIVE}\""),
-    ("GE_PROTON_SHA256", "/tmp/ge-proton.tar.gz", "tar -xzf /tmp/ge-proton.tar.gz"),
-    ("UMU_SHA256", "/tmp/umu.deb", "apt-get install -y --no-install-recommends /tmp/umu.deb"),
+    ("SELKIES_GSTREAMER_SHA256", "${SELKIES_GSTREAMER}", "${SELKIES_GSTREAMER}", 'echo "${SELKIES_WHEEL_SHA256}', False),
+    ("SELKIES_WHEEL_SHA256", "${SELKIES_WHEEL}", "${SELKIES_WHEEL}", 'echo "${SELKIES_WEB_SHA256}', False),
+    ("SELKIES_WEB_SHA256", "${SELKIES_WEB}", "${SELKIES_WEB}", 'echo "${SELKIES_INTERPOSER_SHA256}', False),
+    ("SELKIES_INTERPOSER_SHA256", "${SELKIES_INTERPOSER}", "${SELKIES_INTERPOSER}", 'tar -xzf "${SELKIES_GSTREAMER}"', False),
+    ("WAYLAND_SHA256", "gitlab.freedesktop.org/wayland/wayland", "/tmp/${WAYLAND_ARCHIVE}", 'tar -xzf "/tmp/${WAYLAND_ARCHIVE}"', False),
+    ("GST_WAYLAND_DISPLAY_SHA256", "github.com/games-on-whales/gst-wayland-display/archive", "/tmp/${GWD_ARCHIVE}", 'tar -xzf "/tmp/${GWD_ARCHIVE}"', False),
+    ("GE_PROTON_SHA256", "/tmp/ge-proton.tar.gz", "/tmp/ge-proton.tar.gz", "tar -xzf /tmp/ge-proton.tar.gz", True),
+    ("UMU_SHA256", "/tmp/umu.deb", "/tmp/umu.deb", "apt-get update && (", True),
 )
 
 errors: list[str] = []
@@ -49,7 +50,7 @@ if "repos/selkies-project/selkies/releases/latest" in text:
 if re.search(r"\|\s*tar\b", text):
     errors.append("Dockerfile still pipes a network response directly into tar")
 
-for checksum, marker, consumer in artifacts:
+for checksum, marker, checksum_target, next_command, allows_fatal_handler in artifacts:
     blocks = [run for run in runs if marker in run and f"${{{checksum}}}" in run]
     if len(blocks) != 1:
         errors.append(f"expected one download RUN coupling {marker} to {checksum}, found {len(blocks)}")
@@ -57,25 +58,25 @@ for checksum, marker, consumer in artifacts:
     block = blocks[0]
     normalized = block.replace("\\\n", " ")
     verify_match = re.search(
-        rf'echo\s+"\$\{{{re.escape(checksum)}\}}\s+[^\"]+"\s*\|\s*sha256sum\s+-c\s+-',
+        rf'echo\s+"\$\{{{re.escape(checksum)}\}}\s{{2}}{re.escape(checksum_target)}"\s*\|\s*sha256sum\s+-c\s+-',
         normalized,
     )
     if not verify_match:
-        errors.append(f"{checksum} is not piped to sha256sum in its artifact RUN")
+        errors.append(f"{checksum} is not bound to exact target {checksum_target}")
         continue
     if normalized.count(f"${{{checksum}}}") != 1:
         errors.append(f"{checksum} must appear exactly once in its artifact RUN")
-    consumer_index = normalized.find(consumer)
-    if consumer_index < 0:
-        errors.append(f"consumer for {checksum} is missing from its artifact RUN")
+    next_index = normalized.find(next_command, verify_match.end())
+    if next_index < 0:
+        errors.append(f"required successor for {checksum} is missing: {next_command}")
     else:
-        bridge = normalized[verify_match.end() : consumer_index]
-        if not re.match(
-            r"\s*(?:\|\|\s*\{[^{}]*\bexit\s+1\s*;?\s*\}\s*)?&&\s*",
-            bridge,
-        ):
+        bridge = normalized[verify_match.end() : next_index]
+        direct_gate = r"\s*&&\s*"
+        fatal_gate = r"\s*\|\|\s*\{[^{}]*\bexit\s+1\s*;?\s*\}\s*&&\s*"
+        allowed_gate = fatal_gate if allows_fatal_handler else direct_gate
+        if not re.fullmatch(allowed_gate, bridge):
             errors.append(
-                f"{checksum} verification is not unconditionally completed before consumption"
+                f"{checksum} does not exclusively gate its required successor"
             )
     pre_verify = normalized[: verify_match.start()]
     if re.search(
