@@ -14,6 +14,27 @@
 > **`WAYLAND-ARCHITECTURE.md`** (the 2026-08-08 compositor pivot decision —
 > adopts `gst-wayland-display`, retires the §6 #11 Lutris-capture blocker).
 >
+> **2026-08-15 reproducible-build slice — BUILT + PUSHED from OVHcloud GRA11.**
+> The first item in `.hermes/plans/2026-08-15_195142-container-gaming-stack-roadmap.md`
+> is underway: Selkies is pinned to `1.6.2` and all four consumed release assets
+> (GStreamer bundle, Python wheel, web bundle, joystick-interposer deb) are
+> SHA-256 verified; GE-Proton11-3 and umu-launcher 1.4.4 now have non-empty
+> checksum defaults. The Wayland 1.23.1 and pinned gst-wayland-display source
+> archives are also checksum-verified and downloaded to files with bounded
+> retries before extraction. This was validated by a real failure: the first OVH
+> build hit a GitLab HTTP 504 in the old `curl | tar` path; the hardened retry
+> path then completed cleanly. Built on an OVH `l4-90` (Ubuntu 24.04.4, NVIDIA
+> L4, desktop driver 580.159.03), structurally smoke-tested (Selkies 1.6.2,
+> Wayland plugin, launcher, umu, GE-Proton, NVIDIA runtime), and pushed as both
+> `forcespt/dpadcloud-gaming:dpad-SteamOS-2026.08.15-r1` and `:dpad-SteamOS`.
+> Both tags resolve to OCI digest
+> `sha256:1f9282b89eaf305c0193af36365de3ddd9c6a97f61ed3ba60c7a36398bfd6f62`
+> (amd64 manifest `sha256:699702893897e046e9ece2ffed199f5d0360954c5d6c48a92a22a383b99085c5`).
+> Standard BuildKit could not pre-bake the Battle.net/EA prefixes because
+> pressure-vessel/bwrap needs the documented privileged-container + commit
+> workflow; runtime fallback remains intact. Regression guard:
+> `python3 scripts/test_dockerfile_pins.py`.
+>
 > **2026-08-10 Battle.net session — the `battlenet-launch` wrapper + launcher
 > card shipped + were live-tested on an OVH Gravelines L4; the install stalls at
 > the 32-bit Blizzard Update Agent under Wine 11's experimental new wow64 → the

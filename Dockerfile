@@ -31,6 +31,11 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG CLOUDFLARED_VERSION=2025.7.0
 ARG VIRTUALGL_VERSION=3.1.4
 ARG HEROIC_VERSION=v2.22.0
+ARG SELKIES_VERSION=1.6.2
+ARG SELKIES_GSTREAMER_SHA256=339ca3ab35eb8c2ad7de9a8a3dc59292a9cffe11ebf4bc6bc6a9397de23f9b90
+ARG SELKIES_WHEEL_SHA256=f426ae093853492ecf857609efd4c9bd2141b24c619118561e42220927554eee
+ARG SELKIES_WEB_SHA256=71fcc35d59f8d8a6c6b72472c20a45af207ab56a0d0553af34b731a2e966d0c6
+ARG SELKIES_INTERPOSER_SHA256=84edf046587de0e2284186b90601cc2c08670042c1bd38b46a4f02d677704c4d
 
 # =============================================================================
 # Stage: interposer-builder
@@ -199,6 +204,11 @@ ARG CUDA_PKG
 ARG DEBIAN_FRONTEND
 ARG CLOUDFLARED_VERSION
 ARG VIRTUALGL_VERSION
+ARG SELKIES_VERSION
+ARG SELKIES_GSTREAMER_SHA256
+ARG SELKIES_WHEEL_SHA256
+ARG SELKIES_WEB_SHA256
+ARG SELKIES_INTERPOSER_SHA256
 
 LABEL maintainer="dpadcloud"
 LABEL description="DpadCloud gaming base: Selkies + coturn + NVENC (Ubuntu 24.04)"
@@ -291,19 +301,29 @@ COPY scripts/joystick_interposer_v162.c /tmp/joystick_interposer_v162.c
 # this RUN so the compiler doesn't ship in the final image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-dev build-essential libevdev-dev libudev-dev \
-    && SELKIES_VERSION="$(curl -fsSL 'https://api.github.com/repos/selkies-project/selkies/releases/latest' | jq -r '.tag_name' | sed 's/[^0-9\.\-]*//g')" && \
-    UBUNTU_VER="$(grep '^VERSION_ID=' /etc/os-release | cut -d= -f2 | tr -d '\"')" && \
-    ARCH="$(dpkg --print-architecture)" && \
-    echo "Installing Selkies-GStreamer v${SELKIES_VERSION} (ubuntu${UBUNTU_VER})..." && \
-    cd /opt && curl -fsSL "https://github.com/selkies-project/selkies/releases/download/v${SELKIES_VERSION}/gstreamer-selkies_gpl_v${SELKIES_VERSION}_ubuntu${UBUNTU_VER}_${ARCH}.tar.gz" | tar -xzf - && \
-    cd /tmp && curl -O -fsSL "https://github.com/selkies-project/selkies/releases/download/v${SELKIES_VERSION}/selkies_gstreamer-${SELKIES_VERSION}-py3-none-any.whl" && \
-    pip3 install --no-cache-dir --force-reinstall --break-system-packages "selkies_gstreamer-${SELKIES_VERSION}-py3-none-any.whl" "websockets<14.0" && \
-    rm -f "selkies_gstreamer-${SELKIES_VERSION}-py3-none-any.whl" && \
-    cd /opt && curl -fsSL "https://github.com/selkies-project/selkies/releases/download/v${SELKIES_VERSION}/selkies-gstreamer-web_v${SELKIES_VERSION}.tar.gz" | tar -xzf - && \
-    cd /tmp && curl -o selkies-js-interposer.deb -fsSL "https://github.com/selkies-project/selkies/releases/download/v${SELKIES_VERSION}/selkies-js-interposer_v${SELKIES_VERSION}_ubuntu${UBUNTU_VER}_${ARCH}.deb" && \
-    apt-get update && apt-get install -y --no-install-recommends ./selkies-js-interposer.deb && \
-    rm -f selkies-js-interposer.deb && \
-    rm -f /tmp/joystick_interposer_v162.c && \
+    && UBUNTU_VER="$(grep '^VERSION_ID=' /etc/os-release | cut -d= -f2 | tr -d '\"')" \
+    && ARCH="$(dpkg --print-architecture)" \
+    && SELKIES_BASE="https://github.com/selkies-project/selkies/releases/download/v${SELKIES_VERSION}" \
+    && SELKIES_GSTREAMER="gstreamer-selkies_gpl_v${SELKIES_VERSION}_ubuntu${UBUNTU_VER}_${ARCH}.tar.gz" \
+    && SELKIES_WHEEL="selkies_gstreamer-${SELKIES_VERSION}-py3-none-any.whl" \
+    && SELKIES_WEB="selkies-gstreamer-web_v${SELKIES_VERSION}.tar.gz" \
+    && SELKIES_INTERPOSER="selkies-js-interposer_v${SELKIES_VERSION}_ubuntu${UBUNTU_VER}_${ARCH}.deb" \
+    && echo "Installing pinned Selkies-GStreamer v${SELKIES_VERSION} (ubuntu${UBUNTU_VER})..." \
+    && cd /tmp \
+    && curl -fsSL -o "${SELKIES_GSTREAMER}" "${SELKIES_BASE}/${SELKIES_GSTREAMER}" \
+    && curl -fsSL -o "${SELKIES_WHEEL}" "${SELKIES_BASE}/${SELKIES_WHEEL}" \
+    && curl -fsSL -o "${SELKIES_WEB}" "${SELKIES_BASE}/${SELKIES_WEB}" \
+    && curl -fsSL -o "${SELKIES_INTERPOSER}" "${SELKIES_BASE}/${SELKIES_INTERPOSER}" \
+    && echo "${SELKIES_GSTREAMER_SHA256}  ${SELKIES_GSTREAMER}" | sha256sum -c - \
+    && echo "${SELKIES_WHEEL_SHA256}  ${SELKIES_WHEEL}" | sha256sum -c - \
+    && echo "${SELKIES_WEB_SHA256}  ${SELKIES_WEB}" | sha256sum -c - \
+    && echo "${SELKIES_INTERPOSER_SHA256}  ${SELKIES_INTERPOSER}" | sha256sum -c - \
+    && tar -xzf "${SELKIES_GSTREAMER}" -C /opt \
+    && pip3 install --no-cache-dir --force-reinstall --break-system-packages "${SELKIES_WHEEL}" "websockets<14.0" \
+    && tar -xzf "${SELKIES_WEB}" -C /opt \
+    && apt-get update && apt-get install -y --no-install-recommends "./${SELKIES_INTERPOSER}" \
+    && rm -f "${SELKIES_GSTREAMER}" "${SELKIES_WHEEL}" "${SELKIES_WEB}" "${SELKIES_INTERPOSER}" \
+    && rm -f /tmp/joystick_interposer_v162.c && \
     apt-get purge -y python3-dev build-essential libevdev-dev libudev-dev && \
     apt-get autoremove -y --purge && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/debconf/* /var/log/* /tmp/* /var/tmp/*
@@ -493,7 +513,9 @@ RUN ln -sf /opt/dpadcloud/vgl-steam /usr/local/bin/vgl-steam && \
 FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS wayland-display-builder
 ARG DEBIAN_FRONTEND
 ARG GST_WAYLAND_DISPLAY_REF=b15285a2f1bb4dae5725b049915a4971664fafc6
+ARG GST_WAYLAND_DISPLAY_SHA256=0aecd9df1a5a50a3a9b21ccc00468f4e1f4054242468e5c63fd7e09d542c9e29
 ARG LIBWAYLAND_VERSION=1.23.1
+ARG WAYLAND_SHA256=158ec49af498f2558c7fbf7e8b070d010d4e270cc6076003a18a6c813f87e244
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential pkg-config curl ca-certificates python3 \
         meson ninja-build \
@@ -518,15 +540,19 @@ COPY --from=base /opt/gstreamer /opt/gstreamer
 # /usr/local/lib/x86_64-linux-gnu/pkgconfig/wayland-server.pc (1.23) is found
 # BEFORE the apt 1.22 one via PKG_CONFIG_PATH. vast-vm ships the built .so (§13.9).
 RUN set -e; \
-    curl -fsSL "https://gitlab.freedesktop.org/wayland/wayland/-/archive/${LIBWAYLAND_VERSION}/wayland-${LIBWAYLAND_VERSION}.tar.gz" \
-      | tar -xzf - -C /tmp \
+    WAYLAND_ARCHIVE="wayland-${LIBWAYLAND_VERSION}.tar.gz" \
+    && curl -fL --retry 8 --retry-all-errors --retry-delay 3 \
+      -o "/tmp/${WAYLAND_ARCHIVE}" \
+      "https://gitlab.freedesktop.org/wayland/wayland/-/archive/${LIBWAYLAND_VERSION}/${WAYLAND_ARCHIVE}" \
+    && echo "${WAYLAND_SHA256}  /tmp/${WAYLAND_ARCHIVE}" | sha256sum -c - \
+    && tar -xzf "/tmp/${WAYLAND_ARCHIVE}" -C /tmp \
     && cd "/tmp/wayland-${LIBWAYLAND_VERSION}" \
     && meson setup build --prefix=/usr/local --buildtype=release \
          -Ddocumentation=false -Dtests=false -Dscanner=true \
     && meson compile -C build \
     && meson install -C build \
     && ldconfig \
-    && rm -rf "/tmp/wayland-${LIBWAYLAND_VERSION}" \
+    && rm -rf "/tmp/wayland-${LIBWAYLAND_VERSION}" "/tmp/${WAYLAND_ARCHIVE}" \
     && test -f /usr/local/lib/x86_64-linux-gnu/libwayland-server.so.0
 ENV PKG_CONFIG_PATH=/usr/local/lib/x86_64-linux-gnu/pkgconfig:/opt/gstreamer/lib/x86_64-linux-gnu/pkgconfig
 RUN cargo install cargo-c
@@ -535,13 +561,17 @@ RUN cargo install cargo-c
 # doesn't forward to wayland-display-core's `cuda = ["dep:libloading"]`, §13.10).
 # install_subdir = "gstreamer-1.0" → /out/lib/x86_64-linux-gnu/gstreamer-1.0/.
 RUN set -e; \
-    curl -fsSL "https://github.com/games-on-whales/gst-wayland-display/archive/${GST_WAYLAND_DISPLAY_REF}.tar.gz" \
-      | tar -xzf - -C /tmp \
+    GWD_ARCHIVE="gst-wayland-display-${GST_WAYLAND_DISPLAY_REF}.tar.gz" \
+    && curl -fL --retry 8 --retry-all-errors --retry-delay 3 \
+      -o "/tmp/${GWD_ARCHIVE}" \
+      "https://github.com/games-on-whales/gst-wayland-display/archive/${GST_WAYLAND_DISPLAY_REF}.tar.gz" \
+    && echo "${GST_WAYLAND_DISPLAY_SHA256}  /tmp/${GWD_ARCHIVE}" | sha256sum -c - \
+    && tar -xzf "/tmp/${GWD_ARCHIVE}" -C /tmp \
     && mv "/tmp/gst-wayland-display-${GST_WAYLAND_DISPLAY_REF}" /tmp/gwd \
     && cd /tmp/gwd/gst-plugin-wayland-display \
     && cargo cinstall --features "cuda,wayland-display-core/cuda" --prefix=/out \
     && test -f /out/lib/x86_64-linux-gnu/gstreamer-1.0/libgstwaylanddisplaysrc.so \
-    && rm -rf /tmp/gwd
+    && rm -rf /tmp/gwd "/tmp/${GWD_ARCHIVE}"
 
 # =============================================================================
 # Stage: vast-vm  ->  :dpad-SteamOS
@@ -753,11 +783,10 @@ RUN chmod +x /opt/dpadcloud/launcher/dpad-launcher
 #        way Steam runs them") + the Diablo IV/Marvel Rivals upstream fixes +
 #        the DualSense haptics/hotplug work. All Windows launchers run via
 #        Xwayland (PROTON_ENABLE_WAYLAND unset) — STORES-PLAN §4/§5. SHA-pinned
-#        via GE_PROTON_SHA256 build-arg (empty = skip, for dev; set in prod
-#        builds to verify the download).
+#        via the GE_PROTON_SHA256 default. Version and checksum must be bumped
+#        together when upgrading the runner.
 ARG GE_PROTON_VERSION=GE-Proton11-3
-ARG GE_PROTON_SHA256
-# (set GE_PROTON_SHA256 via --build-arg to enable SHA verification; empty/unset = skip)
+ARG GE_PROTON_SHA256=861c2edc8d40d051fb1e7a692deb953be52bd339c46d90f2b7dde50ddad91266
 RUN set -e; \
     GP_DIR="${HOME}/.steam/debian-installation/compatibilitytools.d/${GE_PROTON_VERSION}"; \
     mkdir -p "${GP_DIR}"; \
@@ -888,8 +917,7 @@ RUN set -e; \
 #        add --security-opt systempaths=unconfined to the docker run (the
 #        fourth bwrap-nest flag) — a runtime-validation item.
 ARG UMU_VERSION=1.4.4
-ARG UMU_SHA256
-# (set UMU_SHA256 via --build-arg to enable SHA verification; empty/unset = skip)
+ARG UMU_SHA256=86b7a234f77fbcd13699654656192a12ed3852ec2bcc721506ae4f91436b3793
 RUN set -e; \
     apt-get update && apt-get install -y --no-install-recommends \
         python3-xlib apparmor-profiles libzstd1 \

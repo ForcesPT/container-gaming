@@ -199,22 +199,35 @@ plan.
 
 ## Rebuild + push
 
-The public `:dpad-SteamOS` tag is **current as of the 2026-08-09 rebuild** —
-it bakes the **live in-stream Resolution dropdown** (720p/1080p/1440p/4K, next
-to Video bitrate — the `_arg_res` data-channel handler + the `build_selkies_cmd`
-+ sway `output * mode --custom` machinery, WAYLAND-ARCHITECTURE.md §18.7) ON TOP
-of the 2026-08-05 fixes (input scroll direction + Gaming-mode toggle + evdev
-i386 fake-libudev SONAME + bridge socket-chmod). A fresh `docker pull` gets all
-of it; no hotfix overlay needed (`DPAD_INPUT_HOTFIX` defaults to `0`). The
-boot-time `patch_live_resolution.py` overlay stays as an idempotent backstop
-(it skips when the feature is already present) so future web-client/handler
-fixes can ship without a rebuild. Rebuild only when new fixes land in `main`.
+**Release practice (2026-08-15):** build on an OVHcloud GPU VM and publish an
+immutable release tag before updating the convenience tag. The current release
+is `dpad-SteamOS-2026.08.15-r1`; both it and `dpad-SteamOS` resolve to
+`sha256:1f9282b89eaf305c0193af36365de3ddd9c6a97f61ed3ba60c7a36398bfd6f62`.
+Run `python3 scripts/test_dockerfile_pins.py` and `docker buildx build --check
+--target vast-vm .` before the full build. Selkies, GE-Proton, umu, Wayland, and
+gst-wayland-display release-critical artifacts now have SHA-256 guards; bump a
+version and its checksum together.
+
+The public `:dpad-SteamOS` tag is **current as of the 2026-08-15 rebuild** and
+includes the live in-stream Resolution dropdown (720p/1080p/1440p/4K), the
+`_arg_res` handler, Sway `output * mode --custom`, later store/launcher work,
+and the reproducible-build hardening recorded in `PROJECT_STATE.md`. A fresh
+`docker pull` gets all of it; no hotfix overlay is needed
+(`DPAD_INPUT_HOTFIX` defaults to `0`). The boot-time
+`patch_live_resolution.py` overlay stays as an idempotent backstop so future
+web-client/handler fixes can ship without a rebuild.
 
 ```bash
-docker build --target vast-vm -t forcespt/dpadcloud-gaming:dpad-SteamOS .
+RELEASE=dpad-SteamOS-2026.08.15-r1
+docker build --target vast-vm \
+  -t forcespt/dpadcloud-gaming:${RELEASE} \
+  -t forcespt/dpadcloud-gaming:dpad-SteamOS .
+docker push forcespt/dpadcloud-gaming:${RELEASE}
+docker push forcespt/dpadcloud-gaming:dpad-SteamOS
+
+# Blackwell variant
 docker build --target vast-vm --build-arg CUDA_VERSION=12.8.1 --build-arg CUDA_PKG=12-8 \
   -t forcespt/dpadcloud-gaming:dpad-SteamOS-rtx50 .
-docker push forcespt/dpadcloud-gaming:dpad-SteamOS
 ```
 
 **2026-08-09 rebuild — live-validated on OVH Gravelines L4** (`79.137.11.29`,
