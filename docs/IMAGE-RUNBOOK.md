@@ -198,14 +198,15 @@ plan.
 
 ## Rebuild + push
 
-**Release practice (2026-08-15):** build on an OVHcloud GPU VM and publish an
-immutable release tag before updating the convenience tag. The current release
-is `dpad-SteamOS-2026.08.15-r2`; both it and `dpad-SteamOS` resolve to
-`sha256:50a8ce28a32b0e2f0ae396e3e9d6523f7509d551f9400279ef6525c263b0aa34`.
-That published `r2` predates the source cleanup which removes the in-image
-tunnel daemon and retired alternate gamepad shell. Rebuild and publish a later
-immutable tag before rolling this cleanup into production. HTTPS remains owned
-by Caddy + stream-bridge; Lutris and SDL3 intentionally remain in the image.
+**Release practice (2026-08-16):** build on an OVHcloud GPU VM and publish an
+immutable release tag before updating the convenience tag. The current registry
+release is `dpad-SteamOS-2026.08.16-r4`; both it and `dpad-SteamOS` resolve to
+index digest `sha256:7244378ed3061b512ddcf415f12083840eb852db323b7bd0a3d09b92052a3bae`
+with linux/amd64 manifest
+`sha256:befd231611484a3cbc42ca3241ed4055e9d3dd46287368d13e832966b490de47`.
+Provider production references stay on the previous immutable digest until an
+explicitly approved canary/promotion. HTTPS remains owned by Caddy +
+stream-bridge; Lutris and SDL3 intentionally remain in the image.
 Run `python3 scripts/test_dockerfile_pins.py` and `docker buildx build --check
 --target vast-vm .` before the full build. Selkies, GE-Proton, umu, Wayland, and
 gst-wayland-display release-critical artifacts now have SHA-256 guards; bump a
@@ -224,16 +225,16 @@ the retired in-image tunnel and alternate-shell binaries, runtime branches,
 environment knobs, wrapper, and validator entries do not return while retaining
 the Lutris backend, SDL3 input library, and DpadPlay picker path.
 
-The current `r3` image is an exact-provenance build of commit
-`6699b5ffef6de628604fd103fdcb756364d3bf40`. Both remote tags resolve to
-`sha256:f0017b8a115a870eb733c715d5917e2ccfaa4ff85e2d0555ade4dee141ec3762`
-(amd64 manifest `sha256:2c08d1df621d204b1d4252748942eb6344e2dfa0b0f7914475b103cbd356f20d`).
+The current `r4` image is an exact-provenance build of commit
+`c3a1b7b7579bd87ea088e781f3c2be8b42530bcd`. Both remote tags resolve to
+`sha256:7244378ed3061b512ddcf415f12083840eb852db323b7bd0a3d09b92052a3bae`
+(amd64 manifest `sha256:befd231611484a3cbc42ca3241ed4055e9d3dd46287368d13e832966b490de47`).
 The remote image was pulled back and its OCI revision label was verified.
 This is still not a complete dependency lock:
 see the scope boundary at the top of `PROJECT_STATE.md` and the remaining Task
 1 list in the roadmap.
 
-The public `:dpad-SteamOS` tag is **current as of the 2026-08-15 rebuild** and
+The public `:dpad-SteamOS` tag is **current as of the 2026-08-16 rebuild** and
 includes the live in-stream Resolution dropdown (720p/1080p/1440p/4K), the
 `_arg_res` handler, Sway `output * mode --custom`, later store/launcher work,
 and the reproducible-build hardening recorded in `PROJECT_STATE.md`. A fresh
@@ -244,7 +245,7 @@ applies the DpadPlay visual system and manual-refresh guidance to Selkies.
 web-client/handler fixes can ship without a rebuild.
 
 ```bash
-RELEASE=dpad-SteamOS-2026.08.15-r3
+RELEASE=dpad-SteamOS-2026.08.16-r4
 docker build --target vast-vm \
   -t forcespt/dpadcloud-gaming:${RELEASE} \
   -t forcespt/dpadcloud-gaming:dpad-SteamOS .

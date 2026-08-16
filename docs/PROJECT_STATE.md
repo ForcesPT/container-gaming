@@ -28,9 +28,25 @@
 > logo letter or ambient effects. Resolution changes remain intentionally
 > manual-refresh:
 > NVENC does not renegotiate dimensions in-place. The runtime overlay is fetched
-> from `main` at container boot; no `r4` image has been published for this UI.
+> from `main` at container boot as an idempotent backstop; the accepted V5 UI is
+> also baked into the immutable `r4` image below.
 >
-> **2026-08-15 `r3` component-cleanup release — CURRENT IMAGE.**
+> **2026-08-16 `r4` Selkies UI release — CURRENT REGISTRY IMAGE.** Commit
+> `c3a1b7b7579bd87ea088e781f3c2be8b42530bcd` was cloned cleanly on an OVH
+> GRA11 NVIDIA L4 builder, passed the Selkies UI suite, obsolete-component guard,
+> exact-pin validator, all 12 unsafe mutation cases, and BuildKit validation, and
+> was built with that exact OCI revision label. NVIDIA smoke checks on driver
+> 580.159.03 verified Selkies 1.6.2, the DpadPlay launcher, SDL3, Lutris, NVENC,
+> gst-wayland-display, the baked V5 UI, and absence of both retired components.
+> The immutable `forcespt/dpadcloud-gaming:dpad-SteamOS-2026.08.16-r4` and
+> convenience `:dpad-SteamOS` tags resolve to index digest
+> `sha256:7244378ed3061b512ddcf415f12083840eb852db323b7bd0a3d09b92052a3bae`
+> with linux/amd64 manifest
+> `sha256:befd231611484a3cbc42ca3241ed4055e9d3dd46287368d13e832966b490de47`.
+> The remote manifest was pulled back and its revision label reverified. Provider
+> production references remain on `r3` until an explicitly approved canary/promotion.
+>
+> **2026-08-15 `r3` component-cleanup release — PREVIOUS/ROLLBACK IMAGE.**
 > The gaming image no longer installs or starts an in-container tunnel daemon:
 > production HTTPS is `play-<session>.dpadplay.com` → Caddy → stream-bridge →
 > the VM's published Selkies port. The retired alternate gamepad shell and its

@@ -132,12 +132,13 @@ conditional installer/prebake inputs. Do not mark Task 1 fully complete yet.
 
 ### Task 2: Introduce immutable image releases and staged rollout
 
-**Status (2026-08-15): PARTIAL.** Published cleanup release
-`dpad-SteamOS-2026.08.15-r3` and convenience tag `dpad-SteamOS`; both resolve to
-OCI digest `sha256:f0017b8a115a870eb733c715d5917e2ccfaa4ff85e2d0555ade4dee141ec3762`.
-Still required: pin that digest in the control plane, canary one provider/session,
-and implement/test rollback. `r3` is labeled and remotely verified against full
-source commit `6699b5ffef6de628604fd103fdcb756364d3bf40`.
+**Status (2026-08-16): PARTIAL.** Published UI release
+`dpad-SteamOS-2026.08.16-r4` and convenience tag `dpad-SteamOS`; both resolve to
+OCI index digest `sha256:7244378ed3061b512ddcf415f12083840eb852db323b7bd0a3d09b92052a3bae`.
+Still required: explicitly approve and canary the new digest before updating the
+provider reference, then implement/test rollback. `r4` is labeled and remotely
+verified against full source commit
+`c3a1b7b7579bd87ea088e781f3c2be8b42530bcd`.
 
 **Objective:** Production must use a known digest instead of depending on mutable `:dpad-SteamOS`.
 
