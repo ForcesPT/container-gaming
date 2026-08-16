@@ -465,6 +465,7 @@ ENV PATH=/root/.cargo/bin:${PATH}
 # The GStreamer 1.24.6 bundle (gstreamer-1.0/base/video/cuda/allocators .pc +
 # headers + .so) from the base stage. PKG_CONFIG_PATH below makes cargo-c find it.
 COPY --from=base /opt/gstreamer /opt/gstreamer
+COPY scripts/patch_wayland_display_persistent.py /tmp/patch_wayland_display_persistent.py
 # Build libwayland 1.23 from source → /usr/local. Ubuntu 24.04 only has 1.22;
 # gst-wayland-display requires 1.23 (the set_default_max_buffer_size API, gated
 # by the wayland-server `libwayland_1_23` feature, is CALLED in code, §13.9).
@@ -500,6 +501,7 @@ RUN set -e; \
     && echo "${GST_WAYLAND_DISPLAY_SHA256}  /tmp/${GWD_ARCHIVE}" | sha256sum -c - \
     && tar -xzf "/tmp/${GWD_ARCHIVE}" -C /tmp \
     && mv "/tmp/gst-wayland-display-${GST_WAYLAND_DISPLAY_REF}" /tmp/gwd \
+    && python3 /tmp/patch_wayland_display_persistent.py /tmp/gwd/gst-plugin-wayland-display/src/waylandsrc/imp.rs \
     && cd /tmp/gwd/gst-plugin-wayland-display \
     && cargo cinstall --features "cuda,wayland-display-core/cuda" --prefix=/out \
     && test -f /out/lib/x86_64-linux-gnu/gstreamer-1.0/libgstwaylanddisplaysrc.so \

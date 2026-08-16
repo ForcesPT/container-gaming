@@ -70,6 +70,8 @@ with tempfile.TemporaryDirectory() as td:
     patched = target.read_text()
     ast.parse(patched)
     assert 'Gst.ElementFactory.make("waylanddisplaysrc", "x11")' in patched
+    assert 'if self.ximagesrc is None:' in patched
+    assert 'Reusing persistent waylanddisplaysrc compositor' in patched
     assert 'DPAD_VIDEO_SRC", "") == "pipewiresrc"' not in patched
     assert 'set_property("show-pointer", 0)' not in patched
     assert 'set_property("endx", 0)' not in patched

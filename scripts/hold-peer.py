@@ -75,6 +75,7 @@ async def main(host, port, peer_id, hold_s):
                 print(f"[*] still connected at t={now:.0f}s (m_video={m_video!r})", flush=True)
         print(f"[*] hold done at t={time.time()-t0:.0f}s — closing", flush=True)
         print(f"=== m_video={m_video}  m_audio={m_audio}", flush=True)
+    print("[*] peer disconnected", flush=True)
 
 
 if __name__ == "__main__":

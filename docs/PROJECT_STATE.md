@@ -42,6 +42,28 @@
 > of Selkies silently starting at its default. Regression guard:
 > `python3 scripts/test_stream_fps_plumbing.py`.
 >
+> **2026-08-16 desktop persistence across browser reconnects — SOURCE + OVH
+> GPU SPIKE COMPLETE, RELEASE PENDING.** The exact failure was reproduced
+> without a human browser: Selkies 1.6.2 calls `app.stop_pipeline()` when the
+> signaling peer disconnects; pipeline `NULL` calls `waylanddisplaysrc::stop()`,
+> which dropped its Smithay `WaylandDisplay`, removed `wayland-N`, and killed
+> nested Sway/XWayland plus the launcher/store/game tree. The new pinned-source
+> patch keeps the compositor state until the source element itself is dropped,
+> while the Selkies patch reuses that same source object in each new WebRTC
+> pipeline. `scripts/test_reconnect_persistence_gpu.py` was observed RED on
+> immutable `r7` (`Sway PID 608 died after first peer disconnected`) and GREEN
+> on an OVH L4 spike build: the Wayland socket name/inode and exact Sway,
+> Xwayland, and DpadPlay launcher PID/start-time identities survived repeated
+> signaling-peer cycles. The deterministic signaling test received video SDP
+> offers from both peers and verified source reuse. A separate real headless
+> Chromium test then completed three browser connect/decode/disconnect cycles;
+> each browser decoded the 1920x1080 stream (50, 62, and 61 frames observed),
+> negotiated and closed the Selkies input data channel, and the exact compositor,
+> desktop process identities, and Wayland socket inode remained unchanged.
+> Unit/source tests cover the Docker build wiring. Selkies' separate audio-peer
+> reconnect error path remains a distinct follow-up. A reviewed immutable image
+> release is still required before production promotion.
+>
 > **2026-08-16 `r6` launcher-only reliability release — PREVIOUS RELEASE.**
 > Source revision `06927d2f61f1e9125e16bc07c7b61c9105ca1f84` was
 > cloned cleanly on the active OVH GRA11 NVIDIA L4 VM, passed the architecture,

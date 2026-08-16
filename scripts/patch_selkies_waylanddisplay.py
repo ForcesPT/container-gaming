@@ -11,23 +11,34 @@ import sys
 path = sys.argv[1] if len(sys.argv) > 1 else "/usr/local/lib/python3.12/dist-packages/selkies_gstreamer/gstwebrtc_app.py"
 source = open(path, encoding="utf-8").read()
 
-SOURCE_MARK = 'Gst.ElementFactory.make("waylanddisplaysrc", "x11")'
-START = '        self.ximagesrc = Gst.ElementFactory.make("ximagesrc", "x11")'
+PERSIST_MARK = 'Reusing persistent waylanddisplaysrc compositor'
+PRISTINE_START = '        self.ximagesrc = Gst.ElementFactory.make("ximagesrc", "x11")'
+WAYLAND_START = '        self.ximagesrc = Gst.ElementFactory.make("waylanddisplaysrc", "x11")'
 END = '        self.ximagesrc_capsfilter.set_property("caps", self.ximagesrc_caps)'
 
-if SOURCE_MARK not in source:
-    if START not in source or END not in source:
-        print("patch_selkies_waylanddisplay: ERROR — pristine ximagesrc source block not found")
+if PERSIST_MARK not in source:
+    if PRISTINE_START in source:
+        start = source.index(PRISTINE_START)
+    elif WAYLAND_START in source:
+        start = source.index(WAYLAND_START)
+    else:
+        print("patch_selkies_waylanddisplay: ERROR — supported source block not found")
         sys.exit(1)
-    start = source.index(START)
+    if END not in source[start:]:
+        print("patch_selkies_waylanddisplay: ERROR — source block end not found")
+        sys.exit(1)
     end = source.index(END, start) + len(END)
     if end < len(source) and source[end] == "\n":
         end += 1
     replacement = (
-        '        # DpadPlay launcher-only compositor/capture source.\n'
-        '        self.ximagesrc = Gst.ElementFactory.make("waylanddisplaysrc", "x11")\n'
-        '        if self.gpu_id >= 0:\n'
-        '            self.ximagesrc.set_property("cuda-device-id", self.gpu_id)\n'
+        '        # DpadPlay launcher-only compositor/capture source. The Rust element\'s\n'
+        '        # stop() preserves its display, so reuse this object across peer pipelines.\n'
+        '        if self.ximagesrc is None:\n'
+        '            self.ximagesrc = Gst.ElementFactory.make("waylanddisplaysrc", "x11")\n'
+        '            if self.gpu_id >= 0:\n'
+        '                self.ximagesrc.set_property("cuda-device-id", self.gpu_id)\n'
+        '        else:\n'
+        '            logger.info("Reusing persistent waylanddisplaysrc compositor")\n'
         '        self.ximagesrc_caps = Gst.caps_from_string("video/x-raw,format=RGBx")\n'
         '        self.ximagesrc_caps.set_value("width", int(os.environ.get("DPAD_STREAM_WIDTH", "1920")))\n'
         '        self.ximagesrc_caps.set_value("height", int(os.environ.get("DPAD_STREAM_HEIGHT", "1080")))\n'
@@ -36,9 +47,9 @@ if SOURCE_MARK not in source:
         '        self.ximagesrc_capsfilter.set_property("caps", self.ximagesrc_caps)\n'
     )
     source = source[:start] + replacement + source[end:]
-    print("patch_selkies_waylanddisplay: replaced pristine ximagesrc source")
+    print("patch_selkies_waylanddisplay: installed persistent Wayland source")
 else:
-    print("patch_selkies_waylanddisplay: Wayland source already present")
+    print("patch_selkies_waylanddisplay: persistent Wayland source already present")
 
 # Resize/restart is source-agnostic. endx/endy are ximagesrc-only properties.
 START_X11 = (

@@ -12,6 +12,12 @@
 > `sha256:b85954a28aa37c8e9c2bb1e86db7314b5eecaa6136f4cf8c0d5fed4c5b259209`.
 > It was built and GPU/restart-smoke-tested on OVH L4 from revision
 > `14f30e4489126c994175ec862e94559e2ef1280b`.
+>
+> Desktop-persistence changes after `r7` are source-validated and passed both
+> the deterministic signaling-peer test and repeated real headless-Chromium
+> video decode/reconnect cycles on an OVH L4 spike build, but are not yet in the
+> current release. On a GPU builder, validate a candidate with:
+> `python3 scripts/test_reconnect_persistence_gpu.py <candidate-image>`.
 
 ## Build and publish
 
