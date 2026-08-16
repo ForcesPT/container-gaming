@@ -7,8 +7,11 @@
 > Linux desktop client, installed in the image and opened from the Steam card.
 > There is no alternate compositor, Steam shell, or Big Picture startup path.
 >
-> The current Docker Hub release predates this source change. Build, GPU-canary,
-> and promote a new immutable image before changing production references.
+> Current release: `forcespt/dpadcloud-gaming:dpad-SteamOS-2026.08.16-r6` and
+> convenience tag `:dpad-SteamOS`, both digest
+> `sha256:1f6742303af5590903ab656955055a178ad7bdefb0b43296fdb6274c9efafade`.
+> It was built and GPU/restart-smoke-tested on OVH L4 from revision
+> `06927d2f61f1e9125e16bc07c7b61c9105ca1f84`.
 
 ## Build and publish
 

@@ -14,7 +14,22 @@
 > **`WAYLAND-ARCHITECTURE.md`** (the compositor pivot decision and historical
 > validation record).
 >
-> **2026-08-16 launcher-only Steam desktop — CURRENT SOURCE RESUME POINT.**
+> **2026-08-16 `r6` launcher-only reliability release — CURRENT REGISTRY
+> IMAGE.** Source revision `06927d2f61f1e9125e16bc07c7b61c9105ca1f84` was
+> cloned cleanly on the active OVH GRA11 NVIDIA L4 VM, passed the architecture,
+> obsolete-component, exact-pin/mutation, Selkies patch, Wayland ABI, D-Bus
+> recovery, shell-syntax, and BuildKit checks, then built with that exact OCI
+> revision label. The first build correctly exposed a missing `objdump` in the
+> runtime stage; symbol verification was moved to the builder stage and the clean
+> rebuild passed. Structural/GPU smoke checks verified NVIDIA L4 driver
+> 580.159.03, Steam desktop targets, absence of Gamescope/Gamepad UI,
+> `waylanddisplaysrc`, NVENC H.264, Selkies, and the image health check. A full
+> container boot reached healthy, and a Docker restart again reached healthy with
+> system D-Bus recovered. Both
+> `forcespt/dpadcloud-gaming:dpad-SteamOS-2026.08.16-r6` and
+> `:dpad-SteamOS` resolve to digest
+> `sha256:1f6742303af5590903ab656955055a178ad7bdefb0b43296fdb6274c9efafade`.
+>
 > The runtime now has exactly one architecture: Selkies/
 > `gst-wayland-display` → nested Sway/XWayland → DpadPlay launcher. The DpadPlay
 > launcher is always the session shell. Its Steam card starts Valve's official
@@ -28,11 +43,7 @@
 > restore the removed mode. Regression guard:
 > `python3 scripts/test_launcher_only_architecture.py`.
 >
-> **Release state:** this is implemented and source-validated, but it is not yet
-> a new registry release. The existing `r4` digest below remains the current
-> published image until a Docker-capable NVIDIA builder creates and canaries a
-> new immutable tag.
->
+
 > **2026-08-16 Selkies browser UI overlay — CURRENT.**
 > `scripts/patch_live_resolution.py` now restyles the Selkies 1.6.2 navigation
 > drawer with the DpadPlay dark monochrome design system, keeps the selected
@@ -50,7 +61,7 @@
 > from `main` at container boot as an idempotent backstop; the accepted V5 UI is
 > also baked into the immutable `r4` image below.
 >
-> **2026-08-16 `r4` Selkies UI release — CURRENT REGISTRY IMAGE.** Commit
+> **2026-08-16 `r4` Selkies UI release — PREVIOUS RELEASE.** Commit
 > `c3a1b7b7579bd87ea088e781f3c2be8b42530bcd` was cloned cleanly on an OVH
 > GRA11 NVIDIA L4 builder, passed the Selkies UI suite, obsolete-component guard,
 > exact-pin validator, all 12 unsafe mutation cases, and BuildKit validation, and
