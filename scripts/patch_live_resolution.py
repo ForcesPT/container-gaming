@@ -50,7 +50,7 @@ def default_resolution() -> str:
 
 
 DPAD_STYLE = r'''
-    /* DPAD_STREAM_UI_V1 — mirrors dpadplay.com design tokens and controls. */
+    /* DPAD_STREAM_UI_V2 — mirrors dpadplay.com design tokens and controls. */
     :root {
       --dpad-v0: #08090a; --dpad-v1: #0c0d10; --dpad-v2: #101216;
       --dpad-v3: #15171c; --dpad-v4: #1c1f26; --dpad-v5: #3a4150;
@@ -121,8 +121,15 @@ DPAD_STYLE = r'''
     .dpad-drawer .v-input__slot:before { border-color: var(--dpad-h2) !important; }
     .dpad-drawer .v-input__slot:after { border-color: var(--dpad-v9) !important; }
     .v-menu__content { background: var(--dpad-v2) !important; border: 1px solid var(--dpad-h2); border-radius: 8px; box-shadow: 0 18px 48px rgba(0,0,0,.45) !important; }
-    .v-menu__content .v-list { background: transparent !important; color: var(--dpad-v7) !important; }
+    .v-menu__content .v-list { background: var(--dpad-v2) !important; color: var(--dpad-v7) !important; }
+    .v-menu__content .v-list__tile, .v-menu__content .v-list__tile__title { color: var(--dpad-v7) !important; }
     .v-menu__content .v-list__tile--active, .v-menu__content .v-list__tile:hover { background: var(--dpad-h2) !important; color: var(--dpad-v9) !important; }
+    .v-menu__content .v-list__tile--active .v-list__tile__title,
+    .v-menu__content .v-list__tile:hover .v-list__tile__title { color: var(--dpad-v9) !important; }
+    .dpad-action-card { padding: 4px; border: 1px solid var(--dpad-h1); border-radius: 12px; background: var(--dpad-h0); }
+    .dpad-action-toolbar.v-toolbar { min-height: 48px; border: 0; background: transparent !important; }
+    .dpad-action-toolbar .v-toolbar__content { justify-content: space-around; width: 100%; padding: 4px !important; }
+    .dpad-action-toolbar .v-btn { width: 38px; height: 38px; margin: 0 2px; border-radius: 999px; }
     .dpad-resolution-note {
       display: grid; grid-template-columns: 28px 1fr auto; gap: 10px; align-items: center;
       margin: -3px 0 14px; padding: 11px 11px;
@@ -148,13 +155,14 @@ DPAD_STYLE = r'''
     .dpad-drawer a { color: var(--dpad-v8) !important; }
 
     .fab-container.v-btn {
-      top: 50% !important; right: 12px !important; width: 42px; height: 42px;
-      opacity: .82 !important; border: 1px solid var(--dpad-h2); border-radius: 10px !important;
+      top: 50% !important; right: 6px !important; width: 38px; height: 38px;
+      min-width: 38px !important; padding: 0 !important;
+      opacity: .86 !important; border: 1px solid var(--dpad-h2); border-radius: 999px !important;
       background: rgba(12,13,17,.9) !important; color: var(--dpad-v9) !important;
       box-shadow: 0 10px 34px rgba(0,0,0,.4) !important; backdrop-filter: blur(16px);
       transition: opacity .2s ease, border-color .2s ease, transform .2s ease;
     }
-    .fab-container.v-btn:hover { right: 12px !important; opacity: 1 !important; border-color: var(--dpad-h2); transform: translateY(-1px); }
+    .fab-container.v-btn:hover { right: 6px !important; opacity: 1 !important; border-color: var(--dpad-h2); transform: translateY(-1px); }
     .fab-container .v-icon { color: var(--dpad-v9) !important; font-size: 19px; }
     .loading { color: var(--dpad-v7) !important; font-family: ui-monospace, monospace; font-size: 11px; letter-spacing: .04em; }
     .loading:before {
@@ -169,6 +177,25 @@ DPAD_STYLE = r'''
       .dpad-drawer-head { margin-left: -14px; margin-right: -14px; padding-left: 14px; padding-right: 14px; }
       .dpad-resolution-note { grid-template-columns: 24px 1fr; }
       .dpad-resolution-note .v-btn { grid-column: 2; justify-self: start; }
+    }
+'''
+
+
+DPAD_V2_FIX_STYLE = r'''
+    /* DPAD_STREAM_UI_V2 — connection-state, action layout, menu and launcher fixes. */
+    .v-menu__content { background: var(--dpad-v2) !important; border: 1px solid var(--dpad-h2); border-radius: 8px; box-shadow: 0 18px 48px rgba(0,0,0,.45) !important; }
+    .v-menu__content .v-list { background: var(--dpad-v2) !important; color: var(--dpad-v7) !important; }
+    .v-menu__content .v-list__tile, .v-menu__content .v-list__tile__title { color: var(--dpad-v7) !important; }
+    .v-menu__content .v-list__tile--active, .v-menu__content .v-list__tile:hover { background: var(--dpad-h2) !important; }
+    .v-menu__content .v-list__tile--active .v-list__tile__title,
+    .v-menu__content .v-list__tile:hover .v-list__tile__title { color: var(--dpad-v9) !important; }
+    .dpad-action-card { padding: 4px; border: 1px solid var(--dpad-h1); border-radius: 12px; background: var(--dpad-h0); }
+    .dpad-action-toolbar.v-toolbar { min-height: 48px; border: 0; background: transparent !important; }
+    .dpad-action-toolbar .v-toolbar__content { justify-content: space-around; width: 100%; padding: 4px !important; }
+    .dpad-action-toolbar .v-btn { width: 38px; height: 38px; margin: 0 2px; border-radius: 999px; }
+    .fab-container.v-btn, .fab-container.v-btn:hover {
+      right: 6px !important; width: 38px; height: 38px; min-width: 38px !important;
+      padding: 0 !important; border-radius: 999px !important;
     }
 '''
 
@@ -192,10 +219,11 @@ def resolution_block() -> str:
 def patch_index(source: str) -> str | None:
     updated = source
 
-    if "DPAD_STREAM_UI_V1" not in updated:
+    if "DPAD_STREAM_UI_V2" not in updated:
         if "</style>" not in updated:
             return None
-        updated = updated.replace("</style>", DPAD_STYLE + "\n  </style>", 1)
+        style = DPAD_V2_FIX_STYLE if "DPAD_STREAM_UI_V1" in updated else DPAD_STYLE
+        updated = updated.replace("</style>", style + "\n  </style>", 1)
 
     updated = updated.replace('<meta name="theme-color" content="black"/>', '<meta name="theme-color" content="#08090a"/>')
     updated = updated.replace("<title>Selkies - webrtc</title>", "<title>DpadPlay Stream</title>")
@@ -218,6 +246,31 @@ def patch_index(source: str) -> str | None:
               </div>'''
         updated = updated.replace(flex_anchor, header, 1)
 
+    if '<div class="dpad-action-card">' not in updated:
+        actions_pattern = re.compile(
+            r'''(?P<actions>\s*<v-tooltip bottom>\s*<template v-slot:activator="\{ on \}">\s*<v-btn icon v-on:click="enterFullscreen\(\)">.*?<span>Logged in as \{\{ getUsername\(\) \}\}\s*</span>\s*</v-tooltip>)''',
+            re.DOTALL,
+        )
+        actions_match = actions_pattern.search(updated)
+        if actions_match is None:
+            return None
+        actions = actions_match.group("actions").strip().replace("<v-btn block icon", "<v-btn icon")
+        updated = updated[:actions_match.start()] + updated[actions_match.end():]
+        toolbar_anchor = '''              <p>
+                <v-toolbar>'''
+        if toolbar_anchor not in updated:
+            return None
+        action_section = f'''              <div class="dpad-section-label">Session actions</div>
+              <div class="dpad-action-card">
+                <v-toolbar class="dpad-action-toolbar">
+{actions}
+                </v-toolbar>
+              </div>
+              <div class="dpad-section-label">Stream telemetry</div>
+'''
+        updated = updated.replace(toolbar_anchor, action_section + toolbar_anchor, 1)
+    updated = updated.replace("<v-btn block icon", "<v-btn icon")
+
     bitrate_anchor = '''              <p>
                 <v-select :items="videoBitRateOptions"'''
     if '<div class="dpad-settings-card">' not in updated:
@@ -233,7 +286,7 @@ def patch_index(source: str) -> str | None:
         )
 
     old_resolution = re.compile(
-        r'''\s*<p(?: class="dpad-resolution-control")?>\s*<v-select :items="videoResolutionOptions".*?</v-select>\s*</p>(?:\s*<div class="dpad-resolution-note".*?</div>\s*</div>)?''',
+        r'''\s*<p(?: class="dpad-resolution-control")?>\s*<v-select :items="videoResolutionOptions".*?</v-select>\s*</p>(?:\s*<div class="dpad-resolution-note".*?</div>)?(?=\s*<p>\s*<v-select :items="audioBitRateOptions")''',
         re.DOTALL,
     )
     if "videoResolutionOptions" in updated:
@@ -285,19 +338,28 @@ def patch_index(source: str) -> str | None:
       </v-btn>'''
     updated = updated.replace(fab, branded_fab, 1)
 
+    updated = updated.replace(
+        '<div class="loading">',
+        '<div v-if="status !== \'connected\' || showStart" class="loading">',
+        1,
+    )
+
     return updated
 
 
 patch_file(
     "/opt/gst-web/index.html",
     lambda source: (
-        "DPAD_STREAM_UI_V1" in source
+        "DPAD_STREAM_UI_V2" in source
         and "dpad-resolution-note" in source
         and 'class="dpad-drawer"' in source
         and '<v-icon>tune</v-icon>' in source
         and '<div class="dpad-drawer-head">' in source
         and '<div class="dpad-settings-card">' in source
         and '<div class="dpad-diagnostics">' in source
+        and '<div class="dpad-action-card">' in source
+        and '<v-btn block icon' not in source
+        and 'v-if="status !== \'connected\' || showStart" class="loading"' in source
     ),
     patch_index,
 )

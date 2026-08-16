@@ -19,7 +19,11 @@
 > drawer with the DpadPlay dark monochrome design system, keeps the selected
 > resolution visible across the required reconnect, and places a clear
 > **Manual refresh required** notice plus Refresh button immediately below the
-> Resolution selector. Resolution changes remain intentionally manual-refresh:
+> Resolution selector. The V2 overlay hides the loading treatment once both
+> media peers are connected, uses a compact circular settings launcher, applies
+> dark styling to detached Vuetify dropdown menus, and puts session actions
+> (fullscreen, clipboard, launcher, gamepad, user) in the first drawer category.
+> Resolution changes remain intentionally manual-refresh:
 > NVENC does not renegotiate dimensions in-place. The runtime overlay is fetched
 > from `main` at container boot; no `r4` image has been published for this UI.
 >

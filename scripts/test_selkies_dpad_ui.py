@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import builtins
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -31,7 +32,15 @@ INDEX_FIXTURE = '''<!doctype html>
         <v-container fluid grid-list-lg>
           <v-layout row wrap>
             <v-flex xs12>
-              <p><v-toolbar></v-toolbar></p>
+              <p>
+                <v-toolbar>
+                <v-divider class="mr-1" vertical></v-divider>
+                <v-tooltip bottom><template v-slot:activator="{ on }"><v-btn icon v-on:click="enterFullscreen()"><v-icon color="black" v-on="on">fullscreen</v-icon></v-btn></template><span>Enter fullscreen mode</span></v-tooltip>
+                <v-tooltip bottom><template v-slot:activator="{ on }"><v-btn block icon v-on:click="enableClipboard()"><v-icon color="blue" v-on="on">file_copy</v-icon></v-btn></template><span>Enable clipboard access</span></v-tooltip>
+                <v-tooltip bottom><template v-slot:activator="{ on }"><v-btn icon href="/"><v-icon color="black" v-on="on">home</v-icon></v-btn></template><span>Return to launcher</span></v-tooltip>
+                <v-tooltip bottom><template v-slot:activator="{ on }"><v-icon color="grey" v-on="on">videogame_asset</v-icon></template><span>Gamepad disconnected</span></v-tooltip>
+                <v-tooltip bottom><template v-slot:activator="{ on }"><v-icon class="ml-2" color="black" v-on="on">account_circle</v-icon></template><span>Logged in as {{ getUsername() }}</span></v-tooltip>
+              </v-toolbar></p>
               <p>
                 <v-select :items="videoBitRateOptions" label="Video bitrate" menu-props="left" v-model="videoBitRate"
                   hint="Dynamic bitrate selection for host video encoder" persistent-hint></v-select>
@@ -127,7 +136,7 @@ def test_brands_selkies_and_places_manual_refresh_notice_by_resolution() -> None
         html = (web / "index.html").read_text(encoding="utf-8")
         app = (web / "app.js").read_text(encoding="utf-8")
 
-        assert "DPAD_STREAM_UI_V1" in html
+        assert "DPAD_STREAM_UI_V2" in html
         assert "DpadPlay Stream" in html
         assert 'class="dpad-drawer"' in html
         assert 'width="440"' in html
@@ -145,6 +154,30 @@ def test_brands_selkies_and_places_manual_refresh_notice_by_resolution() -> None
         assert '<div class="dpad-settings-card">' in html
         assert '<div class="dpad-diagnostics">' in html
         assert '</small>\n              </div>\n              <hr />' in html
+        assert 'v-if="status !== \'connected\' || showStart" class="loading"' in html
+
+        # Session actions are the first category and are no longer mixed into
+        # the telemetry toolbar.
+        assert '<div class="dpad-section-label">Session actions</div>' in html
+        assert '<div class="dpad-action-card">' in html
+        assert '<v-toolbar class="dpad-action-toolbar">' in html
+        action_pos = html.index('Session actions')
+        telemetry_pos = html.index('Stream telemetry')
+        quality_pos = html.index('Stream quality')
+        assert action_pos < telemetry_pos < quality_pos
+        action_end = html.index('</div>', html.index('<div class="dpad-action-card">'))
+        action_html = html[action_pos:action_end]
+        for icon in ('fullscreen', 'file_copy', 'home', 'videogame_asset', 'account_circle'):
+            assert f'>{icon}<' in action_html
+        assert '<v-btn block icon' not in action_html
+
+        # Detached Vuetify menus need explicit dark list/tile colors, and the
+        # settings launcher is a compact circular control at the right edge.
+        assert '.v-menu__content .v-list__tile__title' in html
+        assert 'background: var(--dpad-v2) !important' in html
+        assert 'right: 6px !important' in html
+        assert 'width: 38px; height: 38px' in html
+        assert 'border-radius: 999px !important' in html
 
         assert "videoResolution: window.localStorage.getItem" in app
         assert "|| '2560x1440'" in app
@@ -251,6 +284,59 @@ def test_brands_selkies_and_places_manual_refresh_notice_by_resolution() -> None
         assert "parts[0].isdigit()" not in migrated
 
 
+def test_migrates_v1_drawer_to_v2_without_losing_actions() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        web = root / "opt/gst-web"
+        web.mkdir(parents=True)
+        (web / "index.html").write_text(INDEX_FIXTURE, encoding="utf-8")
+        (web / "app.js").write_text(APP_FIXTURE, encoding="utf-8")
+        env = os.environ | {"DPAD_PATCH_ROOT": str(root)}
+
+        first = subprocess.run(
+            [sys.executable, str(PATCHER)], env=env, text=True,
+            capture_output=True, check=False,
+        )
+        assert first.returncode == 0, first.stdout + first.stderr
+        html = (web / "index.html").read_text(encoding="utf-8")
+
+        # Reconstruct the relevant V1 layout: actions embedded at the end of
+        # telemetry, V1 marker, persistent outer loading element.
+        section = re.search(
+            r'\s*<div class="dpad-section-label">Session actions</div>\s*'
+            r'<div class="dpad-action-card">\s*'
+            r'<v-toolbar class="dpad-action-toolbar">(?P<actions>.*?)</v-toolbar>\s*'
+            r'</div>\s*<div class="dpad-section-label">Stream telemetry</div>',
+            html,
+            re.DOTALL,
+        )
+        assert section is not None
+        actions = section.group("actions").strip()
+        v1_html = html[:section.start()] + html[section.end():]
+        telemetry_end = v1_html.index("</v-toolbar>")
+        v1_html = v1_html[:telemetry_end] + "\n" + actions + "\n                " + v1_html[telemetry_end:]
+        v1_html = v1_html.replace("DPAD_STREAM_UI_V2", "DPAD_STREAM_UI_V1")
+        v1_html = v1_html.replace(
+            '<div v-if="status !== \'connected\' || showStart" class="loading">',
+            '<div class="loading">',
+        )
+        (web / "index.html").write_text(v1_html, encoding="utf-8")
+
+        migration = subprocess.run(
+            [sys.executable, str(PATCHER)], env=env, text=True,
+            capture_output=True, check=False,
+        )
+        assert migration.returncode == 0, migration.stdout + migration.stderr
+        migrated = (web / "index.html").read_text(encoding="utf-8")
+        assert "DPAD_STREAM_UI_V2" in migrated
+        assert migrated.count('<div class="dpad-action-card">') == 1
+        assert migrated.index("Session actions") < migrated.index("Stream telemetry")
+        for icon in ("fullscreen", "file_copy", "home", "videogame_asset", "account_circle"):
+            assert migrated.count(f">{icon}<") == 1
+        assert 'v-if="status !== \'connected\' || showStart" class="loading"' in migrated
+
+
 if __name__ == "__main__":
     test_brands_selkies_and_places_manual_refresh_notice_by_resolution()
+    test_migrates_v1_drawer_to_v2_without_losing_actions()
     print("Selkies DpadPlay UI patch: PASS")
