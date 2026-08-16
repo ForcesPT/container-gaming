@@ -911,7 +911,15 @@ find "${XDG_RUNTIME_DIR}" ! \( -user "${USER_NAME}" -group "${USER_NAME}" \) -ex
 # --- D-Bus (system + session) ---
 echo "[*] Starting D-Bus..."
 mkdir -p /run/dbus "${XDG_RUNTIME_DIR}/dbus"
-[ ! -e /var/run/dbus/system_bus_socket ] && dbus-daemon --system --fork 2>/dev/null || true
+# A Docker restart preserves the container filesystem but kills dbus-daemon. The
+# old socket then remains, so testing only for its existence leaves a refused
+# system bus. Steam interprets that as no usable network even though its HTTP
+# connectivity test succeeds. Probe the bus itself and recover stale state.
+if ! timeout 2 dbus-send --system --dest=org.freedesktop.DBus \
+    --type=method_call --print-reply / org.freedesktop.DBus.ListNames >/dev/null 2>&1; then
+    rm -f /run/dbus/system_bus_socket /run/dbus/pid
+    dbus-daemon --system --fork
+fi
 # Start a session bus for Sway, Steam, Electron store clients, and Wine launchers.
 DBUS_SESSION_BUS_ADDRESS="$(as_user "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}; dbus-daemon --session --fork --print-address=1 2>/dev/null" | head -1)"
 export DBUS_SESSION_BUS_ADDRESS
