@@ -687,6 +687,15 @@ start_launcher_session() {
     build_selkies_cmd() {
       echo "export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_STREAM_WIDTH=$(_dpad_w) DPAD_STREAM_HEIGHT=$(_dpad_h) XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=16100 --enable_https=false --encoder=${enc} --framerate=${stream_fps} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
     }
+    # Unix socket pathnames survive an abrupt Selkies/container process exit.
+    # They cannot represent a live compositor once that process is gone and can
+    # make the desktop attach to a stale wayland-N after a Docker restart or a
+    # resolution-triggered Selkies relaunch. Only clean them at process
+    # boundaries; peer disconnects keep the current Selkies process and socket.
+    _dpad_clean_wayland_sockets() {
+        rm -f -- "${XDG_RUNTIME_DIR}"/wayland-[0-9]* /tmp/sway-client.log 2>/dev/null || true
+    }
+    _dpad_clean_wayland_sockets
     echo "[*] Launching selkies (wayland-display compositor; video_src=${video_src}, encoder=${enc})..."
     as_user "$(build_selkies_cmd)" >>/tmp/selkies.log 2>&1 &
     sleep 6
@@ -751,6 +760,7 @@ SWAYCFG
             pkill -f selkies-gstreamer 2>/dev/null || true
             pkill -9 -x sway 2>/dev/null || true
             sleep 2
+            _dpad_clean_wayland_sockets
             as_user "$(build_selkies_cmd)" >>/tmp/selkies.log 2>&1 &
             sway_launched=0
         fi

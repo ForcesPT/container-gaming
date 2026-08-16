@@ -59,10 +59,15 @@
 > Chromium test then completed three browser connect/decode/disconnect cycles;
 > each browser decoded the 1920x1080 stream (50, 62, and 61 frames observed),
 > negotiated and closed the Selkies input data channel, and the exact compositor,
-> desktop process identities, and Wayland socket inode remained unchanged.
-> Unit/source tests cover the Docker build wiring. Selkies' separate audio-peer
-> reconnect error path remains a distinct follow-up. A reviewed immutable image
-> release is still required before production promotion.
+> desktop process identities, and Wayland socket inode remained unchanged. A
+> post-peer Docker restart then exposed stale Wayland socket pathnames and a
+> stale Sway health marker; the entrypoint now removes that process-owned state
+> only before starting a new Selkies process (never on peer disconnect). The GPU
+> test observes the old candidate RED, then requires restart health recovery and
+> a successful third peer lifecycle. Unit/source tests cover the Docker build
+> wiring and both initial/relaunch cleanup call sites. Selkies' separate
+> audio-peer reconnect error path remains a distinct follow-up. A reviewed
+> immutable image release is still required before production promotion.
 >
 > **2026-08-16 `r6` launcher-only reliability release — PREVIOUS RELEASE.**
 > Source revision `06927d2f61f1e9125e16bc07c7b61c9105ca1f84` was

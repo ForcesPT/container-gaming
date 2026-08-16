@@ -25,6 +25,12 @@ DOCKER_RUN = [
     "-e", "SELKIES_BASIC_AUTH_PASSWORD=testpass",
     IMAGE,
 ]
+ENTRYPOINT_OVERRIDE = os.environ.get("DPAD_TEST_ENTRYPOINT_OVERRIDE")
+if ENTRYPOINT_OVERRIDE:
+    override = Path(ENTRYPOINT_OVERRIDE).resolve()
+    if not override.is_file():
+        raise SystemExit(f"DPAD_TEST_ENTRYPOINT_OVERRIDE is not a file: {override}")
+    DOCKER_RUN[-1:-1] = ["-v", f"{override}:/opt/dpadcloud/entrypoint.sh:ro"]
 
 
 def run(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -61,16 +67,6 @@ def start_peer(label: str, hold_seconds: int) -> None:
     )
 
 
-def wait_sway(timeout: int = 60) -> int:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        result = exec_in("pgrep", "-x", "sway", check=False)
-        if result.returncode == 0:
-            return int(result.stdout.splitlines()[0])
-        time.sleep(1)
-    raise AssertionError("Sway did not launch after peer connection")
-
-
 def wayland_socket_identity() -> tuple[str, int]:
     code = (
         "from pathlib import Path; import stat; "
@@ -81,10 +77,18 @@ def wayland_socket_identity() -> tuple[str, int]:
     return name, int(inode)
 
 
+class ProcessNotReady(AssertionError):
+    """The expected process has not appeared yet."""
+
+
 def process_identity(name: str) -> tuple[int, int]:
     result = exec_in("pgrep", "-xo", name, check=False)
+    if result.returncode == 1:
+        raise ProcessNotReady(f"{name} is not running")
     if result.returncode != 0:
-        raise AssertionError(f"{name} is not running")
+        raise AssertionError(
+            f"pgrep failed for {name} with status {result.returncode}: {result.stderr}"
+        )
     pid = int(result.stdout.strip())
     stat_fields = exec_in(
         "python3", "-c",
@@ -100,6 +104,16 @@ def assert_identity(name: str, expected: tuple[int, int], phase: str) -> None:
     actual = process_identity(name)
     if actual != expected:
         raise AssertionError(f"{name} changed {phase}: expected {expected}, got {actual}")
+
+
+def wait_process_identity(name: str, timeout: int = 30) -> tuple[int, int]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            return process_identity(name)
+        except ProcessNotReady:
+            time.sleep(1)
+    raise AssertionError(f"{name} did not become ready within {timeout}s")
 
 
 def wait_peer_video_offer(label: str, timeout: int) -> None:
@@ -148,6 +162,7 @@ def print_diagnostics() -> None:
         ("selkies", ("docker", "exec", NAME, "python3", "-c", "print(open('/tmp/selkies.log').read())")),
         ("peer1", ("docker", "exec", NAME, "python3", "-c", "from pathlib import Path; p=Path('/tmp/peer1.log'); print(p.read_text() if p.exists() else '')")),
         ("peer2", ("docker", "exec", NAME, "python3", "-c", "from pathlib import Path; p=Path('/tmp/peer2.log'); print(p.read_text() if p.exists() else '')")),
+        ("peer3", ("docker", "exec", NAME, "python3", "-c", "from pathlib import Path; p=Path('/tmp/peer3.log'); print(p.read_text() if p.exists() else '')")),
     ):
         result = run(*command, check=False)
         print(f"--- {title} diagnostics ---", file=sys.stderr)
@@ -160,10 +175,9 @@ try:
     wait_healthy()
 
     start_peer("peer1", 20)
-    wait_sway()
-    sway = process_identity("sway")
-    xwayland = process_identity("Xwayland")
-    launcher = process_identity("dpad-launcher")
+    sway = wait_process_identity("sway")
+    xwayland = wait_process_identity("Xwayland")
+    launcher = wait_process_identity("dpad-launcher")
     socket = wayland_socket_identity()
     print(
         f"first peer: sway={sway} Xwayland={xwayland} "
@@ -195,9 +209,28 @@ try:
         raise AssertionError("Wayland socket changed after second peer disconnect")
     assert_selkies_log_clean()
 
+    # A container-level restart intentionally starts a fresh desktop, but stale
+    # socket pathnames or Sway logs from the prior process must not block health
+    # or make that desktop attach to the dead compositor.
+    run("docker", "restart", NAME)
+    wait_healthy(120)
+    start_peer("peer3", 10)
+    restarted_sway = wait_process_identity("sway")
+    restarted_xwayland = wait_process_identity("Xwayland")
+    restarted_launcher = wait_process_identity("dpad-launcher")
+    restarted_socket = wayland_socket_identity()
+    wait_peer_video_offer("peer3", 20)
+    time.sleep(2)
+    assert_identity("sway", restarted_sway, "after post-restart peer disconnected")
+    assert_identity("Xwayland", restarted_xwayland, "after post-restart peer disconnected")
+    assert_identity("dpad-launcher", restarted_launcher, "after post-restart peer disconnected")
+    if wayland_socket_identity() != restarted_socket:
+        raise AssertionError("Wayland socket changed after post-restart peer disconnected")
+
     print(
         "PASS: Wayland socket, Sway, Xwayland, and launcher identities "
-        "survived two peer lifecycles with video offers"
+        "survived two peer lifecycles; container restart recovered a fresh "
+        "desktop and completed a third peer lifecycle"
     )
 except Exception:
     print_diagnostics()
