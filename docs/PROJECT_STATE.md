@@ -14,8 +14,25 @@
 > **`WAYLAND-ARCHITECTURE.md`** (the compositor pivot decision and historical
 > validation record).
 >
-> **2026-08-16 per-session initial FPS plumbing — SOURCE COMPLETE, RELEASE
-> PENDING.** `dpad-launch-session` now forwards `DPAD_STREAM_FPS` into each
+> **2026-08-16 `r7` per-session FPS release — CURRENT REGISTRY IMAGE + OVH
+> PRODUCTION PIN.** Source revision
+> `14f30e4489126c994175ec862e94559e2ef1280b` was independently security-reviewed,
+> cloned cleanly on an OVH GRA11 NVIDIA L4 builder, and passed the architecture,
+> obsolete-component, Selkies patch, Wayland ABI, exact-pin/mutation, shell, and
+> BuildKit checks. The immutable
+> `forcespt/dpadcloud-gaming:dpad-SteamOS-2026.08.16-r7` and convenience
+> `:dpad-SteamOS` tags both resolve to digest
+> `sha256:b85954a28aa37c8e9c2bb1e86db7314b5eecaa6136f4cf8c0d5fed4c5b259209`.
+> Automated structural/GPU checks verified NVIDIA L4 driver 580.159.03,
+> Steam desktop targets, absence of Gamescope, Selkies, `waylanddisplaysrc`,
+> NVENC H.264, and fail-closed FPS validation. A full container boot at 144 FPS
+> reached healthy, the Selkies process command contained `--framerate=144`, and
+> a Docker restart returned healthy with system D-Bus and 144 FPS recovered.
+> The production OVH immutable override now pins this exact digest; the prior
+> `r5` digest remains the rollback. Human browser media/input validation was
+> explicitly deferred because the user was unavailable.
+>
+> `dpad-launch-session` now forwards `DPAD_STREAM_FPS` into each
 > container and the launcher-only entrypoint passes it to Selkies through
 > `--framerate`, defaulting to 60. The image validates the value against the
 > control plane's 30/60/120/144/240 presets before constructing the Selkies
@@ -23,11 +40,10 @@
 > control-plane launch command already shipped in cloud commit `c9b6b97`, so a
 > user's selected launch FPS reaches the initial `waylanddisplaysrc` caps instead
 > of Selkies silently starting at its default. Regression guard:
-> `python3 scripts/test_stream_fps_plumbing.py`. This source change is not in the
-> immutable `r6` image yet and still requires an image build/GPU canary.
+> `python3 scripts/test_stream_fps_plumbing.py`.
 >
-> **2026-08-16 `r6` launcher-only reliability release — CURRENT REGISTRY
-> IMAGE.** Source revision `06927d2f61f1e9125e16bc07c7b61c9105ca1f84` was
+> **2026-08-16 `r6` launcher-only reliability release — PREVIOUS RELEASE.**
+> Source revision `06927d2f61f1e9125e16bc07c7b61c9105ca1f84` was
 > cloned cleanly on the active OVH GRA11 NVIDIA L4 VM, passed the architecture,
 > obsolete-component, exact-pin/mutation, Selkies patch, Wayland ABI, D-Bus
 > recovery, shell-syntax, and BuildKit checks, then built with that exact OCI

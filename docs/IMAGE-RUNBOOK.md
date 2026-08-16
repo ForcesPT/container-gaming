@@ -7,11 +7,11 @@
 > Linux desktop client, installed in the image and opened from the Steam card.
 > There is no alternate compositor, Steam shell, or Big Picture startup path.
 >
-> Current release: `forcespt/dpadcloud-gaming:dpad-SteamOS-2026.08.16-r6` and
+> Current release: `forcespt/dpadcloud-gaming:dpad-SteamOS-2026.08.16-r7` and
 > convenience tag `:dpad-SteamOS`, both digest
-> `sha256:1f6742303af5590903ab656955055a178ad7bdefb0b43296fdb6274c9efafade`.
+> `sha256:b85954a28aa37c8e9c2bb1e86db7314b5eecaa6136f4cf8c0d5fed4c5b259209`.
 > It was built and GPU/restart-smoke-tested on OVH L4 from revision
-> `06927d2f61f1e9125e16bc07c7b61c9105ca1f84`.
+> `14f30e4489126c994175ec862e94559e2ef1280b`.
 
 ## Build and publish
 
