@@ -23,9 +23,10 @@
 > media peers are connected, uses an edge-attached capsule with explicitly
 > centered Settings icon, applies dark styling to detached Vuetify dropdown
 > menus, and puts session actions (fullscreen, clipboard, launcher, gamepad,
-> user) in the first drawer category. Loading uses the website's restrained
-> monochrome aurora/grid atmosphere with reduced-motion support and no logo
-> letter. Resolution changes remain intentionally manual-refresh:
+> user) in the first drawer category. Loading is intentionally minimal: a flat
+> dark viewport with the centered Selkies loader and status text, without a
+> logo letter or ambient effects. Resolution changes remain intentionally
+> manual-refresh:
 > NVENC does not renegotiate dimensions in-place. The runtime overlay is fetched
 > from `main` at container boot; no `r4` image has been published for this UI.
 >

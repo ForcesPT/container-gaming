@@ -177,22 +177,22 @@ def test_brands_selkies_and_places_manual_refresh_notice_by_resolution() -> None
         # The settings launcher is a true edge-attached capsule with its icon
         # centered in both axes inside the visible portion.
         assert '.fab-container .v-btn__content' in html
-        assert 'DPAD_STREAM_POLISH_V4' in html
+        assert 'DPAD_STREAM_SIMPLE_V5' in html
         assert 'right: -18px !important' in html
-        assert 'width: 64px; height: 44px' in html
+        assert 'width: 68px; height: 52px' in html
         assert 'border-radius: 999px !important' in html
         assert 'transform: translateY(-50%)' in html
         assert 'align-items: center !important' in html
         assert 'justify-content: center !important' in html
         assert 'transform: translateX(-9px)' in html
 
-        # Loading uses the website's monochrome aurora/grid treatment, never a
-        # logo letter, and disables ambient motion for reduced-motion users.
+        # Loading is deliberately simple: a flat dark viewport with centered
+        # native loader and text, without logo letters or ambient effects.
         assert 'content: "D"' not in html
-        assert 'dpad-loading-drift' in html
-        assert 'dpad-loading-scan' in html
-        assert 'radial-gradient(620px 420px at 78% 8%' in html
-        assert '@media (prefers-reduced-motion: reduce)' in html
+        assert 'background: #08090a !important' in html
+        assert '.loading:before, .loading:after' in html
+        assert 'content: none !important' in html
+        assert 'display: none !important' in html
 
         assert "videoResolution: window.localStorage.getItem" in app
         assert "|| '2560x1440'" in app
@@ -339,7 +339,8 @@ def test_migrates_v1_drawer_to_v2_without_losing_actions() -> None:
         html = (web / "index.html").read_text(encoding="utf-8")
         assert html.count("DPAD_SETTINGS_TAB_V3") == 1
         assert html.count("DPAD_STREAM_POLISH_V4") == 1
-        assert html.index("DPAD_STREAM_UI_V2") < html.index("DPAD_SETTINGS_TAB_V3") < html.index("DPAD_STREAM_POLISH_V4")
+        assert html.count("DPAD_STREAM_SIMPLE_V5") == 1
+        assert html.index("DPAD_STREAM_UI_V2") < html.index("DPAD_SETTINGS_TAB_V3") < html.index("DPAD_STREAM_POLISH_V4") < html.index("DPAD_STREAM_SIMPLE_V5")
 
         # Reconstruct the relevant V1 layout: actions embedded at the end of
         # telemetry, V1 marker, persistent outer loading element.
@@ -376,7 +377,8 @@ def test_migrates_v1_drawer_to_v2_without_losing_actions() -> None:
         assert "DPAD_STREAM_UI_V2" in migrated
         assert migrated.count("DPAD_SETTINGS_TAB_V3") == 1
         assert migrated.count("DPAD_STREAM_POLISH_V4") == 1
-        assert migrated.index("DPAD_STREAM_UI_V2") < migrated.index("DPAD_SETTINGS_TAB_V3") < migrated.index("DPAD_STREAM_POLISH_V4")
+        assert migrated.count("DPAD_STREAM_SIMPLE_V5") == 1
+        assert migrated.index("DPAD_STREAM_UI_V2") < migrated.index("DPAD_SETTINGS_TAB_V3") < migrated.index("DPAD_STREAM_POLISH_V4") < migrated.index("DPAD_STREAM_SIMPLE_V5")
         assert migrated.count('<div class="dpad-action-card">') == 1
         assert migrated.index("Session actions") < migrated.index("Stream telemetry")
         for icon in ("fullscreen", "file_copy", "home", "videogame_asset", "account_circle"):
@@ -420,8 +422,9 @@ def test_migrates_v3_logo_loading_badge_to_v4_atmosphere() -> None:
         assert migration.returncode == 0, migration.stdout + migration.stderr
         migrated = (web / "index.html").read_text(encoding="utf-8")
         assert migrated.count("DPAD_STREAM_POLISH_V4") == 1
+        assert migrated.count("DPAD_STREAM_SIMPLE_V5") == 1
         assert 'content: "D"' not in migrated
-        assert "dpad-loading-drift" in migrated
+        assert "content: none !important" in migrated
 
         rerun = subprocess.run(
             [sys.executable, str(PATCHER)], env=env, text=True,

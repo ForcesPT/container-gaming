@@ -287,6 +287,20 @@ DPAD_STREAM_POLISH_STYLE = r'''
 '''
 
 
+DPAD_STREAM_SIMPLE_STYLE = r'''
+    /* DPAD_STREAM_SIMPLE_V5 — quiet loading screen and taller Settings capsule. */
+    .fab-container.v-btn, .fab-container.v-btn:hover {
+      right: -18px !important; width: 68px; height: 52px; min-width: 68px !important;
+      border-radius: 999px !important; transform: translateY(-50%) !important;
+    }
+    .fab-container .v-btn__content { transform: translateX(-9px); }
+    .loading { background: #08090a !important; }
+    .loading:before, .loading:after {
+      content: none !important; display: none !important; animation: none !important;
+    }
+'''
+
+
 def resolution_block() -> str:
     return '''              <p class="dpad-resolution-control">
                 <v-select :items="videoResolutionOptions" label="Resolution" menu-props="left"
@@ -328,6 +342,10 @@ def patch_index(source: str) -> str | None:
         if "</style>" not in updated:
             return None
         updated = updated.replace("</style>", DPAD_STREAM_POLISH_STYLE + "\n  </style>", 1)
+    if "DPAD_STREAM_SIMPLE_V5" not in updated:
+        if "</style>" not in updated:
+            return None
+        updated = updated.replace("</style>", DPAD_STREAM_SIMPLE_STYLE + "\n  </style>", 1)
 
     updated = updated.replace('<meta name="theme-color" content="black"/>', '<meta name="theme-color" content="#08090a"/>')
     updated = updated.replace("<title>Selkies - webrtc</title>", "<title>DpadPlay Stream</title>")
@@ -457,6 +475,7 @@ patch_file(
         "DPAD_STREAM_UI_V2" in source
         and "DPAD_SETTINGS_TAB_V3" in source
         and "DPAD_STREAM_POLISH_V4" in source
+        and "DPAD_STREAM_SIMPLE_V5" in source
         and 'content: "D"' not in source
         and "dpad-resolution-note" in source
         and 'class="dpad-drawer"' in source
