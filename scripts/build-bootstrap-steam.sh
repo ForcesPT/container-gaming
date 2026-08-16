@@ -3,8 +3,9 @@
 #
 # Downloads the ~300MB Steam client into ~/.steam/debian-installation
 # (ubuntu12_64/steamwebhelper is the completion marker) so a fresh-boot
-# container's entrypoint bootstrap_steam_on_xvfb() is a NO-OP and gamescope +
-# Steam come up in ~40s instead of a ~3-4min first-run download.
+# container's entrypoint bootstrap_steam_on_xvfb() is a NO-OP and the official
+# Steam desktop client is ready for the DpadPlay launcher in ~40s instead of a
+# ~3-4 minute first-run download.
 #
 # Runs on Xvfb :8 + mesa/llvmpipe (SOFTWARE GL) — NO GPU needed, so it works in
 # a plain `docker build` with no NVIDIA runtime. Does NOT log in (just
@@ -48,7 +49,7 @@ if [ "$(id -u)" -ne 0 ]; then
   while [ $tries -lt 3 ] && [ $ok -eq 0 ]; do
     tries=$((tries+1))
     rm -f "${HOME_DIR}/.steam/steam.pid" "${INSTALL}/steam.pid" "${HOME_DIR}/.steam/steam.pipe" 2>/dev/null || true
-    /usr/bin/steam -gamepadui >/tmp/steam-bootstrap.log 2>&1 & sp=$!
+    /usr/bin/steam >/tmp/steam-bootstrap.log 2>&1 & sp=$!
     waited=0
     while [ $waited -lt 360 ]; do
       [ -x "${INSTALL}/ubuntu12_64/steamwebhelper" ] && { ok=1; break; }

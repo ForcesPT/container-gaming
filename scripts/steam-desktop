@@ -1,0 +1,5 @@
+#!/bin/bash
+# Stable launcher target for Valve's standard desktop Steam client.
+# Ignore launcher-supplied presentation flags so old cached launcher bundles
+# cannot select an alternate Steam shell.
+exec /usr/bin/steam

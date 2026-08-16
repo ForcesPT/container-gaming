@@ -7,7 +7,7 @@
 # own Selkies tunnel URL printed to the console.
 #
 # Phases (each idempotent — safe to re-run, safe across the one reboot below):
-#   1. ensure  nvidia_drm.modeset = Y   (REQUIRED for BOTH the gamescope
+#   1. ensure  nvidia_drm.modeset = Y   (REQUIRED for BOTH the retired compositor
 #          --backend headless path AND the DFP Xorg path; if the VM boots with
 #          N, set it persistently + reload, or reboot once)
 #   2. install nvidia-container-toolkit (needed for `docker run --gpus ...`)
@@ -70,11 +70,7 @@ if [ -f /etc/environment ]; then
     set +a
 fi
 
-# Default to the gamescope headless MVP (the validated path: full interactive
-# Steam in the browser with video+audio+keyboard+mouse+gamepad, no DRM master ->
-# N-on-N-GPUs multi-tenant). Set DPAD_GAMESCOPE=0 in /etc/environment to opt out
-# to the DFP Xorg path (1 full-Steam session per VM, DRM master).
-DPAD_GAMESCOPE="${DPAD_GAMESCOPE:-1}"
+# The image has one session architecture: gst-wayland-display + Sway + DpadPlay launcher.
 
 REPO_URL="${DPAD_REPO_URL:-https://github.com/ForcesPT/container-gaming.git}"
 REPO_DIR="${DPAD_REPO_DIR:-/opt/dpadcloud/container-gaming}"
@@ -100,15 +96,15 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # Phase 0: NVIDIA driver = R580 LTS  (REQUIRED on the L4 oversubscription pool.
 # The UpCloud AI/ML Ubuntu template ships driver 595.58.03, which produces
 # SEVERE whole-frame flicker on the L4 headless stream — a same-box A/B proved
-# 595 = unusable, 580 = only the mild pre-existing Steam-menu flicker (gamescope
+# 595 = unusable, 580 = only the mild pre-existing Steam-menu flicker (retired compositor
 # #1964, acceptable). See cloud/docs/DRIVER-CUDA-MATRIX.md §3/§5 +
 # UPCLOUD-L4-DEPLOY-2026-07.md §13.9. Only 595 is downgraded; 580 is left alone,
 # other versions are warned-but-left (don't break a working host). Idempotent —
 # after the reboot this sees 580 and returns. The systemd service resumes after.)
 # -----------------------------------------------------------------------------
 # ---- R580 variant detection (proprietary vs open) ----
-# gamescope headless does NOT support the NVIDIA proprietary driver (emersion,
-# gamescope issue #255): Mesa EGL/glamor can't match the GPU PCI id → Steam
+# retired compositor headless does NOT support the NVIDIA proprietary driver (emersion,
+# retired compositor issue #255): Mesa EGL/glamor can't match the GPU PCI id → Steam
 # CEF composites a BLACK screen while audio plays (the capture+encoder pipeline
 # is fine — it's faithfully encoding black). The OPEN variant of R580
 # (`nvidia-driver-580-open`, what UpCloud runs as 580.173.02-open) works — its
@@ -117,13 +113,13 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # longest support to Aug 2028; R595 causes severe L4 flicker; R610 is NFB).
 # Scaleway's "Ubuntu Noble GPU OS 12 passthrough" image ships the PROPRIETARY
 # `nvidia-dkms-580-server` (580.126.20) → must swap to open (the SERVER driver
-# build's EGL/GBM glamor black-screens gamescope-headless + crashes the
+# build's EGL/GBM glamor black-screens retired compositor-headless + crashes the
 # gst-wayland-display compositor). OVH's "Ubuntu 24.04 - NVIDIA - v580" image
 # ships the PLAIN DESKTOP PROPRIETARY `nvidia-driver-580` / `nvidia-dkms-580`
 # (no -server, no -open) → does NOT need the swap: the DESKTOP proprietary
 # build's render-node EGL/GBM glamor works for BOTH compositors — empirically
 # validated 2026-08-11 on an OVH GRA11 l4-90 (580.159.03, license: NVIDIA):
-#   - gamescope-headless + Steam -> frame mean 38.4/255 (content; the -server
+#   - retired compositor-headless + Steam -> frame mean 38.4/255 (content; the -server
 #     variant's black screen is 0.3/255)
 #   - wayland-display + sway + dpad-launcher picker -> the gst-wayland-display
 #     compositor EGL-inits off /dev/dri/renderD128 (the wayland-1 socket
@@ -133,7 +129,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # proprietary variant (OVH) is kept as-is (no swap, no reboot — saves ~6-10 min
 # + a reboot on every OVH cold boot). UpCloud is already open post-595-downgrade.
 # (The earlier §16.6 "OVH plain must swap" claim was a misdiagnosis: the §16.1
-# gamescope-as-Wayland-client crash was reattributed in §16.2 to a Mesa
+# retired compositor-as-Wayland-client crash was reattributed in §16.2 to a Mesa
 # EGL-vendor override leak, not the proprietary variant.) See
 # cloud/docs/STATUS.md §4 #42 + cloud/docs/DEPLOY-RUNBOOK.md §5 +
 # WAYLAND-ARCHITECTURE.md §16.6 (the now-disproven OVH-plain-swap rationale).
@@ -148,7 +144,7 @@ has_proprietary_580() {
     # Proprietary (non-open) 580 installed? Two variants, DIFFERENT behavior:
     # - server: nvidia-*-580-server / libnvidia-*-580-server (Scaleway's image)
     #   → the SERVER driver build's EGL/GBM glamor is unusable in headless
-    #   gamescope (black screen, gamescope #255, frame mean 0.3/255) AND crashes
+    #   retired compositor (black screen, retired compositor #255, frame mean 0.3/255) AND crashes
     #   the gst-wayland-display compositor (EGL 'dri2 screen', §16.6) → MUST swap.
     # - plain:  nvidia-(dkms|driver)-580 (OVH's "Ubuntu 24.04 - NVIDIA - v580";
     #   no -server, no -open) → the DESKTOP driver build's render-node EGL/GBM
@@ -188,7 +184,7 @@ install_open_580_and_reboot() {
         return 1
     fi
     # Set modeset=Y persistently so it's active right after the reboot (580 does
-    # NOT enable modeset by default, unlike 595 — and gamescope headless needs it).
+    # NOT enable modeset by default, unlike 595 — and retired compositor headless needs it).
     echo 'options nvidia_drm modeset=Y' > /etc/modprobe.d/nvidia-drm-modeset.conf
     update-initramfs -u >/dev/null 2>&1 || true
     log "open R580 applied — rebooting ONCE to load the new driver"
@@ -200,7 +196,7 @@ ensure_driver_580() {
     # PROBE knob (default off → no regression): skip the driver swap/downgrade
     # entirely so the SHIPPED driver stays. Used to test whether a given shipped
     # driver works for the compositor's EGL/GBM glamor without the swap — e.g.
-    # UpCloud's 595 (severe L4 flicker on gamescope-headless, but does it crash
+    # UpCloud's 595 (severe L4 flicker on retired compositor-headless, but does it crash
     # the gst-wayland-display compositor's EGL init like the -580-server variant
     # did, or just flicker?). Set DPAD_SKIP_DRIVER_SWAP=1 in /etc/environment
     # before `vm-bootstrap.sh install`. The shipped driver is left untouched
@@ -217,17 +213,17 @@ ensure_driver_580() {
         580.*)
             # Right BRANCH (R580 LTS). Check the VARIANT: a PROPRIETARY 580
             # (the -580-server variant on Scaleway, OR the plain nvidia-driver-580
-            # on OVH's v580 image) renders a BLACK screen in headless gamescope +
+            # on OVH's v580 image) renders a BLACK screen in headless retired compositor +
             # crashes the gst-wayland-display compositor's EGL/GBM glamor → swap to
             # the open variant + reboot. The OPEN variant is the no-op (UpCloud
             # post-downgrade). FATAL on swap failure so a black-screen VM never
             # goes `ready`. See the §16.6 note in has_proprietary_580 above.
             if has_proprietary_580 && ! has_open_580; then
                 # Two proprietary 580 variants exist, both → EGL/GBM glamor fails
-                # in headless gamescope (black screen, gamescope #255) AND in the
+                # in headless retired compositor (black screen, retired compositor #255) AND in the
                 # gst-wayland-display compositor (EGL 'dri2 screen' crash, §16.6).
                 # Both swap to nvidia-driver-580-open. The PURGE strategy differs.
-                # The open driver is universal (works for gamescope-headless +
+                # The open driver is universal (works for retired compositor-headless +
                 # wayland-display), so always swap — a warm VM may host either
                 # compositor via N-to-N reuse, and the host driver must support
                 # both (the driver is VM-level; the compositor is per-container).
@@ -241,7 +237,7 @@ ensure_driver_580() {
                     # (the dkms/driver/kernel-common/utils metapackages + the
                     # libnvidia-*-580-server userspace libs), then install -open
                     # (which pulls the non-server userspace libs as deps).
-                    log "driver is 580 PROPRIETARY (nvidia-dkms-580-server, e.g. Scaleway) — headless gamescope renders BLACK; swapping to nvidia-driver-580-open"
+                    log "driver is 580 PROPRIETARY (nvidia-dkms-580-server, e.g. Scaleway) — headless retired compositor renders BLACK; swapping to nvidia-driver-580-open"
                     local purge_pkgs
                     # Extract the package NAME first (awk '{print $2}') then match
                     # `-580-server` on the NAME — anchoring `$` on the full dpkg -l
@@ -266,12 +262,12 @@ ensure_driver_580() {
                     # OVH's "Ubuntu 24.04 - NVIDIA - v580" image: the PLAIN
                     # DESKTOP proprietary nvidia-driver-580 / nvidia-dkms-580
                     # (no -server, no -open). Unlike the -580-server SERVER build
-                    # (Scaleway, whose EGL/GBM glamor black-screens gamescope-
+                    # (Scaleway, whose EGL/GBM glamor black-screens retired compositor-
                     # headless + crashes the compositor), the DESKTOP proprietary
                     # build's render-node EGL/GBM glamor works for BOTH
                     # compositors — empirically validated 2026-08-11 on an OVH
                     # GRA11 l4-90 (580.159.03, license: NVIDIA):
-                    #   - gamescope-headless + Steam  -> frame mean 38.4/255
+                    #   - retired compositor-headless + Steam  -> frame mean 38.4/255
                     #     (content; the -server variant's black screen is 0.3/255)
                     #   - wayland-display + sway + dpad-launcher picker -> the
                     #     gst-wayland-display compositor EGL-inits off
@@ -281,7 +277,7 @@ ensure_driver_580() {
                     # No swap, no reboot needed → KEEP the proprietary driver
                     # (saves ~6-10 min + a reboot on every OVH cold boot). The
                     # §16.6 "OVH plain must swap" claim was a misdiagnosis: the
-                    # §16.1 gamescope-as-client crash was reattributed in §16.2
+                    # §16.1 retired compositor-as-client crash was reattributed in §16.2
                     # to a Mesa EGL-vendor override leak, not the variant.
                     log "driver is 580 PROPRIETARY (plain desktop nvidia-driver-580, e.g. OVH v580 image) — render-node EGL/GBM glamor works for both compositors (validated 2026-08-11 on OVH l4-90); keeping the proprietary driver (no swap, no reboot)"
                     return 0
@@ -352,7 +348,7 @@ EOF
 }
 
 # -----------------------------------------------------------------------------
-# Phase 1: nvidia_drm.modeset = Y  (REQUIRED for gamescope --backend headless
+# Phase 1: nvidia_drm.modeset = Y  (REQUIRED for retired compositor --backend headless
 # on NVIDIA — without it vkCreateDevice fails (-7) / 'Failed to create backend' —
 # AND for the DFP Xorg / DRM-master path. Steam UI needs KMS either way.)
 # -----------------------------------------------------------------------------
@@ -361,7 +357,7 @@ ensure_modeset() {
     # the SHIPPED modeset setting stays. Paired with DPAD_SKIP_DRIVER_SWAP for
     # driver probes where you want zero reboots (the modeset reboot is the one
     # unavoidable cost on images that ship modeset=0, e.g. Hyperstack R570).
-    # WARNING: gamescope --backend headless + the gst-wayland-display compositor
+    # WARNING: retired compositor --backend headless + the gst-wayland-display compositor
     # both need modeset=Y → skipping it is only for isolating a driver question,
     # not for a real session.
     if [ "${DPAD_SKIP_MODESET:-0}" = "1" ]; then
@@ -611,9 +607,9 @@ ensure_userns() {
     cat > "$f" <<'EOF'
 kernel.unprivileged_userns_clone=1
 kernel.apparmor_restrict_unprivileged_userns=0
-# Steam + CEF (steamwebhelper) under gamescope open far more than the default
+# Steam + CEF (steamwebhelper) under retired compositor open far more than the default
 # 65536 memory mappings; without this Steam's GL composer thread dies with
-# 'mmap() failed: Cannot allocate memory' and gamescope crash-loops. Steam Deck
+# 'mmap() failed: Cannot allocate memory' and retired compositor crash-loops. Steam Deck
 # sets 1048576.
 vm.max_map_count=1048576
 EOF
@@ -887,12 +883,6 @@ run_container_for() {
     fi
     res+=( --pids-limit="${DPAD_PIDS_LIMIT:-4096}" )
     log "launching $name : GPU $idx, coturn ${port} -> tcp_ext ${tcp_ext:-<none>}, udp_ext ${udp_ext:-<none>}, public ${pub_ip:-<?>}, resources: ${SESSION_CPUS:-0} cpu (${SESSION_CPU_MODE:-quota}) / ${SESSION_MEM_MB:-0}MB"
-    # DPAD_GAMESCOPE=1 switches the container to the gamescope headless + Steam
-    # multi-tenant path (no DRM master). Pass-through DPAD_GAMESCOPE/DPAD_STEAM_ARGS
-    # so the on-start can opt in without editing the bootstrap.
-    local -a gs_env=()
-    [ -n "${DPAD_GAMESCOPE:-}" ]  && gs_env+=( -e "DPAD_GAMESCOPE=${DPAD_GAMESCOPE}" )
-    [ -n "${DPAD_STEAM_ARGS:-}" ] && gs_env+=( -e "DPAD_STEAM_ARGS=${DPAD_STEAM_ARGS}" )
     # Map + pass whichever protocol(s) are exposed. coturn listens both tcp+udp
     # internally; only the mapped protocol is reachable externally. With both
     # WebRTC peers on the same coturn the relay short-circuits internally, so only
@@ -909,7 +899,6 @@ run_container_for() {
         -e "SUNSHINE_PASSWORD=${sess_pass}" \
         -e "SELKIES_BASIC_AUTH_USER=${SELKIES_USER}" \
         -e "SELKIES_BASIC_AUTH_PASSWORD=${sess_pass}" \
-        "${gs_env[@]}" \
         "$img_tag" || { err "docker run $name failed"; return 1; }
     log "$name launched (login ${SELKIES_USER}/${sess_pass})"
 }
@@ -976,7 +965,7 @@ run_all_containers() {
     compute_session_resources "$max"
     # Stagger container launches (opt-in, DPAD_LAUNCH_STAGGER seconds, default 0).
     # NOTE: the real fix for the NVENC first-open failure on non-zero GPU minors is
-    # the Selkies encoder-register retry in start_gamescope_stream (entrypoint),
+    # the Selkies encoder-register retry in start_retired compositor_stream (entrypoint),
     # NOT a launch stagger — a 13s gap did NOT prevent the failure (it's not an
     # encoder-vs-encoder race). Keep this only as an opt-in lever. On driver 570+
     # a container whose nvh264enc fails to register (NvEncOpenEncodeSessionEx

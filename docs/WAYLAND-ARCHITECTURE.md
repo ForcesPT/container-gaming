@@ -1,5 +1,14 @@
 # DpadCloud Image — Full-Desktop Wayland Architecture (`gst-wayland-display`)
 
+> **2026-08-16 CURRENT IMPLEMENTATION.** The final architecture is now fixed:
+> `gst-wayland-display` → nested Sway/XWayland → DpadPlay launcher. Sway is no
+> longer an optional client selected by an environment variable; it is the only
+> desktop client. The DpadPlay launcher is the only session shell, and Steam is
+> a standard desktop store application launched from its card. All references
+> below to the retired compositor as a runtime option, a Steam shell, or client/
+> shell selection variables are historical validation context and are not
+> supported by current source.
+
 > **Decision + spec (2026-08-08).** The architectural answer to the multi-store
 > blocker (`STORES-PLAN.md` §17.3 — `lutris-gamepad-ui` / Electron does not
 > render into gamescope-headless's `pipewiresrc` capture node; and the deeper

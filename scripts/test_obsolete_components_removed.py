@@ -46,14 +46,14 @@ if "ARG LUTRIS_VERSION=" not in dockerfile or "lutris.deb" not in dockerfile:
     errors.append("Lutris backend was removed unexpectedly")
 if "ARG SDL3_VERSION=" not in dockerfile or "libSDL3.so.0" not in dockerfile:
     errors.append("SDL3 launcher input dependency was removed unexpectedly")
-if "DPAD_STORE_SHELL=picker" not in (root / "entrypoint.sh").read_text():
-    errors.append("DpadPlay picker shell is no longer wired")
+if "start_launcher_session" not in (root / "entrypoint.sh").read_text():
+    errors.append("DpadPlay launcher session is no longer wired")
 
 launch_session = (root / "scripts/dpad-launch-session").read_text()
 if '-p "${selkies_port}:16100"' not in launch_session:
     errors.append("per-slot Selkies host-port publication is missing")
-if '-e DPAD_STORE_SHELL="${DPAD_STORE_SHELL:-}"' not in launch_session:
-    errors.append("DpadPlay picker environment is not forwarded to the container")
+if "DPAD_STORE_SHELL" in launch_session:
+    errors.append("retired shell-selection environment is still forwarded")
 
 if errors:
     print("Obsolete component cleanup validation failed:", file=sys.stderr)

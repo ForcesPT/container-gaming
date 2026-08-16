@@ -55,7 +55,9 @@ const STORES = [
     name: 'Steam',
     subtitle: 'Your Steam library',
     bin: 'steam',
-    cmd: ['steam', '-gamepadui'],
+    // Launch Valve's standard desktop Steam client. The DpadPlay launcher is the
+    // only session shell; Steam is a store application inside the Sway desktop.
+    cmd: ['steam'],
     color: '#66c0f4',
   },
   {

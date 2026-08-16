@@ -1,7 +1,6 @@
 #!/bin/bash
-# launcher-shell — start the dpad-launcher Electron app (the store-picker
-# shell) in the headless cloud-gaming container. The entrypoint's sway/wayland
-# session launches this authoritative picker when DPAD_STORE_SHELL=picker.
+# launcher-shell — start the authoritative DpadPlay Electron store launcher in
+# the nested Sway cloud-gaming desktop.
 #
 # Gamepad: the launcher polls SDL3 via koffi (the Web Gamepad API doesn't see
 # the mknod'd /dev/input/jsN pads in-container). It needs the classic-joystick

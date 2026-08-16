@@ -46,7 +46,6 @@
 # Env (read from /etc/environment or the SSH env):
 #   DPAD_SLOT_CPUS, DPAD_SLOT_MEM_MB   per-slot CPU/RAM quota (oversubscription)
 #   DPAD_SELKIES_BIND                 Selkies bind (0.0.0.0 for direct-IP v2)
-#   DPAD_GAMESCOPE                    1 (the SteamOS path)
 #   DPAD_GAMEPAD_INTERPOSER           (optional) =evdev enables the evdev gamepad
 #                                    path (fake-libudev + evdev interposer +
 #                                    evdev_bridge.py); unset = the classic
@@ -281,20 +280,15 @@ launch() {
     [ -f /opt/dpadcloud/dpad_input_patch.py ] \
         && entry_mount+=( -v /opt/dpadcloud/dpad_input_patch.py:/usr/local/lib/python3.12/dist-packages/dpad_input_patch.py:ro )
 
-    # DPAD_COMPOSITOR=wayland-display needs raw /dev/dri access: the gst-wayland-
-    # display compositor opens the DRM render node directly via
-    # EGL_EXT_device_drm_render_node, and the CDI-injected /dev/dri group perms
-    # block that raw open (§13.14). Gated so the gamescope-headless path (default)
-    # is untouched — CDI's /dev/dri via NVIDIA_VISIBLE_DEVICES suffices there.
-    local dev_args=()
-    [ "${DPAD_COMPOSITOR:-gamescope}" = "wayland-display" ] && dev_args+=( --device /dev/dri )
+    # gst-wayland-display always opens the assigned DRM render node directly.
+    local dev_args=( --device /dev/dri )
     # systempaths=unconfined: the 4th bwrap-nest flag — umu's pressure-vessel
     # remounts /proc in a new pid+mount namespace; without it, "Can't mount proc
     # on /newroot/proc". Needed whenever a session runs umu (Battle.net via
     # battlenet-launch, regardless of compositor). Live-validated on OVH L4.
 
-    # Multi-store shell (STORES-PLAN.md). DPAD_STORE_SHELL=picker selects the
-    # DpadPlay launcher; DPAD_STORES lists the store integrations to wire.
+    # The DpadPlay launcher is the only session shell; DPAD_STORES controls
+    # which store state directories are wired for this session.
     # NOTE: keep these comments OUT of the `\`-continuation block below — an
     # inline `#` inside a continued command terminates it (bash pitfall; it broke
     # the docker run with "-e: command not found" + "requires at least 1 argument").
@@ -310,7 +304,6 @@ launch() {
         -p "${selkies_port}:16100" \
         -v "/tmp/nvidia-mps:/tmp/nvidia-mps" \
         -e CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps \
-        -e DPAD_GAMESCOPE=1 \
         -e DPAD_SLOT="$slot" \
         -e DPAD_COTURN_PORT="$port" \
         -e DPAD_SELKIES_BIND="${DPAD_SELKIES_BIND:-0.0.0.0}" \
@@ -319,12 +312,9 @@ launch() {
         -e SELKIES_BASIC_AUTH_USER=dpad \
         -e "SELKIES_BASIC_AUTH_PASSWORD=${pass}" \
         -e DPAD_GAMEPAD_INTERPOSER="${DPAD_GAMEPAD_INTERPOSER:-}" \
-        -e DPAD_STORE_SHELL="${DPAD_STORE_SHELL:-}" \
         -e DPAD_STORES="${DPAD_STORES:-}" \
         -e DPAD_VIDEO_SRC="${DPAD_VIDEO_SRC:-}" \
-        -e DPAD_COMPOSITOR="${DPAD_COMPOSITOR:-}" \
-        -e DPAD_WAYLAND_CLIENT="${DPAD_WAYLAND_CLIENT:-}" \
-        -e DPAD_GAMESCOPE_ENCODER="${DPAD_GAMESCOPE_ENCODER:-}" \
+        -e DPAD_ENCODER="${DPAD_ENCODER:-}" \
         -e DPAD_STREAM_WIDTH="${DPAD_STREAM_WIDTH:-1920}" \
         -e DPAD_STREAM_HEIGHT="${DPAD_STREAM_HEIGHT:-1080}" \
         -e DPAD_WD_WIDTH="${DPAD_WD_WIDTH:-${DPAD_STREAM_WIDTH:-1920}}" \

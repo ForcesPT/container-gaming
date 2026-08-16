@@ -1,19 +1,19 @@
 #!/bin/bash
-# Health check for container orchestrators.
+# Health check for the launcher-only Selkies/Sway desktop.
+set -u
 
-# Display server must be up — Xorg (nvidia DDX, gaming path) OR Xvfb (debug)
-if ! pgrep -x "Xorg" >/dev/null && ! pgrep -x "Xvfb" >/dev/null; then
-    echo "UNHEALTHY: no display server (Xorg/Xvfb) running"; exit 1
+if ! pgrep -f "selkies-gstreamer" >/dev/null; then
+    echo "UNHEALTHY: selkies-gstreamer is not running"; exit 1
 fi
-# PipeWire (audio) must be up
-if ! pgrep -x "pulseaudio" >/dev/null; then
-    echo "UNHEALTHY: pulseaudio not running"; exit 1
+if ! pgrep -x "pipewire" >/dev/null || ! pgrep -x "pipewire-pulse" >/dev/null; then
+    echo "UNHEALTHY: PipeWire audio is not running"; exit 1
 fi
-# At least one streaming host must be up (mws or Selkies for browser, Sunshine for native)
-if ! pgrep -f "/opt/mws/web-server" >/dev/null && ! pgrep -f "selkies-gstreamer" >/dev/null && ! pgrep -x "sunshine" >/dev/null; then
-    echo "UNHEALTHY: no streamer running (mws, Selkies, or Sunshine)"; exit 1
+# Sway starts only after a browser peer creates the compositor socket. Once a
+# session has a Sway log, its process must remain alive.
+if [ -e /tmp/sway-client.log ] && ! pgrep -x "sway" >/dev/null; then
+    echo "UNHEALTHY: Sway desktop exited"; exit 1
 fi
-# GPU access (soft — container still streams via software encode if missing)
 if command -v nvidia-smi >/dev/null 2>&1 && ! nvidia-smi >/dev/null 2>&1; then
-    echo "WARNING: nvidia-smi failed (GPU driver issue)"; fi
-echo "HEALTHY"; exit 0
+    echo "UNHEALTHY: NVIDIA GPU is inaccessible"; exit 1
+fi
+echo "HEALTHY"

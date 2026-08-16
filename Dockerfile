@@ -5,7 +5,7 @@
 # One multi-stage Dockerfile, one final image:
 #   docker build --target vast-vm      -t forcespt/dpadcloud-gaming:dpad-SteamOS .
 #
-#   :dpad-SteamOS  Full-root VM (userns): Steam + gamescope + Selkies stream.
+#   :dpad-SteamOS  DpadPlay launcher desktop + Steam/stores + Selkies stream.
 #                  Fast-boot: the Steam client is pre-bootstrapped at build time
 #                  (~2.1 GB) so a fresh container reaches the stream URL in ~50 s
 #                  instead of a 3-4 min download. Native Steam downloads its own
@@ -63,69 +63,6 @@ RUN mkdir -p /out/x86_64 /out/i386 \
     && cd /tmp/fake-udev && make all all32 \
     && cp /tmp/fake-udev/libudev.so.1 /out/x86_64/dpad_fake_libudev.so \
     && cp /tmp/fake-udev/libudev_x86.so.1 /out/i386/dpad_fake_libudev.so
-
-# =============================================================================
-# Stage: gamescope-builder
-#   Builds a PATCHED gamescope from the UPSTREAM 3.16.25 release tag (the 3v1n0
-#   PPA only ships 3.16.19; upstream is at 3.16.25 — 6 point releases newer, the
-#   bet being a newer gamescope may have fixed the PipeWire black-frame / `out of
-#   buffers` race that made the UpCloud L4 stream UNUSABLE; see
-#   cloud/docs/UPCLOUD-L4-DEPLOY-2026-07.md §13). meson fetches the wrapped
-#   subprojects (glm/stb/wlroots/vkroots/libdisplay-info/libliftoff) itself.
-#
-#   The single patch (scripts/gamescope-headless-drmprops.patch) is now Fix-1-ONLY
-#   (rebased for 3.16.25):
-#     - relaxes the headless !drmProps.hasPrimary abort to a warning (headless
-#       does no KMS scanout, so a primary DRM node is not required);
-#     - adds a /dev/dri/renderD* scan fallback when drmProps.hasRender is false
-#       (gamescope's VkPhysicalDeviceDrmPropertiesEXT query returns zeros on some
-#       driver/device/container combos even though vulkaninfo sees
-#       hasPrimary=hasRender=true on the same device).
-#     Reproduced on UpCloud Helsinki NVIDIA L4 (driver 580 AND 595). Same error
-#     class as the Metalhost probe (STEAM-PROVIDER-RESEARCH.md §5a) + gamescope
-#     #1966. Upstream PR #2073 (merged 2026-04-28) does NOT fix our case — it only
-#     added the `if (!hasDrmProps)` (lavapipe) branch; the `!hasPrimary`/`!hasRender`
-#     aborts inside the `else` block are UNCHANGED in 3.16.25, so this patch is
-#     still required.
-#
-#   DROPPED vs the old 3.16.19 patch: Fix 2 (gamescope PR #2094 —
-#     `screenshotImageFlags.bSampled = true` + the NVIDIA R/B swap). It was the §12
-#     diagnosis for the black-frame flicker, but was REBUILT + HUMAN-TESTED on the
-#     UpCloud L4 and did NOT fix the flicker (§13): our Selkies `pipewiresrc` path
-#     negotiates BGRx (RGB), NOT NV12, so gamescope's `paint_pipewire()`
-#     `isYcbcr()` is false and the screenshot-texture path where PR #2094 lives
-#     NEVER EXECUTES — it was dead code on our path. Removed to keep the patch
-#     focused. (If a future capture path switches to NV12, re-add PR #2094.)
-#
-#   Build deps come from the 3v1n0 PPA's `apt-get build-dep gamescope` (still
-#   deb-src-enabled) — a proven superset of 3.16.25's system-dep needs; the
-#   version-sensitive subprojects (wlroots/libliftoff/etc.) are fetched by meson
-#   as wraps. Keeps the heavy build deps out of the final image; only the 4
-#   patched binaries are COPY'd into vast-vm.
-# =============================================================================
-FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS gamescope-builder
-ARG DEBIAN_FRONTEND
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        software-properties-common ca-certificates dpkg-dev git \
-        meson ninja-build build-essential pkg-config cmake glslang-tools python3-jinja2 \
-    && add-apt-repository -y ppa:3v1n0/gamescope \
-    && sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/3v1n0-*.sources \
-    && apt-get update \
-    && apt-get build-dep -y gamescope \
-    && rm -rf /var/lib/apt/lists/*
-COPY scripts/gamescope-headless-drmprops.patch /tmp/gamescope-headless-drmprops.patch
-# --recurse-submodules: 3.16.25 added src/reshade (and uses wlroots/libliftoff/vkroots/
-# libdisplay-info/openvr/SPIRV-Headers) as git SUBMODULES, not meson wraps
-# (reshade has no .wrap). The 3v1n0 apt-get source tarball vendored them; a bare
-# git clone leaves the dirs empty -> meson 'Include dir reshade/source does not
-# exist'. --shallow-submodules keeps the submodule clones depth-1 (faster).
-RUN git clone --depth 1 --branch 3.16.25 --recurse-submodules --shallow-submodules https://github.com/ValveSoftware/gamescope.git /tmp/gamescope \
-    && cd /tmp/gamescope \
-    && patch -p1 < /tmp/gamescope-headless-drmprops.patch \
-    && meson setup build -Denable_tests=false \
-    && ninja -C build \
-    && mkdir -p /out \
-    && cp build/src/gamescope build/src/gamescopereaper build/src/gamescopestream build/src/gamescopectl /out/
 
 # =============================================================================
 # Stage: sdl3-builder
@@ -360,8 +297,8 @@ RUN sed -i 's/\r$//' /tmp/extract-nvrtc.sh && chmod +x /tmp/extract-nvrtc.sh \
         || { echo "FATAL: libnvrtc 12.9.86 bake failed — video would be broken"; exit 1; } \
     && rm -f /tmp/extract-nvrtc.sh
 
-# Selkies input router (.pth, auto-loaded; no-op when DPAD_INPUT_DISPLAY unset —
-# only the gamescope path sets it). Kept in base so both images share it.
+# Selkies input router (.pth, auto-loaded). The launcher desktop points it at
+# Sway/XWayland :0 after the peer-created compositor socket appears.
 COPY scripts/dpad_input_patch.py scripts/dpad_input_patch.pth /usr/local/lib/python3.12/dist-packages/
 # dpad_gamepad_patch.py: under DPAD_GAMEPAD_INTERPOSER=evdev, makes Selkies emit the
 # 1360B MAIN-branch js_config_t (vendor 0x045e XBox 360) on the js socket, which
@@ -369,10 +306,8 @@ COPY scripts/dpad_input_patch.py scripts/dpad_input_patch.pth /usr/local/lib/pyt
 # gate is unset (the .pth no-ops). Mirrors dpad_input_patch.py's .pth pattern.
 COPY scripts/dpad_gamepad_patch.py scripts/dpad_gamepad_patch.pth /usr/local/lib/python3.12/dist-packages/
 
-# gamescope headless does not composite the X cursor into its PipeWire output,
-# so the only visible cursor source is Selkies' XFIXES cursor overlay. This
-# patcher disables Selkies' auto pointer-lock in the web client so the server
-# cursor stays visible + mouse stays absolute for UI nav. Both paths need it.
+# Keep Selkies desktop-mode cursor input visible and absolute for launcher/store
+# navigation; users can toggle relative-pointer gaming mode in the web client.
 COPY scripts/patch_gst_web_cursors.sh /opt/dpadcloud/patch_gst_web_cursors.sh
 RUN chmod +x /opt/dpadcloud/patch_gst_web_cursors.sh \
     && /opt/dpadcloud/patch_gst_web_cursors.sh /opt/gst-web/input.js
@@ -457,7 +392,7 @@ RUN ln -sf /opt/dpadcloud/vgl-steam /usr/local/bin/vgl-steam && \
 # Stage: wayland-display-builder
 #   Builds the gst-wayland-display GStreamer plugin (with the `cuda` feature for
 #   CUDAMemory zero-copy output) — the compositor + capture layer for the
-#   DPAD_COMPOSITOR=wayland-display path (WAYLAND-ARCHITECTURE.md). A Smithay
+#   production launcher desktop path (WAYLAND-ARCHITECTURE.md). A Smithay
 #   micro-compositor (games-on-whales/gst-wayland-display, commit b15285a2 = the
 #   stable head; ≥ the 2025-10 "dynamically link to CUDA" commit e89d9f5, §13.2)
 #   that initialises EGL off the DRM render node (NO DRM master → N-on-N
@@ -496,14 +431,14 @@ RUN ln -sf /opt/dpadcloud/vgl-steam /usr/local/bin/vgl-steam && \
 #     (Debian multiarch libdir, NOT /out/lib/gstreamer-1.0).
 #   - The c-bindings C API crate (libgstwaylanddisplay + the display_init input
 #     API, §13.5) is NOT built here — it's phase-A native-Wayland input work, not
-#     the spike (which validates Steam via gamescope-as-client, input via XTest).
+#     the spike (which validates Steam via nested Sway/XWayland, input via XTest).
 #
 #   ORPHAN STAGE (not referenced by vast-vm yet): BuildKit does NOT build
 #   unreferenced stages during a normal `docker build .` (target = vast-vm), so
 #   adding this stage is a no-op for the current image + the live-site flow. It's
 #   buildable explicitly via `docker build --target wayland-display-builder` (the
 #   spike validation path). Wiring it into vast-vm (COPY the plugin .so + the
-#   libwayland 1.23 .so + add the entrypoint DPAD_COMPOSITOR gate) happens AFTER
+#   libwayland 1.23 .so) happens AFTER
 #   the live spike validates the compositor→Selkies path on one VM (§8 step 2).
 FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS wayland-display-builder
 ARG DEBIAN_FRONTEND
@@ -570,18 +505,15 @@ RUN set -e; \
 
 # =============================================================================
 # Stage: vast-vm  ->  :dpad-SteamOS
-#   Vast KVM VM: Steam + gamescope (full Steam, Big Picture) + Selkies stream.
-#   Fast-boot: the Steam client is pre-bootstrapped at build time. No desktop
-#   (XFCE), no Heroic, no Firefox. Native Steam downloads its own Proton at
-#   runtime, so GE-Proton is NOT baked in. Default mode = gamescope.
+#   Full-root VM: gst-wayland-display + nested Sway + DpadPlay launcher.
+#   Valve's official Steam desktop client is installed and launched only from
+#   the DpadPlay store card. There is no alternate compositor or Steam shell.
 # =============================================================================
 FROM base AS vast-vm
 ARG DEBIAN_FRONTEND
-LABEL description="DpadCloud Vast VM: Steam + gamescope + Selkies (Ubuntu 24.04)"
-# Default to the gamescope headless + Steam multi-tenant path.
-ENV DPAD_GAMESCOPE=1
+LABEL description="DpadPlay launcher desktop: Steam + stores + Selkies (Ubuntu 24.04)"
 
-# --- Steam (+ steam-libs amd64/i386 so the Steam runtime has its deps) ---
+# --- Steam (+ amd64/i386 runtime libraries) ---
 RUN apt-get update && \
     ( apt-get install -y steam-installer \
       || ( curl -fsSL -o /tmp/steam.deb "https://cdn.fastly.steamstatic.com/client/installer/steam.deb" \
@@ -604,68 +536,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends zenity && rm -r
       chmod +x /usr/bin/zenity; \
     fi
 
-# --- gamescope + PipeWire (the multi-tenant full-Steam path; no DRM master) ---
-#    gamescope isn't in Ubuntu 24.04 repos — use the 3v1n0 PPA. Binary lands in
-#    /usr/games (NOT in PATH); symlink helpers to /usr/bin so gamescope finds
-#    gamescopereaper. PipeWire + wireplumber must run before gamescope. The
-#    pipewiresrc zero-copy Selkies capture path (patch below) needs gstreamer1.0-
-#    pipewire; gstreamer1.0-x provides ximagesink for the :2-bridge fallback.
-#    libpixman-1-0 is explicitly installed from the PPA (0.46.4) because the
-#    gamescope-builder stage's apt-get build-dep pulls libpixman-1-dev 0.46.4
-#    from the same PPA, and gamescope 3.16.25's wlroots 0.19 calls
-#    pixman_region32_empty which only 0.46.4+ exports — noble's stock 0.42.2
-#    exports zero pixman_region32_* symbols, so without this the 3.16.25
-#    gamescope binary crashes at startup with 'undefined symbol:
-#    pixman_region32_empty'.
-#    sway + xwayland: the §16.4 fallback Wayland client for
-#    DPAD_COMPOSITOR=wayland-display. gamescope --backend wayland drops its
-#    client connection to gst-wayland-display on Nvidia after Steam launches
-#    (§16.3, 'IWaitable hung up'); sway (a wlroots compositor run NESTED as a
-#    Wayland client of gst-wayland-display, the games-on-whales RUN_SWAY=1 model)
-#    is the documented more-stable fallback. sway provides XWayland to Steam/
-#    Lutris (same role as gamescope-as-client); the compositor still captures it.
-#    `xwayland` is the XWayland binary sway launches for X apps. INERT by
-#    default: nothing launches sway until the entrypoint's DPAD_WAYLAND_CLIENT=sway
-#    gate (default gamescope = no regression). PENDING LIVE VALIDATION (§16.5 step 4).
-RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common && \
-    add-apt-repository -y ppa:3v1n0/gamescope && \
-    apt-get update && apt-get install -y --no-install-recommends \
-        gamescope pipewire pipewire-audio pipewire-pulse pipewire-audio-client-libraries \
+# --- Launcher desktop runtime ---
+# gst-wayland-display is the compositor/capture source. Nested Sway supplies
+# window management and XWayland for Steam, Heroic and Wine/Proton launchers.
+# PipeWire provides session audio for Selkies.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        pipewire pipewire-audio pipewire-pulse pipewire-audio-client-libraries \
         wireplumber libeis-dev gstreamer1.0-pipewire \
         gstreamer1.0-tools gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
         gstreamer1.0-x gstreamer1.0-plugins-base pulseaudio-utils \
-        libpixman-1-0 \
-        sway xwayland && \
-    for b in gamescope gamescopereaper gamescopestream gamescopectl; do \
-        [ -e /usr/games/$b ] && ln -sf /usr/games/$b /usr/bin/$b; \
-    done && \
-    (command -v gamescope && gamescope --version 2>&1 | head -1) && \
-    (command -v sway && sway --version 2>&1 | head -1) && \
-    rm -rf /var/lib/apt/lists/*
-
-# --- Patched gamescope binaries from gamescope-builder (headless hasPrimary /
-#    render-node fix — see gamescope-headless-drmprops.patch). Overrides the
-#    deb's /usr/games/ binaries; the /usr/bin symlinks above stay valid. ---
-COPY --from=gamescope-builder /out/gamescope /out/gamescopereaper /out/gamescopestream /out/gamescopectl /tmp/gs-patched/
-RUN cp -f /tmp/gs-patched/gamescope       /usr/games/gamescope \
-    && cp -f /tmp/gs-patched/gamescopereaper /usr/games/gamescopereaper \
-    && cp -f /tmp/gs-patched/gamescopestream /usr/games/gamescopestream \
-    && cp -f /tmp/gs-patched/gamescopectl  /usr/games/gamescopectl \
-    && chmod 755 /usr/games/gamescope /usr/games/gamescopereaper /usr/games/gamescopestream /usr/games/gamescopectl \
-    && rm -rf /tmp/gs-patched
-
-# --- Stage 2 zero-copy: patch Selkies' build_video_pipeline to capture
-#    gamescope's PipeWire node directly (pipewiresrc -> cudaupload -> cudaconvert
-#    -> nvh264enc) instead of ximagesrc on an Xvfb :2 bridge. Gated on
-#    DPAD_VIDEO_SRC=pipewiresrc at runtime (the entrypoint default for gamescope
-#    mode); DPAD_VIDEO_SRC=ximagesrc reverts. Idempotent. ---
-COPY scripts/patch_selkies_pipewire.py /opt/dpadcloud/patch_selkies_pipewire.py
-RUN python3 /opt/dpadcloud/patch_selkies_pipewire.py /usr/local/lib/python3.12/dist-packages/selkies_gstreamer/gstwebrtc_app.py \
-    && rm -f /opt/dpadcloud/patch_selkies_pipewire.py
+        sway xwayland \
+    && command -v sway \
+    && sway --version \
+    && rm -rf /var/lib/apt/lists/*
 
 # --- Fix ~/.steam/root: Steam's steam.sh expects a symlink it can rm -f and
 #    recreate; a real dir there makes steam.sh's rm fail and corrupts Steam's
-#    first-run GL updater under gamescope headless. (No Proton-GE step here —
+#    first-run updater. (No Proton-GE step here —
 #    compatibilitytools.d is created empty; native Steam downloads Proton.) ---
 RUN mkdir -p ${HOME}/.steam/debian-installation/compatibilitytools.d && \
     rm -rf ${HOME}/.steam/root && \
@@ -685,15 +572,12 @@ RUN chmod +x /tmp/build-bootstrap-steam.sh \
     && rm -f /tmp/build-bootstrap-steam.sh \
     && chown -R ${USERNAME}:${USERNAME} ${HOME}/.steam
 
-# --- Multi-store foundation (docs/STORES-PLAN.md). OFF by default: these
-#    layers just PLACE binaries in the image; nothing launches them until the
-#    entrypoint's DPAD_STORE_SHELL gate is wired (a later commit). The
-#    validated Steam path (gamescope --backend headless -- steam -gamepadui)
-#    is UNCHANGED — a fresh build still boots Steam exactly as before. Build-
-#    test in isolation: `docker build --target vast-vm` succeeds + the image
-#    still reaches DPAD_READY on a Steam session. v1 stores = Steam + Epic +
-#    GOG + Battle.net; EA App + Ubisoft Connect are v1.1 drop-ins (same
-#    pattern as Battle.net). ---
+# --- Multi-store foundation (docs/STORES-PLAN.md). These layers place every
+#    supported store backend in the image. The DpadPlay launcher is the sole
+#    shell and exposes Steam, Epic, GOG, Battle.net, EA and Ubisoft cards.
+#    Steam opens Valve's standard desktop client without a special UI mode.
+#    v1 stores = Steam + Epic + GOG + Battle.net; EA App + Ubisoft Connect are
+#    v1.1 drop-ins (same pattern as Battle.net). ---
 #
 #    (0) Heroic Games Launcher — the Epic + GOG store backend. Heroic is an
 #        Electron app (like dpad-launcher) that bundles `legendary` (Epic CLI)
@@ -764,9 +648,9 @@ RUN mkdir -p "${HOME}/.config/heroic/store" && \
     > "${HOME}/.config/heroic/store/config.json" && \
     chown -R ${USERNAME}:${USERNAME} "${HOME}/.config/heroic"
 
-#    (c) dpad-launcher — the authoritative 10-foot Electron store-picker shell;
-#        the entrypoint's DPAD_STORE_SHELL=picker gate execs
-#        launcher-shell). Shipped as the forcespt/dpadcloud-launcher Docker image
+#    (c) dpad-launcher — the authoritative 10-foot Electron store-picker shell.
+#        The entrypoint always execs launcher-shell. Shipped as the
+#        forcespt/dpadcloud-launcher Docker image
 #        (a FROM-scratch file bundle holding the Linux Electron AppDir at
 #        /opt/dpadcloud/launcher, built locally via launcher/scripts/build.sh +
 #        launcher/Dockerfile). The AppDir bundles koffi (native, unpacked) for
@@ -823,23 +707,19 @@ RUN set -e; \
     && test -L libSDL3.so.0 \
     && test -e libSDL3.so.0  # sanity: the SONAME the app dlopens resolves
 
-# --- DPAD_COMPOSITOR=wayland-display: the gst-wayland-display plugin (the
-#     compositor + capture layer, WAYLAND-ARCHITECTURE.md). Built in the
-#     wayland-display-builder stage (Smithay + the `cuda` feature → CUDAMemory
-#     zero-copy output). Dropped into the default GStreamer plugin dir so
+# --- gst-wayland-display plugin (the only compositor/capture path) ---
+#     Built in the wayland-display-builder stage with Smithay and CUDA support;
+#     see WAYLAND-ARCHITECTURE.md. Installed in the GStreamer plugin directory so
 #     selkies-gstreamer's `Gst.ElementFactory.make("waylanddisplaysrc")` finds
 #     it (the patch_selkies_waylanddisplay.py branch, gated on
-#     DPAD_VIDEO_SRC=waylanddisplaysrc). INERT by default: the gamescope-headless
-#     path never instantiates the element (the plugin's cuda init only runs when
-#     waylanddisplaysrc is created). The runtime libwayland is the prod image's
+#     DPAD_VIDEO_SRC=waylanddisplaysrc). The plugin initializes when Selkies
+#     creates waylanddisplaysrc for a connected browser peer. The runtime libwayland is
 #     1.24.0 (≥1.23 — already has wl_client_set_max_buffer_size; no libwayland
 #     COPY needed, §13.14). Live-validated on an OVH L4 (§13.14).
 COPY --from=wayland-display-builder /out/lib/x86_64-linux-gnu/gstreamer-1.0/libgstwaylanddisplaysrc.so /opt/gstreamer/lib/x86_64-linux-gnu/gstreamer-1.0/libgstwaylanddisplaysrc.so
 
-# Apply the waylanddisplaysrc capture-branch patch to Selkies (in the vast-vm
-# stage, late, so the base stage stays cached — base already bakes the pipewire
-# patch; this patch anchors on the pipewire-patched gstwebrtc_app.py). Gated on
-# DPAD_VIDEO_SRC=waylanddisplaysrc; default pipewiresrc → no regression.
+# Apply the waylanddisplaysrc capture branch to Selkies. The entrypoint always
+# selects this branch with DPAD_VIDEO_SRC=waylanddisplaysrc.
 COPY scripts/patch_selkies_waylanddisplay.py /opt/dpadcloud/patch_selkies_waylanddisplay.py
 RUN python3 /opt/dpadcloud/patch_selkies_waylanddisplay.py /usr/local/lib/python3.12/dist-packages/selkies_gstreamer/gstwebrtc_app.py \
     && rm -f /opt/dpadcloud/patch_selkies_waylanddisplay.py
@@ -850,12 +730,10 @@ RUN python3 /opt/dpadcloud/patch_selkies_waylanddisplay.py /usr/local/lib/python
 #        mostly present (it pulls webkit2gtk for the store-login browser auth,
 #        libnotify, etc. automatically). Lutris v0.5.22 .deb from the GitHub
 #        releases page (matches the existing Steam.deb / Heroic.deb pattern;
-#        apt resolves the GTK/python/system deps). NOT launched yet — the
-#        entrypoint DPAD_STORE_SHELL gate is a later commit; today the image
-#        still boots Steam. umu-launcher (GE-Proton via umu for non-Steam
-#        Windows games) is DEFERRED to piece 1c: the Battle.net install script
-#        uses runner: wine, so the Wine stack alone makes Lutris functional
-#        for the v1 Battle.net pre-bake (piece 2). STORES-PLAN §7.
+#        apt resolves the GTK/python/system deps). It is opened by the
+#        Battle.net card in the DpadPlay launcher. umu-launcher (GE-Proton via
+#        umu for non-Steam Windows games) is installed below and provides the
+#        tested runtime for the pre-baked Battle.net prefix. STORES-PLAN §7.
 ARG LUTRIS_VERSION=v0.5.22
 ARG LUTRIS_SHA256=88a350357e0438b423cdf93108f27942de094dc19f973df73839f3b0b0bafaa0
 RUN set -e; \
@@ -869,7 +747,7 @@ RUN set -e; \
                            || ( apt-get install -f -y && dpkg -i /tmp/lutris.deb ) ) \
     && rm -f /tmp/lutris.deb && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/games/lutris /usr/bin/lutris \
-    && command -v lutris  # sanity: the Lutris CLI is on PATH (deb ships it in /usr/games, symlink to /usr/bin — same as gamescope)
+    && command -v lutris
 
 #    (e) umu-launcher — the Steam-Linux-Runtime container wrapper for non-Steam
 #        Windows games (STORES-PLAN §10 piece 1c). Replaces raw `wine` in
@@ -920,6 +798,7 @@ RUN set -e; \
 #    ubisoft-launch, dpad-open-url, epic-launch, gog-launch — all small COPYs
 #    consolidated into one layer group for cache efficiency.
 COPY scripts/launcher-shell /opt/dpadcloud/launcher-shell
+COPY scripts/steam-desktop /usr/local/bin/steam
 COPY scripts/launcher-toggle /opt/dpadcloud/launcher-toggle
 COPY scripts/battlenet-launch /opt/dpadcloud/battlenet-launch
 COPY scripts/ea-launch /opt/dpadcloud/ea-launch
@@ -933,6 +812,7 @@ RUN set -e; \
       /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
       /opt/dpadcloud/dpad-open-url /opt/dpadcloud/epic-launch /opt/dpadcloud/gog-launch \
     && chmod +x \
+      /usr/local/bin/steam \
       /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle \
       /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
       /opt/dpadcloud/dpad-open-url /opt/dpadcloud/epic-launch /opt/dpadcloud/gog-launch \
@@ -997,6 +877,8 @@ RUN chmod +x /tmp/build-bootstrap-ea.sh \
     && rm -f /tmp/build-bootstrap-ea.sh \
     && chown -R ${USERNAME}:${USERNAME} /opt/dpadcloud/ea-prefix ${HOME}/.local/share/umu 2>/dev/null || true
 
+HEALTHCHECK --interval=30s --timeout=10s --start-period=360s --retries=3 \
+    CMD /opt/dpadcloud/healthcheck.sh
 EXPOSE 16100/tcp
 # 3478 (coturn TURN) opt-in via -p 3478:3478 at launch. No 8080/47989/47990/41641.
 USER root

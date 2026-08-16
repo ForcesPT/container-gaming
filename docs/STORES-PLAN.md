@@ -1,58 +1,27 @@
 # DpadCloud Container Gaming — Multi-Store Plan (the dpad-launcher shell)
 
-> **2026-08-10 UPDATE — the shell pivot switched from lutris-gamepad-ui
-> (Option B2) to a CUSTOM `dpad-launcher` Electron picker (Option B1).** The
-> §16.9 live test found Lutris is the wrong shape for the goal: it's a
-> *library aggregator* (it imports each store's *installed* games via manifest
-> files — Steam's `libraryfolders.vdf`+`.acf`, etc.), so a fresh VM showed
-> "no games found" until each store was logged in + synced (the `sources` /
-> `service_games` / `games` pga.db tables were empty). We wanted a *store
-> launcher* — a 10-foot front door that just opens the installed store clients.
-> The new `gst-wayland-display` compositor retired the §17.3 Electron-capture
-> blocker (so a custom Electron picker now renders fine), making the owned-UX
-> custom picker (B1, deferred in §1/§6 as a fallback) the simpler choice over
-> Lutris (B2). The `dpad-launcher` is built + pushed
-> (`forcespt/dpadcloud-launcher:0.1.0`) + baked into `:dpad-SteamOS`; it's wired
-> as `DPAD_STORE_SHELL=picker` in `entrypoint.sh`. **Steam launches from its
-> card** (the only “available” store in v1); Battle.net/Epic/GOG/EA/Ubisoft
-> are “coming soon” cards pending the store backends (Battle.net via Proton,
-> Epic/GOG via `legendary`/`gogdl`, the `protobuf` gap — §11 #2). Gamepad is
-> SDL3/koffi (the Web Gamepad API doesn't see the mknod'd pads in-container).
-> See `launcher/README.md` + `PROJECT_STATE.md` (2026-08-10 session). The
-> original B2/Lutris prose below is kept as the design record; the Lutris shell
-> itself is now retired (the `lutris` *package* may still serve as a silent
-> backend for Epic/GOG's legendary/gogdl when those land).
-> **2026-08-15 cleanup:** the retired shell's AppImage, wrapper, entrypoint gate,
-> and probe environment knobs have now been deleted from source. SDL3 stays for
-> dpad-launcher's own koffi gamepad input; the Lutris package stays as a possible
-> compatibility/backend component. Everything below describing the old shell is
-> historical design context, not a supported runtime option.
-
-> **Spec (2026-08).** The plan to add non-Steam stores (Epic + GOG + Battle.net,
-> with EA App + Ubisoft Connect reserved as v1.1 drop-ins) to the
-> `:dpad-SteamOS` image. Today the image runs **one store**: a gamescope-headless
-> session with **Steam as the shell** (`gamescope … -- steam -gamepadui`); users
-> install games on a persistent per-user volume (download-once) or a 200 GB
-> ephemeral rootfs cap. This doc specifies the pivot to a **store-picker shell**
-> so the user is never forced to log into Steam to reach another store —
-> especially important for **ephemeral** users (nothing persists → they'd log
-> into every store every session).
+> **2026-08-16 CURRENT DECISION — DpadPlay launcher only.** The session shell is
+> always the custom `dpad-launcher` Electron store picker. The runtime is
+> `gst-wayland-display` + nested Sway/XWayland; there is no shell/compositor
+> selector. Steam is installed as Valve's official Linux desktop application and
+> its launcher card executes `steam` without a special presentation mode. A
+> `/usr/local/bin/steam` compatibility target also discards obsolete flags from
+> cached launcher bundles and starts `/usr/bin/steam` directly.
 >
-> **Companion:** `PROJECT_STATE.md` (the image state + baked-in fixes + open
-> items), `IMAGE-RUNBOOK.md` (the launch recipe + env-var reference), the
-> `cloud/docs/` set (the control plane that picks the image + writes the
-> bootstrap env).
+> Epic/GOG open Heroic; Battle.net/EA/Ubisoft use their dedicated wrappers over
+> umu/GE-Proton. Lutris remains installed only where useful as a compatibility
+> backend. SDL3 remains for the DpadPlay launcher's koffi gamepad input.
 >
-> **Status:** IMPLEMENTED + DEPLOYED (2026-08-07), live validation PENDING —
-> blocked by a PRE-EXISTING worker↔Scaleway SSH-handshake issue, NOT by the
-> multi-store work. The image + entrypoint gate + wrapper + control-plane env
-> are all built, pushed, + confirmed live on a Paris VM (the VM's
-> `/etc/environment` got `DPAD_STORE_SHELL=lutris` + the open-driver swap + the
-> new image pull all succeeded; the session died in the bootstrap-vm-ready
-> poll — see §16). Decisions locked 2026-08 (the DECISION block at the
-> bottom).
+> **Source status:** implemented and guarded by
+> `scripts/test_launcher_only_architecture.py`; a new immutable GPU-canary image
+> is still required before registry promotion. `PROJECT_STATE.md` and
+> `IMAGE-RUNBOOK.md` are the operational sources of truth.
+>
+> Everything from §0 onward is retained as the historical design record that led
+> to the custom launcher. Statements describing Steam, Lutris, or another app as
+> the session shell are superseded by this block.
 
-## 0. TL;DR — the pivot
+## 0. Historical pivot record (superseded)
 
 The shell stops being Steam and becomes **`lutris-gamepad-ui`** (a gamepad-
 navigable 10-foot-UI frontend over Lutris). The gamescope-headless + Selkies

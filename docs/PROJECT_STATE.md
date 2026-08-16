@@ -11,8 +11,27 @@
 > **Companion:** `IMAGE-RUNBOOK.md` (the launch recipe + env-var reference +
 > troubleshooting — the operational runbook), `cloud/docs/STATUS.md` (the
 > control-plane handoff), `cloud/docs/V2-PLAN.md` (the post-Vast architecture),
-> **`WAYLAND-ARCHITECTURE.md`** (the 2026-08-08 compositor pivot decision —
-> adopts `gst-wayland-display`, retires the §6 #11 Lutris-capture blocker).
+> **`WAYLAND-ARCHITECTURE.md`** (the compositor pivot decision and historical
+> validation record).
+>
+> **2026-08-16 launcher-only Steam desktop — CURRENT SOURCE RESUME POINT.**
+> The runtime now has exactly one architecture: Selkies/
+> `gst-wayland-display` → nested Sway/XWayland → DpadPlay launcher. The DpadPlay
+> launcher is always the session shell. Its Steam card starts Valve's official
+> Linux desktop client with no special presentation mode. The image build no
+> longer installs the retired compositor, its patched builder/binaries, capture
+> bridge, runtime functions, probes, or selection variables. The old Steam-shell
+> fallback and all old shell/compositor env gates are gone from `entrypoint.sh`,
+> `dpad-launch-session`, and `vm-bootstrap.sh`. A compatibility wrapper at
+> `/usr/local/bin/steam` starts `/usr/bin/steam` without inherited launcher
+> presentation flags, so the already-published cached launcher bundle cannot
+> restore the removed mode. Regression guard:
+> `python3 scripts/test_launcher_only_architecture.py`.
+>
+> **Release state:** this is implemented and source-validated, but it is not yet
+> a new registry release. The existing `r4` digest below remains the current
+> published image until a Docker-capable NVIDIA builder creates and canaries a
+> new immutable tag.
 >
 > **2026-08-16 Selkies browser UI overlay — CURRENT.**
 > `scripts/patch_live_resolution.py` now restyles the Selkies 1.6.2 navigation
