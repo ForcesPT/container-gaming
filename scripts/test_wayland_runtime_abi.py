@@ -27,4 +27,8 @@ plugin_at = dockerfile.index(
 if copy_at > plugin_at:
     raise SystemExit("libwayland-server must be installed before the GStreamer plugin")
 
-print("waylanddisplaysrc runtime ABI is bundled")
+healthcheck = (root / "healthcheck.sh").read_text()
+if "gst-inspect-1.0 waylanddisplaysrc" not in healthcheck:
+    raise SystemExit("healthcheck does not detect a blacklisted Wayland compositor plugin")
+
+print("waylanddisplaysrc runtime ABI is bundled and health-checked")
