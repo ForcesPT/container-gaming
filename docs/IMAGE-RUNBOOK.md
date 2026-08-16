@@ -7,17 +7,24 @@
 > Linux desktop client, installed in the image and opened from the Steam card.
 > There is no alternate compositor, Steam shell, or Big Picture startup path.
 >
-> Current release: `forcespt/dpadcloud-gaming:dpad-SteamOS-2026.08.16-r7` and
+> Current release: `forcespt/dpadcloud-gaming:dpad-SteamOS-2026.08.16-r8` and
 > convenience tag `:dpad-SteamOS`, both digest
-> `sha256:b85954a28aa37c8e9c2bb1e86db7314b5eecaa6136f4cf8c0d5fed4c5b259209`.
-> It was built and GPU/restart-smoke-tested on OVH L4 from revision
-> `14f30e4489126c994175ec862e94559e2ef1280b`.
+> `sha256:00c837725076e8a46f083b7edc21873a58914de35f9b68c9c00a6ea827d008c2`.
+> It was built and GPU/restart-tested on an OVH NVIDIA L4 from runtime revision
+> `f8b69b57255f1f1ad5f634f991478f66add13cdb`. Production OVH is pinned to
+> this immutable digest; `r7` digest
+> `sha256:b85954a28aa37c8e9c2bb1e86db7314b5eecaa6136f4cf8c0d5fed4c5b259209`
+> is the immediate rollback.
 >
-> Desktop-persistence changes after `r7` are source-validated and passed both
-> the deterministic signaling-peer test and repeated real headless-Chromium
-> video decode/reconnect cycles on an OVH L4 spike build, but are not yet in the
-> current release. On a GPU builder, validate a candidate with:
+> `r8` preserves the same Smithay compositor, Wayland socket, nested Sway,
+> XWayland, and DpadPlay launcher across transient signaling/browser disconnects.
+> It also removes process-owned stale Wayland socket paths and the stale Sway
+> health marker before a genuinely new Selkies process, allowing Docker restart
+> and Selkies relaunch recovery without touching a live reconnect-persistent
+> compositor. On a GPU builder, validate a candidate with:
 > `python3 scripts/test_reconnect_persistence_gpu.py <candidate-image>`.
+> A release gate also requires real Chromium decode/input cycles before and
+> after Docker restart; an SDP offer alone is not sufficient media evidence.
 
 ## Build and publish
 
@@ -158,7 +165,8 @@ Useful logs inside the container:
 | No audio | Verify `pipewire`, `pipewire-pulse`, the Pulse socket, `dummy` sink, and `dummy.monitor`. |
 | No gamepad | Check Selkies joystick sockets/nodes and the selected interposer. The DpadPlay launcher itself uses SDL3 through koffi. |
 | No TURN relay | Verify the correct UDP/TCP port mapping and `DPAD_TURN_PUBLIC_IP`; signaling without a relay is not enough. |
-| Browser remains on waiting state after reconnect | The health loop restarts Selkies and Sway. Check whether either process is repeatedly crashing before retrying the browser. |
+| Browser remains on waiting state after reconnect | A peer disconnect must not restart Selkies or the nested desktop. Check `/tmp/selkies.log` for pipeline errors and verify the Sway/XWayland/launcher PID+start-time identities and the `wayland-N` socket inode did not change. A dead Selkies process is a separate process-relaunch path. |
+| Container remains `starting` after Docker restart | Confirm the entrypoint cleaned stale numeric `wayland-N` socket/lock paths and `/tmp/sway-client.log` immediately before starting the new Selkies process. Do not move this cleanup into peer-disconnect handling. |
 | Live resolution changed but old size remains | Use the drawer's Refresh action after selecting a resolution; NVENC/WebRTC requires a fresh peer pipeline. |
 
 ## Source validation
