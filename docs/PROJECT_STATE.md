@@ -14,7 +14,16 @@
 > **`WAYLAND-ARCHITECTURE.md`** (the 2026-08-08 compositor pivot decision —
 > adopts `gst-wayland-display`, retires the §6 #11 Lutris-capture blocker).
 >
-> **2026-08-15 `r3` component-cleanup release — CURRENT.**
+> **2026-08-16 Selkies browser UI overlay — CURRENT.**
+> `scripts/patch_live_resolution.py` now restyles the Selkies 1.6.2 navigation
+> drawer with the DpadPlay dark monochrome design system, keeps the selected
+> resolution visible across the required reconnect, and places a clear
+> **Manual refresh required** notice plus Refresh button immediately below the
+> Resolution selector. Resolution changes remain intentionally manual-refresh:
+> NVENC does not renegotiate dimensions in-place. The runtime overlay is fetched
+> from `main` at container boot; no `r4` image has been published for this UI.
+>
+> **2026-08-15 `r3` component-cleanup release — CURRENT IMAGE.**
 > The gaming image no longer installs or starts an in-container tunnel daemon:
 > production HTTPS is `play-<session>.dpadplay.com` → Caddy → stream-bridge →
 > the VM's published Selkies port. The retired alternate gamepad shell and its
