@@ -16,6 +16,7 @@ from __future__ import annotations
 import glob
 import os
 import re
+import tempfile
 from pathlib import Path
 
 PATCH_ROOT = os.environ.get("DPAD_PATCH_ROOT", "").rstrip("/")
@@ -38,7 +39,28 @@ def patch_file(path: str, guard, transform) -> None:
     updated = transform(source)
     if updated is None:
         raise RuntimeError(f"FAIL {path} (anchor not found)")
-    Path(actual).write_text(updated, encoding="utf-8")
+    if not guard(updated):
+        raise RuntimeError(f"FAIL {path} (postcondition failed)")
+    target = Path(actual)
+    temporary: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=target.parent,
+            prefix=f".{target.name}.dpad-",
+            delete=False,
+        ) as handle:
+            handle.write(updated)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary = handle.name
+        os.chmod(temporary, target.stat().st_mode)
+        os.replace(temporary, target)
+        temporary = None
+    finally:
+        if temporary is not None:
+            Path(temporary).unlink(missing_ok=True)
     print(f"OK {path} patched")
 
 
@@ -165,11 +187,6 @@ DPAD_STYLE = r'''
     .fab-container.v-btn:hover { right: 6px !important; opacity: 1 !important; border-color: var(--dpad-h2); transform: translateY(-1px); }
     .fab-container .v-icon { color: var(--dpad-v9) !important; font-size: 19px; }
     .loading { color: var(--dpad-v7) !important; font-family: ui-monospace, monospace; font-size: 11px; letter-spacing: .04em; }
-    .loading:before {
-      content: "D"; display: flex; width: 34px; height: 34px; align-items: center; justify-content: center;
-      margin: 0 auto 15px; border-radius: 9px; background: linear-gradient(135deg,#fff,var(--dpad-v8));
-      color: var(--dpad-v0); font: 900 14px Inter, sans-serif; box-shadow: 0 0 30px -8px rgba(247,248,250,.55);
-    }
     .loading .v-btn { border-radius: 8px; background: var(--dpad-v9) !important; color: var(--dpad-v0) !important; box-shadow: none !important; }
     @media (max-width: 520px) {
       .dpad-drawer.v-navigation-drawer { width: 100vw !important; max-width: 100vw !important; }
@@ -210,6 +227,66 @@ DPAD_SETTINGS_TAB_STYLE = r'''
 '''
 
 
+DPAD_STREAM_POLISH_STYLE = r'''
+    /* DPAD_STREAM_POLISH_V4 — centered edge capsule and website loading atmosphere. */
+    .fab-container.v-btn, .fab-container.v-btn:hover {
+      top: 50% !important; right: -18px !important;
+      width: 64px; height: 44px; min-width: 64px !important;
+      padding: 0 !important; border-radius: 999px !important; overflow: hidden;
+      display: flex !important; align-items: center !important; justify-content: center !important;
+      transform: translateY(-50%) !important;
+    }
+    .fab-container.v-btn:before { border-radius: inherit !important; }
+    .fab-container .v-btn__content {
+      width: 100%; height: 100%; padding: 0;
+      display: flex !important; align-items: center !important; justify-content: center !important;
+      line-height: 1 !important; transform: translateX(-9px);
+    }
+    .fab-container .v-icon {
+      display: flex !important; align-items: center; justify-content: center;
+      margin: 0 !important; line-height: 1 !important; vertical-align: middle;
+    }
+    .loading {
+      position: fixed !important; inset: 0 !important; z-index: 7;
+      width: auto !important; height: auto !important;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      overflow: hidden; isolation: isolate;
+      background:
+        radial-gradient(620px 420px at 78% 8%, rgba(247,248,250,.055), transparent 60%),
+        radial-gradient(520px 380px at 12% 92%, rgba(58,65,80,.09), transparent 60%),
+        #08090a;
+    }
+    .loading:before {
+      content: ""; position: absolute; inset: -8%; z-index: -2; pointer-events: none;
+      background-image:
+        linear-gradient(to right, rgba(255,255,255,.045) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255,255,255,.045) 1px, transparent 1px);
+      background-size: 28px 28px;
+      -webkit-mask-image: radial-gradient(ellipse 78% 82% at 78% 8%, #000 16%, transparent 76%);
+      mask-image: radial-gradient(ellipse 78% 82% at 78% 8%, #000 16%, transparent 76%);
+      animation: dpad-loading-drift 9s ease-in-out infinite alternate;
+    }
+    .loading:after {
+      content: ""; position: absolute; inset: -35% 0; z-index: -1; pointer-events: none;
+      background: linear-gradient(180deg, transparent 42%, rgba(247,248,250,.055) 50%, transparent 58%);
+      filter: blur(10px); animation: dpad-loading-scan 6.5s linear infinite;
+    }
+    .loading > * { position: relative; z-index: 1; }
+    @keyframes dpad-loading-drift {
+      from { transform: translate3d(-1.5%, -1%, 0) scale(1); opacity: .62; }
+      to { transform: translate3d(1.5%, 1%, 0) scale(1.035); opacity: .9; }
+    }
+    @keyframes dpad-loading-scan {
+      from { transform: translateY(-34%); opacity: 0; }
+      12%, 88% { opacity: 1; }
+      to { transform: translateY(34%); opacity: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .loading:before, .loading:after { animation: none !important; }
+    }
+'''
+
+
 def resolution_block() -> str:
     return '''              <p class="dpad-resolution-control">
                 <v-select :items="videoResolutionOptions" label="Resolution" menu-props="left"
@@ -229,6 +306,15 @@ def resolution_block() -> str:
 def patch_index(source: str) -> str | None:
     updated = source
 
+    # Remove the rejected V1 logo-letter loading badge during upgrades.
+    updated = re.sub(
+        r'\n\s*\.loading:before \{\n\s*content: "D";.*?\n\s*\}\n',
+        "\n",
+        updated,
+        count=1,
+        flags=re.DOTALL,
+    )
+
     if "DPAD_STREAM_UI_V2" not in updated:
         if "</style>" not in updated:
             return None
@@ -238,6 +324,10 @@ def patch_index(source: str) -> str | None:
         if "</style>" not in updated:
             return None
         updated = updated.replace("</style>", DPAD_SETTINGS_TAB_STYLE + "\n  </style>", 1)
+    if "DPAD_STREAM_POLISH_V4" not in updated:
+        if "</style>" not in updated:
+            return None
+        updated = updated.replace("</style>", DPAD_STREAM_POLISH_STYLE + "\n  </style>", 1)
 
     updated = updated.replace('<meta name="theme-color" content="black"/>', '<meta name="theme-color" content="#08090a"/>')
     updated = updated.replace("<title>Selkies - webrtc</title>", "<title>DpadPlay Stream</title>")
@@ -366,6 +456,8 @@ patch_file(
     lambda source: (
         "DPAD_STREAM_UI_V2" in source
         and "DPAD_SETTINGS_TAB_V3" in source
+        and "DPAD_STREAM_POLISH_V4" in source
+        and 'content: "D"' not in source
         and "dpad-resolution-note" in source
         and 'class="dpad-drawer"' in source
         and '<v-icon>tune</v-icon>' in source

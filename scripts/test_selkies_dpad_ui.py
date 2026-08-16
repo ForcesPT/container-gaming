@@ -174,13 +174,25 @@ def test_brands_selkies_and_places_manual_refresh_notice_by_resolution() -> None
         # Detached Vuetify menus need explicit dark list/tile colors.
         assert '.v-menu__content .v-list__tile__title' in html
         assert 'background: var(--dpad-v2) !important' in html
-        # The settings launcher is an edge-attached oval tab: most of it stays
-        # visible while the right side touches/extends past the viewport edge.
+        # The settings launcher is a true edge-attached capsule with its icon
+        # centered in both axes inside the visible portion.
         assert '.fab-container .v-btn__content' in html
-        assert 'right: -14px !important' in html
-        assert 'width: 54px; height: 42px' in html
+        assert 'DPAD_STREAM_POLISH_V4' in html
+        assert 'right: -18px !important' in html
+        assert 'width: 64px; height: 44px' in html
         assert 'border-radius: 999px !important' in html
-        assert 'transform: translateX(-7px)' in html
+        assert 'transform: translateY(-50%)' in html
+        assert 'align-items: center !important' in html
+        assert 'justify-content: center !important' in html
+        assert 'transform: translateX(-9px)' in html
+
+        # Loading uses the website's monochrome aurora/grid treatment, never a
+        # logo letter, and disables ambient motion for reduced-motion users.
+        assert 'content: "D"' not in html
+        assert 'dpad-loading-drift' in html
+        assert 'dpad-loading-scan' in html
+        assert 'radial-gradient(620px 420px at 78% 8%' in html
+        assert '@media (prefers-reduced-motion: reduce)' in html
 
         assert "videoResolution: window.localStorage.getItem" in app
         assert "|| '2560x1440'" in app
@@ -308,8 +320,16 @@ def test_migrates_v1_drawer_to_v2_without_losing_actions() -> None:
             r'\.fab-container \.v-btn__content \{.*?\}\s*',
             re.DOTALL,
         )
+        def without_v4(source: str) -> str:
+            marker = source.index("/* DPAD_STREAM_POLISH_V4")
+            start = source.rfind("\n", 0, marker) + 1
+            end = source.index("  </style>", marker)
+            return source[:start] + source[end:]
+
         active_v2_html, removed = settings_v3.subn("\n", html, count=1)
         assert removed == 1 and "DPAD_SETTINGS_TAB_V3" not in active_v2_html
+        active_v2_html = without_v4(active_v2_html)
+        assert "DPAD_STREAM_POLISH_V4" not in active_v2_html
         (web / "index.html").write_text(active_v2_html, encoding="utf-8")
         v2_migration = subprocess.run(
             [sys.executable, str(PATCHER)], env=env, text=True,
@@ -318,7 +338,8 @@ def test_migrates_v1_drawer_to_v2_without_losing_actions() -> None:
         assert v2_migration.returncode == 0, v2_migration.stdout + v2_migration.stderr
         html = (web / "index.html").read_text(encoding="utf-8")
         assert html.count("DPAD_SETTINGS_TAB_V3") == 1
-        assert html.index("DPAD_STREAM_UI_V2") < html.index("DPAD_SETTINGS_TAB_V3")
+        assert html.count("DPAD_STREAM_POLISH_V4") == 1
+        assert html.index("DPAD_STREAM_UI_V2") < html.index("DPAD_SETTINGS_TAB_V3") < html.index("DPAD_STREAM_POLISH_V4")
 
         # Reconstruct the relevant V1 layout: actions embedded at the end of
         # telemetry, V1 marker, persistent outer loading element.
@@ -338,6 +359,8 @@ def test_migrates_v1_drawer_to_v2_without_losing_actions() -> None:
         v1_html = v1_html.replace("DPAD_STREAM_UI_V2", "DPAD_STREAM_UI_V1")
         v1_html, removed = settings_v3.subn("\n", v1_html, count=1)
         assert removed == 1 and "DPAD_SETTINGS_TAB_V3" not in v1_html
+        v1_html = without_v4(v1_html)
+        assert "DPAD_STREAM_POLISH_V4" not in v1_html
         v1_html = v1_html.replace(
             '<div v-if="status !== \'connected\' || showStart" class="loading">',
             '<div class="loading">',
@@ -352,6 +375,8 @@ def test_migrates_v1_drawer_to_v2_without_losing_actions() -> None:
         migrated = (web / "index.html").read_text(encoding="utf-8")
         assert "DPAD_STREAM_UI_V2" in migrated
         assert migrated.count("DPAD_SETTINGS_TAB_V3") == 1
+        assert migrated.count("DPAD_STREAM_POLISH_V4") == 1
+        assert migrated.index("DPAD_STREAM_UI_V2") < migrated.index("DPAD_SETTINGS_TAB_V3") < migrated.index("DPAD_STREAM_POLISH_V4")
         assert migrated.count('<div class="dpad-action-card">') == 1
         assert migrated.index("Session actions") < migrated.index("Stream telemetry")
         for icon in ("fullscreen", "file_copy", "home", "videogame_asset", "account_circle"):
@@ -359,7 +384,75 @@ def test_migrates_v1_drawer_to_v2_without_losing_actions() -> None:
         assert 'v-if="status !== \'connected\' || showStart" class="loading"' in migrated
 
 
+def test_migrates_v3_logo_loading_badge_to_v4_atmosphere() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        web = root / "opt/gst-web"
+        web.mkdir(parents=True)
+        (web / "index.html").write_text(INDEX_FIXTURE, encoding="utf-8")
+        (web / "app.js").write_text(APP_FIXTURE, encoding="utf-8")
+        env = os.environ | {"DPAD_PATCH_ROOT": str(root)}
+
+        first = subprocess.run(
+            [sys.executable, str(PATCHER)], env=env, text=True,
+            capture_output=True, check=False,
+        )
+        assert first.returncode == 0, first.stdout + first.stderr
+        html = (web / "index.html").read_text(encoding="utf-8")
+        v4_start = html.index("    /* DPAD_STREAM_POLISH_V4")
+        v4_end = html.index("  </style>", v4_start)
+        old_badge = '''    .loading:before {
+      content: "D"; display: flex; width: 34px; height: 34px; align-items: center; justify-content: center;
+      margin: 0 auto 15px; border-radius: 9px; background: linear-gradient(135deg,#fff,var(--dpad-v8));
+      color: var(--dpad-v0); font: 900 14px Inter, sans-serif; box-shadow: 0 0 30px -8px rgba(247,248,250,.55);
+    }
+'''
+        legacy_v3 = html[:v4_start] + old_badge + html[v4_end:]
+        assert "DPAD_SETTINGS_TAB_V3" in legacy_v3
+        assert "DPAD_STREAM_POLISH_V4" not in legacy_v3
+        assert 'content: "D"' in legacy_v3
+        (web / "index.html").write_text(legacy_v3, encoding="utf-8")
+
+        migration = subprocess.run(
+            [sys.executable, str(PATCHER)], env=env, text=True,
+            capture_output=True, check=False,
+        )
+        assert migration.returncode == 0, migration.stdout + migration.stderr
+        migrated = (web / "index.html").read_text(encoding="utf-8")
+        assert migrated.count("DPAD_STREAM_POLISH_V4") == 1
+        assert 'content: "D"' not in migrated
+        assert "dpad-loading-drift" in migrated
+
+        rerun = subprocess.run(
+            [sys.executable, str(PATCHER)], env=env, text=True,
+            capture_output=True, check=False,
+        )
+        assert rerun.returncode == 0, rerun.stdout + rerun.stderr
+        assert (web / "index.html").read_text(encoding="utf-8") == migrated
+
+
+def test_fails_closed_and_preserves_html_when_required_anchor_moves() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        web = root / "opt/gst-web"
+        web.mkdir(parents=True)
+        malformed = INDEX_FIXTURE.replace('class="fab-container"', 'class="upstream-renamed-fab"')
+        (web / "index.html").write_text(malformed, encoding="utf-8")
+        (web / "app.js").write_text(APP_FIXTURE, encoding="utf-8")
+        env = os.environ | {"DPAD_PATCH_ROOT": str(root)}
+
+        result = subprocess.run(
+            [sys.executable, str(PATCHER)], env=env, text=True,
+            capture_output=True, check=False,
+        )
+        assert result.returncode != 0
+        assert "postcondition failed" in result.stderr
+        assert (web / "index.html").read_text(encoding="utf-8") == malformed
+
+
 if __name__ == "__main__":
     test_brands_selkies_and_places_manual_refresh_notice_by_resolution()
     test_migrates_v1_drawer_to_v2_without_losing_actions()
+    test_migrates_v3_logo_loading_badge_to_v4_atmosphere()
+    test_fails_closed_and_preserves_html_when_required_anchor_moves()
     print("Selkies DpadPlay UI patch: PASS")
