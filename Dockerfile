@@ -482,6 +482,7 @@ RUN set -e; \
     && meson compile -C build \
     && meson install -C build \
     && ldconfig \
+    && objdump -T /usr/local/lib/x86_64-linux-gnu/libwayland-server.so.0 | grep -q 'wl_client_set_max_buffer_size' \
     && rm -rf "/tmp/wayland-${LIBWAYLAND_VERSION}" "/tmp/${WAYLAND_ARCHIVE}" \
     && test -f /usr/local/lib/x86_64-linux-gnu/libwayland-server.so.0
 ENV PKG_CONFIG_PATH=/usr/local/lib/x86_64-linux-gnu/pkgconfig:/opt/gstreamer/lib/x86_64-linux-gnu/pkgconfig
@@ -714,8 +715,7 @@ RUN set -e; \
 #     the plugin; otherwise GStreamer blacklists libgstwaylanddisplaysrc.so and
 #     Selkies crashes on peer connect because ElementFactory.make returns None.
 COPY --from=wayland-display-builder /usr/local/lib/x86_64-linux-gnu/libwayland-server.so.0* /usr/local/lib/x86_64-linux-gnu/
-RUN ldconfig \
-    && objdump -T /usr/local/lib/x86_64-linux-gnu/libwayland-server.so.0 | grep -q 'wl_client_set_max_buffer_size'
+RUN ldconfig
 COPY --from=wayland-display-builder /out/lib/x86_64-linux-gnu/gstreamer-1.0/libgstwaylanddisplaysrc.so /opt/gstreamer/lib/x86_64-linux-gnu/gstreamer-1.0/libgstwaylanddisplaysrc.so
 
 # Apply the waylanddisplaysrc capture branch to Selkies. The entrypoint always

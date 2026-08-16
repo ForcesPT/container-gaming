@@ -16,8 +16,14 @@ if runtime_copy not in dockerfile:
         "waylanddisplaysrc will blacklist with undefined symbol "
         "wl_client_set_max_buffer_size on Ubuntu 24.04"
     )
-if "objdump -T /usr/local/lib/x86_64-linux-gnu/libwayland-server.so.0" not in dockerfile:
+symbol_probe = "objdump -T /usr/local/lib/x86_64-linux-gnu/libwayland-server.so.0"
+if symbol_probe not in dockerfile:
     raise SystemExit("Dockerfile does not verify the required libwayland runtime symbol")
+if dockerfile.index(symbol_probe) > dockerfile.index("FROM base AS vast-vm"):
+    raise SystemExit(
+        "libwayland symbol verification runs in vast-vm where objdump is unavailable; "
+        "verify it in wayland-display-builder instead"
+    )
 
 copy_at = dockerfile.index(runtime_copy)
 plugin_at = dockerfile.index(
