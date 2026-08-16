@@ -200,6 +200,16 @@ DPAD_V2_FIX_STYLE = r'''
 '''
 
 
+DPAD_SETTINGS_TAB_STYLE = r'''
+    /* DPAD_SETTINGS_TAB_V3 — edge-attached oval settings control. */
+    .fab-container.v-btn, .fab-container.v-btn:hover {
+      right: -14px !important; width: 54px; height: 42px; min-width: 54px !important;
+      padding: 0 !important; border-radius: 999px !important;
+    }
+    .fab-container .v-btn__content { transform: translateX(-7px); }
+'''
+
+
 def resolution_block() -> str:
     return '''              <p class="dpad-resolution-control">
                 <v-select :items="videoResolutionOptions" label="Resolution" menu-props="left"
@@ -224,6 +234,10 @@ def patch_index(source: str) -> str | None:
             return None
         style = DPAD_V2_FIX_STYLE if "DPAD_STREAM_UI_V1" in updated else DPAD_STYLE
         updated = updated.replace("</style>", style + "\n  </style>", 1)
+    if "DPAD_SETTINGS_TAB_V3" not in updated:
+        if "</style>" not in updated:
+            return None
+        updated = updated.replace("</style>", DPAD_SETTINGS_TAB_STYLE + "\n  </style>", 1)
 
     updated = updated.replace('<meta name="theme-color" content="black"/>', '<meta name="theme-color" content="#08090a"/>')
     updated = updated.replace("<title>Selkies - webrtc</title>", "<title>DpadPlay Stream</title>")
@@ -351,6 +365,7 @@ patch_file(
     "/opt/gst-web/index.html",
     lambda source: (
         "DPAD_STREAM_UI_V2" in source
+        and "DPAD_SETTINGS_TAB_V3" in source
         and "dpad-resolution-note" in source
         and 'class="dpad-drawer"' in source
         and '<v-icon>tune</v-icon>' in source

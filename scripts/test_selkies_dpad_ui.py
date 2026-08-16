@@ -171,13 +171,16 @@ def test_brands_selkies_and_places_manual_refresh_notice_by_resolution() -> None
             assert f'>{icon}<' in action_html
         assert '<v-btn block icon' not in action_html
 
-        # Detached Vuetify menus need explicit dark list/tile colors, and the
-        # settings launcher is a compact circular control at the right edge.
+        # Detached Vuetify menus need explicit dark list/tile colors.
         assert '.v-menu__content .v-list__tile__title' in html
         assert 'background: var(--dpad-v2) !important' in html
-        assert 'right: 6px !important' in html
-        assert 'width: 38px; height: 38px' in html
+        # The settings launcher is an edge-attached oval tab: most of it stays
+        # visible while the right side touches/extends past the viewport edge.
+        assert '.fab-container .v-btn__content' in html
+        assert 'right: -14px !important' in html
+        assert 'width: 54px; height: 42px' in html
         assert 'border-radius: 999px !important' in html
+        assert 'transform: translateX(-7px)' in html
 
         assert "videoResolution: window.localStorage.getItem" in app
         assert "|| '2560x1440'" in app
@@ -300,6 +303,23 @@ def test_migrates_v1_drawer_to_v2_without_losing_actions() -> None:
         assert first.returncode == 0, first.stdout + first.stderr
         html = (web / "index.html").read_text(encoding="utf-8")
 
+        settings_v3 = re.compile(
+            r'\s*/\* DPAD_SETTINGS_TAB_V3.*?\*/.*?'
+            r'\.fab-container \.v-btn__content \{.*?\}\s*',
+            re.DOTALL,
+        )
+        active_v2_html, removed = settings_v3.subn("\n", html, count=1)
+        assert removed == 1 and "DPAD_SETTINGS_TAB_V3" not in active_v2_html
+        (web / "index.html").write_text(active_v2_html, encoding="utf-8")
+        v2_migration = subprocess.run(
+            [sys.executable, str(PATCHER)], env=env, text=True,
+            capture_output=True, check=False,
+        )
+        assert v2_migration.returncode == 0, v2_migration.stdout + v2_migration.stderr
+        html = (web / "index.html").read_text(encoding="utf-8")
+        assert html.count("DPAD_SETTINGS_TAB_V3") == 1
+        assert html.index("DPAD_STREAM_UI_V2") < html.index("DPAD_SETTINGS_TAB_V3")
+
         # Reconstruct the relevant V1 layout: actions embedded at the end of
         # telemetry, V1 marker, persistent outer loading element.
         section = re.search(
@@ -316,6 +336,8 @@ def test_migrates_v1_drawer_to_v2_without_losing_actions() -> None:
         telemetry_end = v1_html.index("</v-toolbar>")
         v1_html = v1_html[:telemetry_end] + "\n" + actions + "\n                " + v1_html[telemetry_end:]
         v1_html = v1_html.replace("DPAD_STREAM_UI_V2", "DPAD_STREAM_UI_V1")
+        v1_html, removed = settings_v3.subn("\n", v1_html, count=1)
+        assert removed == 1 and "DPAD_SETTINGS_TAB_V3" not in v1_html
         v1_html = v1_html.replace(
             '<div v-if="status !== \'connected\' || showStart" class="loading">',
             '<div class="loading">',
@@ -329,6 +351,7 @@ def test_migrates_v1_drawer_to_v2_without_losing_actions() -> None:
         assert migration.returncode == 0, migration.stdout + migration.stderr
         migrated = (web / "index.html").read_text(encoding="utf-8")
         assert "DPAD_STREAM_UI_V2" in migrated
+        assert migrated.count("DPAD_SETTINGS_TAB_V3") == 1
         assert migrated.count('<div class="dpad-action-card">') == 1
         assert migrated.index("Session actions") < migrated.index("Stream telemetry")
         for icon in ("fullscreen", "file_copy", "home", "videogame_asset", "account_circle"):
