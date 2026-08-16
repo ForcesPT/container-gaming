@@ -14,23 +14,21 @@
 > **`WAYLAND-ARCHITECTURE.md`** (the compositor pivot decision and historical
 > validation record).
 >
-> **2026-08-16 `r7` per-session FPS release — CURRENT REGISTRY IMAGE + OVH
-> PRODUCTION PIN.** Source revision
+> **2026-08-16 `r7` per-session FPS release — PREVIOUS RELEASE / CURRENT
+> ROLLBACK.** Source revision
 > `14f30e4489126c994175ec862e94559e2ef1280b` was independently security-reviewed,
 > cloned cleanly on an OVH GRA11 NVIDIA L4 builder, and passed the architecture,
 > obsolete-component, Selkies patch, Wayland ABI, exact-pin/mutation, shell, and
 > BuildKit checks. The immutable
-> `forcespt/dpadcloud-gaming:dpad-SteamOS-2026.08.16-r7` and convenience
-> `:dpad-SteamOS` tags both resolve to digest
+> `forcespt/dpadcloud-gaming:dpad-SteamOS-2026.08.16-r7` resolves to digest
 > `sha256:b85954a28aa37c8e9c2bb1e86db7314b5eecaa6136f4cf8c0d5fed4c5b259209`.
 > Automated structural/GPU checks verified NVIDIA L4 driver 580.159.03,
 > Steam desktop targets, absence of Gamescope, Selkies, `waylanddisplaysrc`,
 > NVENC H.264, and fail-closed FPS validation. A full container boot at 144 FPS
 > reached healthy, the Selkies process command contained `--framerate=144`, and
 > a Docker restart returned healthy with system D-Bus and 144 FPS recovered.
-> The production OVH immutable override now pins this exact digest; the prior
-> `r5` digest remains the rollback. Human browser media/input validation was
-> explicitly deferred because the user was unavailable.
+> It was the production pin before `r8` and is retained as the immediate
+> rollback digest.
 >
 > `dpad-launch-session` now forwards `DPAD_STREAM_FPS` into each
 > container and the launcher-only entrypoint passes it to Selkies through
@@ -42,8 +40,8 @@
 > of Selkies silently starting at its default. Regression guard:
 > `python3 scripts/test_stream_fps_plumbing.py`.
 >
-> **2026-08-16 desktop persistence across browser reconnects — SOURCE + OVH
-> GPU SPIKE COMPLETE, RELEASE PENDING.** The exact failure was reproduced
+> **2026-08-16 `r8` desktop persistence release — CURRENT REGISTRY IMAGE + OVH
+> PRODUCTION PIN.** The exact failure was reproduced
 > without a human browser: Selkies 1.6.2 calls `app.stop_pipeline()` when the
 > signaling peer disconnects; pipeline `NULL` calls `waylanddisplaysrc::stop()`,
 > which dropped its Smithay `WaylandDisplay`, removed `wayland-N`, and killed
@@ -66,8 +64,21 @@
 > test observes the old candidate RED, then requires restart health recovery and
 > a successful third peer lifecycle. Unit/source tests cover the Docker build
 > wiring and both initial/relaunch cleanup call sites. Selkies' separate
-> audio-peer reconnect error path remains a distinct follow-up. A reviewed
-> immutable image release is still required before production promotion.
+> audio-peer reconnect error path remains a distinct follow-up.
+>
+> Final source revision `f8b69b57255f1f1ad5f634f991478f66add13cdb`
+> passed the fail-closed review gate and was rebuilt cleanly on the NVIDIA L4.
+> The exact final image passed three deterministic signaling lifecycles, Docker
+> restart recovery, and three real Chromium video/input cycles (64, 62, and 62
+> decoded 1920x1080 frames, with the middle cycle preserving the exact desktop
+> identities and socket inode and the final cycle occurring after restart).
+> `forcespt/dpadcloud-gaming:dpad-SteamOS-2026.08.16-r8` and `:dpad-SteamOS`
+> both resolve to immutable digest
+> `sha256:00c837725076e8a46f083b7edc21873a58914de35f9b68c9c00a6ea827d008c2`.
+> Production was promoted only after confirming zero active sessions; the
+> worker's configured and running immutable reference match this digest, the
+> worker is running, and the internal API health check returns HTTP 200. The
+> `r7` digest remains the immediate rollback.
 >
 > **2026-08-16 `r6` launcher-only reliability release — PREVIOUS RELEASE.**
 > Source revision `06927d2f61f1e9125e16bc07c7b61c9105ca1f84` was
