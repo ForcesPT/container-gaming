@@ -365,7 +365,8 @@ RUN mkdir -p /etc/X11 && \
 # --- 11. COPY configs + entrypoint + common launcher scripts + display-driver installer ---
 COPY configs/ ${HOME}/.config/
 COPY configs/xorg/xorg.conf.template /opt/dpadcloud/xorg.conf.template
-COPY entrypoint.sh healthcheck.sh scripts/evdev_bridge.py scripts/extract-nvrtc.sh /opt/dpadcloud/
+COPY entrypoint.sh healthcheck.sh scripts/evdev_bridge.py scripts/extract-nvrtc.sh scripts/dpad-validate-stream-fps /opt/dpadcloud/
+RUN chmod +x /opt/dpadcloud/dpad-validate-stream-fps
 # vgl-steam / proton-wined3d / vgl-test = the Xvfb+VGL debug launchers (kept as
 # manual debug fallbacks). dpad-launch (the deprecated Vast steamcmd headless
 # launcher, no Steam UI — docs/PROJECT_STATE.md §7) is NO LONGER baked in.

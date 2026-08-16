@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fps="${1:-60}"
+case "$fps" in
+    30|60|120|144|240)
+        printf '%s\n' "$fps"
+        ;;
+    *)
+        printf 'Invalid DPAD_STREAM_FPS: %q (supported: 30, 60, 120, 144, 240)\n' "$fps" >&2
+        exit 2
+        ;;
+esac

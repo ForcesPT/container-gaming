@@ -46,6 +46,9 @@
 # Env (read from /etc/environment or the SSH env):
 #   DPAD_SLOT_CPUS, DPAD_SLOT_MEM_MB   per-slot CPU/RAM quota (oversubscription)
 #   DPAD_SELKIES_BIND                 Selkies bind (0.0.0.0 for direct-IP v2)
+#   DPAD_STREAM_FPS                   Initial Selkies capture frame rate for this
+#                                    session (default 60; the worker supplies the
+#                                    user's selected launch profile).
 #   DPAD_GAMEPAD_INTERPOSER           (optional) =evdev enables the evdev gamepad
 #                                    path (fake-libudev + evdev interposer +
 #                                    evdev_bridge.py); unset = the classic
@@ -317,6 +320,7 @@ launch() {
         -e DPAD_ENCODER="${DPAD_ENCODER:-}" \
         -e DPAD_STREAM_WIDTH="${DPAD_STREAM_WIDTH:-1920}" \
         -e DPAD_STREAM_HEIGHT="${DPAD_STREAM_HEIGHT:-1080}" \
+        -e DPAD_STREAM_FPS="${DPAD_STREAM_FPS:-60}" \
         -e DPAD_WD_WIDTH="${DPAD_WD_WIDTH:-${DPAD_STREAM_WIDTH:-1920}}" \
         -e DPAD_WD_HEIGHT="${DPAD_WD_HEIGHT:-${DPAD_STREAM_HEIGHT:-1080}}" \
         "$image" || { err "docker run $name failed"; return 1; }

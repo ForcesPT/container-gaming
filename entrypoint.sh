@@ -667,6 +667,11 @@ start_launcher_session() {
     # (listening), then the health loop polls for the socket and launches Sway.
     local enc="${DPAD_ENCODER:-nvh264enc}"
     local video_src="waylanddisplaysrc"
+    local stream_fps
+    if ! stream_fps="$(/opt/dpadcloud/dpad-validate-stream-fps "${DPAD_STREAM_FPS:-60}")"; then
+        echo "    ERROR: refusing unsafe or unsupported DPAD_STREAM_FPS"
+        return 1
+    fi
     # Live-resolution helpers (§18.7): /tmp/dpad_resolution is written by the
     # selkies _arg_res data-channel handler (the web dropdown). Both the
     # compositor caps (DPAD_STREAM_WIDTH/HEIGHT) + the sway `output * mode`
@@ -680,7 +685,7 @@ start_launcher_session() {
     # string) so each (re)launch re-reads /tmp/dpad_resolution — the health
     # loop's restart-on-death path picks up a live resolution change.
     build_selkies_cmd() {
-      echo "export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_STREAM_WIDTH=$(_dpad_w) DPAD_STREAM_HEIGHT=$(_dpad_h) XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=16100 --enable_https=false --encoder=${enc} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
+      echo "export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_STREAM_WIDTH=$(_dpad_w) DPAD_STREAM_HEIGHT=$(_dpad_h) XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=16100 --enable_https=false --encoder=${enc} --framerate=${stream_fps} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
     }
     echo "[*] Launching selkies (wayland-display compositor; video_src=${video_src}, encoder=${enc})..."
     as_user "$(build_selkies_cmd)" >>/tmp/selkies.log 2>&1 &

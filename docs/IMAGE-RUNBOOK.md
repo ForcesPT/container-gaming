@@ -92,6 +92,7 @@ Expected flow:
 | `DPAD_ENCODER` | `nvh264enc` | Selkies encoder. Use another validated Selkies encoder only after a GPU/browser canary. |
 | `DPAD_WD_WIDTH` / `DPAD_WD_HEIGHT` | `1920` / `1080` | Initial compositor and Sway output resolution. |
 | `DPAD_STREAM_WIDTH` / `DPAD_STREAM_HEIGHT` | `1920` / `1080` | Values forwarded by the session launcher; normally match the compositor size. |
+| `DPAD_STREAM_FPS` | `60` | Initial Selkies/compositor capture frame rate. Supported presets are 30, 60, 120, 144, and 240; unsupported or malformed values fail closed before constructing the Selkies command. The worker passes the user's selected launch profile per session; live Selkies FPS changes continue to use the patched `set_framerate` path. |
 | `DPAD_SELKIES_BIND` | `127.0.0.1` | Production session launcher sets `0.0.0.0` for stream-bridge access. |
 | `DPAD_COTURN_PORT` | `3478` | Coturn listening port inside the container. |
 | `DPAD_TURN_PUBLIC_IP` | discovered | Public VM address placed in external TURN ICE entries. |
@@ -159,6 +160,7 @@ Useful logs inside the container:
 ```bash
 python3 scripts/test_launcher_only_architecture.py
 python3 scripts/test_obsolete_components_removed.py
+python3 scripts/test_stream_fps_plumbing.py
 python3 scripts/test_dockerfile_pins.py
 python3 scripts/test_dockerfile_pins_mutations.py
 bash -n entrypoint.sh healthcheck.sh scripts/dpad-launch-session scripts/vm-bootstrap.sh

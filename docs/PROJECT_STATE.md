@@ -14,6 +14,18 @@
 > **`WAYLAND-ARCHITECTURE.md`** (the compositor pivot decision and historical
 > validation record).
 >
+> **2026-08-16 per-session initial FPS plumbing — SOURCE COMPLETE, RELEASE
+> PENDING.** `dpad-launch-session` now forwards `DPAD_STREAM_FPS` into each
+> container and the launcher-only entrypoint passes it to Selkies through
+> `--framerate`, defaulting to 60. The image validates the value against the
+> control plane's 30/60/120/144/240 presets before constructing the Selkies
+> shell command; malformed values fail closed. This completes the image-side half of the
+> control-plane launch command already shipped in cloud commit `c9b6b97`, so a
+> user's selected launch FPS reaches the initial `waylanddisplaysrc` caps instead
+> of Selkies silently starting at its default. Regression guard:
+> `python3 scripts/test_stream_fps_plumbing.py`. This source change is not in the
+> immutable `r6` image yet and still requires an image build/GPU canary.
+>
 > **2026-08-16 `r6` launcher-only reliability release — CURRENT REGISTRY
 > IMAGE.** Source revision `06927d2f61f1e9125e16bc07c7b61c9105ca1f84` was
 > cloned cleanly on the active OVH GRA11 NVIDIA L4 VM, passed the architecture,
