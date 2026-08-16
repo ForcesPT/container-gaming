@@ -708,14 +708,14 @@ RUN set -e; \
     && test -e libSDL3.so.0  # sanity: the SONAME the app dlopens resolves
 
 # --- gst-wayland-display plugin (the only compositor/capture path) ---
-#     Built in the wayland-display-builder stage with Smithay and CUDA support;
-#     see WAYLAND-ARCHITECTURE.md. Installed in the GStreamer plugin directory so
-#     selkies-gstreamer's `Gst.ElementFactory.make("waylanddisplaysrc")` finds
-#     it (the patch_selkies_waylanddisplay.py branch, gated on
-#     DPAD_VIDEO_SRC=waylanddisplaysrc). The plugin initializes when Selkies
-#     creates waylanddisplaysrc for a connected browser peer. The runtime libwayland is
-#     1.24.0 (≥1.23 — already has wl_client_set_max_buffer_size; no libwayland
-#     COPY needed, §13.14). Live-validated on an OVH L4 (§13.14).
+#     Built in the wayland-display-builder stage with Smithay and CUDA support.
+#     Ubuntu 24.04 ships libwayland 1.22, but this plugin calls the 1.23 API
+#     wl_client_set_max_buffer_size. Ship the builder's pinned 1.23 runtime before
+#     the plugin; otherwise GStreamer blacklists libgstwaylanddisplaysrc.so and
+#     Selkies crashes on peer connect because ElementFactory.make returns None.
+COPY --from=wayland-display-builder /usr/local/lib/x86_64-linux-gnu/libwayland-server.so.0* /usr/local/lib/x86_64-linux-gnu/
+RUN ldconfig \
+    && objdump -T /usr/local/lib/x86_64-linux-gnu/libwayland-server.so.0 | grep -q 'wl_client_set_max_buffer_size'
 COPY --from=wayland-display-builder /out/lib/x86_64-linux-gnu/gstreamer-1.0/libgstwaylanddisplaysrc.so /opt/gstreamer/lib/x86_64-linux-gnu/gstreamer-1.0/libgstwaylanddisplaysrc.so
 
 # Apply the waylanddisplaysrc capture branch to Selkies. The entrypoint always
