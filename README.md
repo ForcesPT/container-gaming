@@ -91,9 +91,10 @@ covers hosts with low hard caps):
   `rtc_config.json` with `turn:127.0.0.1:3478?transport=udp` (in-container peer) +
   `turn:<publicIp>:<extPort>?transport=udp` (browser) whenever a real public IP
   resolves, on **any** provider. No `DPAD_PROVIDER` needed. This fixes the old
-  "Connection failed" (the container can't hairpin to its own public IP; the
-  dual-ICE makes both peers TURN clients of the same coturn, which short-circuits
-  the media internally). `SELKIES_TURN_PROTOCOL` must match the exposed port
+  "Connection failed" (a bridged container can't reliably hairpin through its
+  own public relay address). Warm-VM sessions therefore use host networking with
+  distinct per-slot Selkies/TURN listeners and bounded relay ranges supplied as
+  `DPAD_TURN_RELAY_MIN_PORT`/`MAX_PORT`. `SELKIES_TURN_PROTOCOL` must match the exposed port
   protocol (udp here). (TCP `-p 3478:3478` + `SELKIES_TURN_PROTOCOL=tcp` also works
   on hosts that forward TCP, but UDP is the validated default.)
 - Vast maps `3478/udp` to a random external port, injected as `VAST_UDP_PORT_3478`;

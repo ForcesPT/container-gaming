@@ -1,8 +1,8 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
-> **2026-08-22 Labwc stacking-desktop canary — SOURCE IMPLEMENTED, GPU/USER
-> VALIDATION PENDING.** Sway remains the production default and immediate
-> fallback. The image now installs Ubuntu Noble's Labwc alongside Sway, and the
+> **2026-08-22 Labwc stacking-desktop canary — GPU + INITIAL USER VALIDATION
+> PASSED.** Sway remains the production default and immediate fallback. The
+> image installs Ubuntu Noble's Labwc alongside Sway, and the
 > fail-closed `DPAD_DESKTOP_CLIENT=sway|labwc` selector chooses the nested
 > desktop/XWayland provider without changing Selkies, gst-wayland-display,
 > input, audio, stores, or volumes. Labwc starts the same DpadPlay launcher from
@@ -13,8 +13,20 @@
 > `dpad-publish-desktop-config`; Labwc launcher hide/focus/fullscreen operations
 > use Noble's `wlrctl` through a tested Sway-IPC compatibility wrapper. Source
 > guards: `test_desktop_client_selection.py` and `test_desktop_runtime_helpers.py`.
-> Do not promote Labwc or move the current r8 production pin until OVH L4 GPU,
-> real-browser reconnect/restart, and ForcesPT user testing pass.
+> Exact source patch `eb92efbc...` passed two independent fail-closed reviews and
+> was pushed as `be19bc1`. On an isolated OVH L4, both Labwc and default Sway
+> passed GPU signaling/reconnect/restart identity tests. The HTTPS Labwc canary
+> then rendered for ForcesPT, accepted input, and opened Steam successfully.
+> Automated follow-up verified launcher recovery, concurrent launcher + X11
+> stacking, PipeWire's dummy sink, public video/audio SDP, and fresh recovery
+> after Docker restart. Docker bridge relay hairpinning was reproduced from the
+> initial `Waiting for stream` report: signaling/input could connect while media
+> stayed at zero packets. Current source uses host networking with distinct
+> per-slot Selkies/TURN listeners and non-overlapping 64-port relay ranges,
+> constrains coturn, and fails closed on unsafe slots, malformed ranges, or coturn
+> startup failure; guard: `test_turn_relay_plumbing.py`. Keep r8/Sway production
+> unchanged until ForcesPT completes wider store/game,
+> controller, audio, dialog, and fullscreen acceptance.
 
 > **Lean handoff (2026-07-30).** Current state of the
 > `forcespt/dpadcloud-gaming` images: what's built, what's validated, the

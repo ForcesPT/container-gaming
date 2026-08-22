@@ -2,10 +2,12 @@
 
 > **2026-08-22 LABWC CANARY.** The production nested desktop remains Sway, but
 > candidate source can select Labwc with `DPAD_DESKTOP_CLIENT=labwc`. The outer
-> Smithay compositor/capture architecture is unchanged. Labwc is being evaluated
-> because its stacking model better matches Steam/store installers, transient
-> login dialogs, and other multi-window desktop applications. Sway remains the
-> default and rollback until OVH L4, reconnect/restart, and user validation pass.
+> Smithay compositor/capture architecture is unchanged. OVH L4 GPU,
+> reconnect/restart, launcher recovery, X11 stacking, and initial real-user
+> rendering/Steam launch have passed. Labwc's stacking model better matches
+> Steam/store installers, transient login dialogs, and other multi-window desktop
+> applications. Sway remains the default and rollback until broader store/game,
+> controller, audio, dialog, and fullscreen acceptance is complete.
 
 > **2026-08-22 CURRENT IMPLEMENTATION.** The outer architecture remains fixed:
 > `gst-wayland-display` → selected desktop/XWayland → DpadPlay launcher. Sway is

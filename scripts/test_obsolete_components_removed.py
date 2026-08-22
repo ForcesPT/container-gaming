@@ -50,8 +50,12 @@ if "start_launcher_session" not in (root / "entrypoint.sh").read_text():
     errors.append("DpadPlay launcher session is no longer wired")
 
 launch_session = (root / "scripts/dpad-launch-session").read_text()
-if '-p "${selkies_port}:16100"' not in launch_session:
-    errors.append("per-slot Selkies host-port publication is missing")
+if "--network host" not in launch_session:
+    errors.append("warm-VM sessions must use host networking")
+if '-p "${selkies_port}:16100"' in launch_session:
+    errors.append("obsolete per-slot Docker port publication remains")
+if '-e DPAD_SELKIES_PORT="$selkies_port"' not in launch_session:
+    errors.append("per-slot host-network Selkies port is missing")
 if "DPAD_STORE_SHELL" in launch_session:
     errors.append("retired shell-selection environment is still forwarded")
 

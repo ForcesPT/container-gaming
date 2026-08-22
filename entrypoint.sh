@@ -74,11 +74,10 @@ done
 # queries the RunPod API for the mapped EXTERNAL port (portMappings["3478"]) +
 # the pod publicIp, then points the browser's TURN ICE server at
 # publicIp:<externalPort> (TURN_PORT_EXT).
-# Why a single normal port is enough: when both WebRTC peers are TURN clients of
-# the SAME coturn, media relays internally over their two control connections to
-# coturn's listening port; the per-allocation relay ports are never contacted
-# externally. So only coturn's listening port needs to be reachable. The web UI
-# is published by the DpadPlay stream-bridge/Caddy path.
+# This is a provider-specific RunPod compatibility path: its TCP proxy exposes
+# only the coturn control/listening port and was validated with both peers using
+# that mapped TURN endpoint. Do not generalize it to warm-VM Docker bridge UDP;
+# those sessions publish bounded per-slot allocation ranges explicitly.
 DPAD_PROVIDER="${DPAD_PROVIDER:-}"
 if [ -z "$DPAD_PROVIDER" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then
     DPAD_PROVIDER="runpod"
@@ -653,11 +652,34 @@ start_launcher_session() {
 
     # --- coturn + rtc_config ---
     rm -f /tmp/selkies.log /tmp/coturn.log /tmp/rtc_config.json 2>/dev/null
+    _dpad_valid_port() {
+        [[ "${1:-}" =~ ^[0-9]{4,5}$ ]] && [ "$1" -ge 1024 ] && [ "$1" -le 65535 ]
+    }
+    local relay_min="${DPAD_TURN_RELAY_MIN_PORT:-}" relay_max="${DPAD_TURN_RELAY_MAX_PORT:-}"
+    local -a turn_relay_args=()
+    if [ -n "$relay_min" ] || [ -n "$relay_max" ]; then
+        if [ -z "$relay_min" ] || [ -z "$relay_max" ]; then
+            echo "    ERROR: expected both DPAD_TURN_RELAY_MIN_PORT and DPAD_TURN_RELAY_MAX_PORT"
+            return 1
+        fi
+        if ! _dpad_valid_port "$relay_min" || ! _dpad_valid_port "$relay_max" \
+            || [ "$relay_min" -gt "$relay_max" ]; then
+            echo "    ERROR: invalid TURN relay range: ${relay_min}-${relay_max}"
+            return 1
+        fi
+        turn_relay_args=(--min-port="${DPAD_TURN_RELAY_MIN_PORT}" --max-port="${DPAD_TURN_RELAY_MAX_PORT}")
+    fi
     if ! pgrep -x turnserver >/dev/null; then
         echo "[*] Starting coturn on ${TURN_PORT_EXT}..."
-        turnserver -n -a --lt-cred-mech --fingerprint --no-stun --no-multicast-peers --no-cli --listening-ip=0.0.0.0 --realm=dpadcloud --user="${TURN_USER}:${TURN_PASS}" -p "${TURN_PORT_LISTEN:-${TURN_PORT_EXT}}" -X "${PUBLIC_IP:-localhost}" >/tmp/coturn.log 2>&1 &
+        turnserver -n -a --lt-cred-mech --fingerprint --no-stun --no-multicast-peers --no-cli --listening-ip=0.0.0.0 --realm=dpadcloud --user="${TURN_USER}:${TURN_PASS}" -p "${TURN_PORT_LISTEN:-${TURN_PORT_EXT}}" -X "${PUBLIC_IP:-localhost}" "${turn_relay_args[@]}" >/tmp/coturn.log 2>&1 &
         sleep 2
-        pgrep -x turnserver >/dev/null && echo "    coturn running" || echo "    WARNING: coturn failed (see /tmp/coturn.log)"
+        if pgrep -x turnserver >/dev/null; then
+            echo "    coturn running"
+        else
+            echo "    ERROR: coturn failed to start (see /tmp/coturn.log)" >&2
+            tail -20 /tmp/coturn.log 2>/dev/null | sed 's/^/      /' >&2
+            return 1
+        fi
     fi
     [ -S "${XDG_RUNTIME_DIR}/pulse/native" ] && echo "    audio socket OK (${XDG_RUNTIME_DIR}/pulse/native)" || echo "    WARNING: pipewire-pulse socket missing — Selkies audio will fail"
     local rtc=/tmp/rtc_config.json _listen="${TURN_PORT_LISTEN:-${TURN_PORT_EXT}}"
@@ -677,6 +699,11 @@ start_launcher_session() {
     # (listening), then the health loop polls for the socket and launches Sway.
     local enc="${DPAD_ENCODER:-nvh264enc}"
     local video_src="waylanddisplaysrc"
+    local selkies_port="${DPAD_SELKIES_PORT:-16100}"
+    if ! _dpad_valid_port "$selkies_port"; then
+        echo "    ERROR: invalid DPAD_SELKIES_PORT: $selkies_port" >&2
+        return 1
+    fi
     local stream_fps
     if ! stream_fps="$(/opt/dpadcloud/dpad-validate-stream-fps "${DPAD_STREAM_FPS:-60}")"; then
         echo "    ERROR: refusing unsafe or unsupported DPAD_STREAM_FPS"
@@ -695,7 +722,7 @@ start_launcher_session() {
     # string) so each (re)launch re-reads /tmp/dpad_resolution — the health
     # loop's restart-on-death path picks up a live resolution change.
     build_selkies_cmd() {
-      echo "export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_STREAM_WIDTH=$(_dpad_w) DPAD_STREAM_HEIGHT=$(_dpad_h) XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=16100 --enable_https=false --encoder=${enc} --framerate=${stream_fps} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
+      echo "export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_STREAM_WIDTH=$(_dpad_w) DPAD_STREAM_HEIGHT=$(_dpad_h) XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=${selkies_port} --enable_https=false --encoder=${enc} --framerate=${stream_fps} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
     }
     # Unix socket pathnames survive an abrupt Selkies/container process exit.
     # They cannot represent a live compositor once that process is gone and can
@@ -715,8 +742,8 @@ start_launcher_session() {
         echo "    WARNING: selkies failed to start (see /tmp/selkies.log)"; tail -20 /tmp/selkies.log 2>/dev/null | sed 's/^/      /'
         return 1
     fi
-    echo "    Selkies listening on ${DPAD_SELKIES_BIND:-127.0.0.1}:16100 (wayland-display compositor; encoder=${enc}, audio_fec=${DPAD_AUDIO_PACKETLOSS:-0}%, video_fec=${DPAD_VIDEO_PACKETLOSS:-0}%)"
-    echo "DPAD_READY slot=${DPAD_SLOT:-0} bind=${DPAD_SELKIES_BIND:-127.0.0.1}:16100 encoder=${enc}"
+    echo "    Selkies listening on ${DPAD_SELKIES_BIND:-127.0.0.1}:${selkies_port} (wayland-display compositor; encoder=${enc}, audio_fec=${DPAD_AUDIO_PACKETLOSS:-0}%, video_fec=${DPAD_VIDEO_PACKETLOSS:-0}%)"
+    echo "DPAD_READY slot=${DPAD_SLOT:-0} bind=${DPAD_SELKIES_BIND:-127.0.0.1}:${selkies_port} encoder=${enc}"
     echo "    NOTE: video appears after a peer connects and the ${DPAD_DESKTOP_CLIENT} launcher desktop starts"
 
     # The selected nested desktop provides XWayland for Steam and Windows store

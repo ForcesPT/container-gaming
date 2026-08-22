@@ -73,6 +73,9 @@ set -uo pipefail
 
 TURN_BASE_PORT=3478
 SELKIES_BASE_PORT=16100
+TURN_RELAY_BASE=40000
+TURN_RELAY_SPAN=64
+DPAD_MAX_SLOTS=32
 IMAGE_DEFAULT="forcespt/dpadcloud-gaming:dpad-SteamOS"
 MOUNT_ROOT="/mnt/dpad-vol"
 LABEL_PREFIX="dpadvol"
@@ -209,9 +212,20 @@ is_ephemeral() {
 
 launch() {
     local slot="$1" volumeId="$2" device="$3" pass="$4" image="${5:-$IMAGE_DEFAULT}"
+    # Bound both syntax and length before Bash arithmetic. Digit-only input is
+    # insufficient: oversized integers wrap in Bash and can collide with slot 0.
+    [[ "$slot" =~ ^(0|[1-9][0-9]?)$ ]] \
+        && [ "$slot" -lt "$DPAD_MAX_SLOTS" ] \
+        || { err "invalid slot (expected canonical 0-$((DPAD_MAX_SLOTS - 1))): $slot"; return 1; }
     local name="${CONTAINER_PREFIX}-${slot}"
     local port=$(( TURN_BASE_PORT + slot ))
     local selkies_port=$(( SELKIES_BASE_PORT + slot ))
+    local relay_min=$(( TURN_RELAY_BASE + slot * TURN_RELAY_SPAN ))
+    local relay_max=$(( relay_min + TURN_RELAY_SPAN - 1 ))
+    [ "$port" -ge 1024 ] && [ "$port" -le 65535 ] \
+        && [ "$selkies_port" -ge 1024 ] && [ "$selkies_port" -le 65535 ] \
+        && [ "$relay_min" -ge 1024 ] && [ "$relay_max" -le 65535 ] \
+        || { err "slot $slot exceeds the supported network port range"; return 1; }
 
     # Stop+remove a stale container at this slot (a re-launch after a crash).
     if docker ps -a --format '{{.Names}}' | grep -qx "$name"; then
@@ -298,6 +312,7 @@ launch() {
     # inline `#` inside a continued command terminates it (bash pitfall; it broke
     # the docker run with "-e: command not found" + "requires at least 1 argument").
     docker run -d --name "$name" \
+        --network host \
         --runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=0 \
         --cap-add SYS_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined \
         --shm-size=2g --ulimit nofile=1048576:1048576 \
@@ -305,13 +320,14 @@ launch() {
         "${vol_args[@]}" \
         "${entry_mount[@]}" \
         "${dev_args[@]}" \
-        -p "${port}:${port}/udp" \
-        -p "${selkies_port}:16100" \
         -v "/tmp/nvidia-mps:/tmp/nvidia-mps" \
         -e CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps \
         -e DPAD_SLOT="$slot" \
         -e DPAD_COTURN_PORT="$port" \
+        -e DPAD_TURN_RELAY_MIN_PORT="$relay_min" \
+        -e DPAD_TURN_RELAY_MAX_PORT="$relay_max" \
         -e DPAD_SELKIES_BIND="${DPAD_SELKIES_BIND:-0.0.0.0}" \
+        -e DPAD_SELKIES_PORT="$selkies_port" \
         -e DPAD_TURN_PUBLIC_IP="${PUBLIC_IPADDR:-}" \
         -e DPAD_TURN_UDP_EXTERNAL_PORT="$port" \
         -e SELKIES_BASIC_AUTH_USER=dpad \
@@ -327,7 +343,7 @@ launch() {
         -e DPAD_WD_WIDTH="${DPAD_WD_WIDTH:-${DPAD_STREAM_WIDTH:-1920}}" \
         -e DPAD_WD_HEIGHT="${DPAD_WD_HEIGHT:-${DPAD_STREAM_HEIGHT:-1080}}" \
         "$image" || { err "docker run $name failed"; return 1; }
-    log "container $name launched (coturn ${port}/udp, selkies ${selkies_port}->16100, login dpad/${pass:0:4}…)"
+    log "container $name launched with host networking (coturn ${port}/udp, selkies ${selkies_port}, login dpad/${pass:0:4}…)"
 
     # Wait for the DPAD_READY marker (entrypoint emits it once Selkies is up).
     local deadline=$(( $(date +%s) + 360 ))   # 6 min (container boot ~50s + Steam)

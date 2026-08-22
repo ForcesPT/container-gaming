@@ -25,9 +25,10 @@
 #   4 GPUs: -p 3478:3478 -p 3479:3479 -p 3480:3480 -p 3481:3481
 # (general: -p 3478..(3478+N-1)). Vast's 64-port limit → up to 64 users/VM.
 # Add the matching UDP ports (-p 3478:3478/udp ...) to enable lower-latency UDP
-# TURN (Vast injects VAST_UDP_PORT_<internal>). coturn already listens UDP; with
-# both WebRTC peers on the same coturn the relay short-circuits internally, so
-# only the listen port needs a UDP map (no relay port range to expose).
+# TURN (Vast injects VAST_UDP_PORT_<internal>). This v1 compatibility path uses
+# Vast's mapped TURN endpoint; current warm-VM sessions do not launch here and
+# instead use dpad-launch-session's host-network listeners and bounded per-slot
+# UDP allocation ranges.
 # A GPU whose port wasn't exposed is skipped (with a warning); the rest still run.
 #
 # Reboot safety: phase 1 may `reboot` once. This script installs itself as a
@@ -883,10 +884,9 @@ run_container_for() {
     fi
     res+=( --pids-limit="${DPAD_PIDS_LIMIT:-4096}" )
     log "launching $name : GPU $idx, coturn ${port} -> tcp_ext ${tcp_ext:-<none>}, udp_ext ${udp_ext:-<none>}, public ${pub_ip:-<?>}, resources: ${SESSION_CPUS:-0} cpu (${SESSION_CPU_MODE:-quota}) / ${SESSION_MEM_MB:-0}MB"
-    # Map + pass whichever protocol(s) are exposed. coturn listens both tcp+udp
-    # internally; only the mapped protocol is reachable externally. With both
-    # WebRTC peers on the same coturn the relay short-circuits internally, so only
-    # the listen port needs mapping (no relay port range to expose).
+    # Map + pass whichever protocol(s) Vast exposed for this legacy v1 path.
+    # Current warm-VM sessions launch through dpad-launch-session with host
+    # networking and a constrained per-slot UDP relay allocation range.
     local -a port_args=()
     [ -n "$tcp_ext" ] && port_args+=( -p "${port}:${port}"       -e "DPAD_TURN_EXTERNAL_PORT=${tcp_ext}" )
     [ -n "$udp_ext" ] && port_args+=( -p "${port}:${port}/udp" -e "DPAD_TURN_UDP_EXTERNAL_PORT=${udp_ext}" )

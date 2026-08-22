@@ -116,6 +116,7 @@ Expected flow:
 | `DPAD_STREAM_FPS` | `60` | Initial Selkies/compositor capture frame rate. Supported presets are 30, 60, 120, 144, and 240; unsupported or malformed values fail closed before constructing the Selkies command. The worker passes the user's selected launch profile per session; live Selkies FPS changes continue to use the patched `set_framerate` path. |
 | `DPAD_SELKIES_BIND` | `127.0.0.1` | Production session launcher sets `0.0.0.0` for stream-bridge access. |
 | `DPAD_COTURN_PORT` | `3478` | Coturn listening port inside the container. |
+| `DPAD_TURN_RELAY_MIN_PORT` / `DPAD_TURN_RELAY_MAX_PORT` | unset | Optional bounded coturn UDP allocation range. Production host-network sessions receive a required per-slot 64-port range from `dpad-launch-session`; both values must be present, four or five decimal digits, unprivileged, ordered, and no greater than 65535 or startup fails closed. |
 | `DPAD_TURN_PUBLIC_IP` | discovered | Public VM address placed in external TURN ICE entries. |
 | `DPAD_TURN_UDP_EXTERNAL_PORT` | unset | Externally mapped UDP TURN port. |
 | `DPAD_TURN_EXTERNAL_PORT` | unset | Externally mapped TCP TURN fallback. |
@@ -127,6 +128,15 @@ Expected flow:
 
 The old compositor/shell selection variables are intentionally unsupported and
 are not forwarded by `dpad-launch-session` or `vm-bootstrap.sh`.
+
+`dpad-launch-session` reserves UDP `40000-40063` for slot 0, then advances by
+64 ports per slot (`40064-40127` for slot 1, etc.). Sessions use host networking
+to avoid Docker relay hairpin failures; coturn is constrained with `--min-port`
+and `--max-port`. Provider firewalls/security groups must allow every active
+slot's TURN listener (`3478 + slot`), Selkies listener (`16100 + slot`), and relay
+range. WebSocket signaling or an input data channel alone does not prove that
+video relay packets are reachable. Slot values are canonical integers `0-31`;
+all other values fail before shell arithmetic.
 
 ## Healthy boot milestones
 
@@ -173,7 +183,7 @@ Useful logs inside the container:
 | Steam CEF crash-loop / shared-context failure | Ensure the container has `--shm-size=2g` and `vm.max_map_count=1048576`. |
 | No audio | Verify `pipewire`, `pipewire-pulse`, the Pulse socket, `dummy` sink, and `dummy.monitor`. |
 | No gamepad | Check Selkies joystick sockets/nodes and the selected interposer. The DpadPlay launcher itself uses SDL3 through koffi. |
-| No TURN relay | Verify the correct UDP/TCP port mapping and `DPAD_TURN_PUBLIC_IP`; signaling without a relay is not enough. |
+| No TURN relay / browser stays on `Waiting for stream` while input works | Verify host networking and that the slot's TURN listener, Selkies listener, and complete relay range are allowed by the provider firewall. Confirm coturn received matching `DPAD_TURN_RELAY_MIN_PORT`/`MAX_PORT` values and its process includes the expected `--min-port`/`--max-port`. Signaling and an open input data channel do not prove media relay reachability. |
 | Browser remains on waiting state after reconnect | A peer disconnect must not restart Selkies or the selected desktop. Check `/tmp/selkies.log` for pipeline errors and verify the selected-desktop/XWayland/launcher PID+start-time identities and the `wayland-N` socket inode did not change. A dead Selkies process is a separate process-relaunch path. |
 | Container remains `starting` after Docker restart | Confirm the entrypoint cleaned stale numeric `wayland-N` socket/lock paths and both protected desktop logs immediately before starting the new Selkies process. Do not move this cleanup into peer-disconnect handling. |
 | Live resolution changed but old size remains | Use the drawer's Refresh action after selecting a resolution; NVENC/WebRTC requires a fresh peer pipeline. |
@@ -184,6 +194,7 @@ Useful logs inside the container:
 python3 scripts/test_launcher_only_architecture.py
 python3 scripts/test_desktop_client_selection.py
 python3 scripts/test_desktop_runtime_helpers.py
+python3 scripts/test_turn_relay_plumbing.py
 python3 scripts/test_obsolete_components_removed.py
 python3 scripts/test_stream_fps_plumbing.py
 python3 scripts/test_dockerfile_pins.py

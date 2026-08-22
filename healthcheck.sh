@@ -3,9 +3,17 @@
 set -u
 desktop="${DPAD_DESKTOP_CLIENT:-sway}"
 case "$desktop" in sway|labwc) ;; *) echo "UNHEALTHY: invalid desktop client $desktop"; exit 1 ;; esac
+selkies_port="${DPAD_SELKIES_PORT:-16100}"
+if ! [[ "$selkies_port" =~ ^[0-9]+$ ]] \
+    || [ "$selkies_port" -lt 1024 ] || [ "$selkies_port" -gt 65535 ]; then
+    echo "UNHEALTHY: invalid DPAD_SELKIES_PORT: $selkies_port"; exit 1
+fi
 
 if ! pgrep -f "selkies-gstreamer" >/dev/null; then
     echo "UNHEALTHY: selkies-gstreamer is not running"; exit 1
+fi
+if ! timeout 3 bash -c "</dev/tcp/127.0.0.1/${selkies_port}" 2>/dev/null; then
+    echo "UNHEALTHY: Selkies is not listening on port $selkies_port"; exit 1
 fi
 # The server can listen and pass pgrep while its capture plugin is blacklisted;
 # that failure only crashes Selkies when the first browser peer starts video.
