@@ -121,9 +121,11 @@ def emitted_docker_args(slot: str) -> list[str]:
 
 slot0 = emitted_docker_args("0")
 slot1 = emitted_docker_args("1")
+slot31 = emitted_docker_args("31")
 for args, selkies_port, minimum, maximum in (
     (slot0, "16100", "40000", "40063"),
     (slot1, "16101", "40064", "40127"),
+    (slot31, "16131", "41984", "42047"),
 ):
     for expected in ("host", f"DPAD_SELKIES_PORT={selkies_port}",
                      f"DPAD_TURN_RELAY_MIN_PORT={minimum}",
@@ -134,6 +136,20 @@ for args, selkies_port, minimum, maximum in (
         errors.append("real launcher args missing --network")
     if "-p" in args:
         errors.append("real launcher must not emit -p under host networking")
+
+runtime_ranges = []
+for slot in range(32):
+    turn = 3478 + slot
+    selkies = 16100 + slot
+    relay_lo = 40000 + slot * 64
+    relay_hi = relay_lo + 63
+    runtime_ranges.extend(((turn, turn), (selkies, selkies), (relay_lo, relay_hi)))
+for i, (left_lo, left_hi) in enumerate(runtime_ranges):
+    for right_lo, right_hi in runtime_ranges[i + 1:]:
+        if max(left_lo, right_lo) <= min(left_hi, right_hi):
+            errors.append(
+                f"host-network port ranges overlap: {left_lo}-{left_hi} and {right_lo}-{right_hi}"
+            )
 
 for bad_slot in ("1+1", "01", "32", "18446744073709551616", "9999999999999999999"):
     invalid = subprocess.run(
