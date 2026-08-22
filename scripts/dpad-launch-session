@@ -49,6 +49,8 @@
 #   DPAD_STREAM_FPS                   Initial Selkies capture frame rate for this
 #                                    session (default 60; the worker supplies the
 #                                    user's selected launch profile).
+#   DPAD_DESKTOP_CLIENT               Nested desktop client: sway (default) or
+#                                    labwc (experimental stacking canary).
 #   DPAD_GAMEPAD_INTERPOSER           (optional) =evdev enables the evdev gamepad
 #                                    path (fake-libudev + evdev interposer +
 #                                    evdev_bridge.py); unset = the classic
@@ -316,6 +318,7 @@ launch() {
         -e "SELKIES_BASIC_AUTH_PASSWORD=${pass}" \
         -e DPAD_GAMEPAD_INTERPOSER="${DPAD_GAMEPAD_INTERPOSER:-}" \
         -e DPAD_STORES="${DPAD_STORES:-}" \
+        -e DPAD_DESKTOP_CLIENT="${DPAD_DESKTOP_CLIENT:-sway}" \
         -e DPAD_VIDEO_SRC="${DPAD_VIDEO_SRC:-}" \
         -e DPAD_ENCODER="${DPAD_ENCODER:-}" \
         -e DPAD_STREAM_WIDTH="${DPAD_STREAM_WIDTH:-1920}" \

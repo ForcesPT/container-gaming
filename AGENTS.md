@@ -53,11 +53,11 @@ docker push   forcespt/dpadcloud-gaming:dpad-SteamOS-rtx50
 
 ## The compositor path (production default)
 
-`DPAD_COMPOSITOR=wayland-display` + `DPAD_WAYLAND_CLIENT=sway` + `DPAD_STORE_SHELL=picker`
+`DPAD_DESKTOP_CLIENT=sway` + the DpadPlay launcher-only session
 - gst-wayland-display (Smithay micro-compositor) captures + composites
-- sway provides XWayland for Electron/X11 apps
-- dpad-launcher picker is the session shell (store launcher, not Lutris)
-- gamescope is demoted to an XWayland-providing client (not the compositor)
+- Sway is the validated default XWayland desktop
+- Labwc is available only as an explicit canary until live validation passes
+- dpad-launcher is the only session shell; Steam and the other stores are regular apps
 
 ## Critical baked-in fixes (don't re-discover)
 

@@ -84,7 +84,8 @@ class PersistentWaylandDisplayPatchTests(unittest.TestCase):
         self.assertIn(helper, entrypoint)
         helper_body = entrypoint[entrypoint.index(helper):entrypoint.index(helper) + 500]
         self.assertIn('"${XDG_RUNTIME_DIR}"/wayland-[0-9]*', helper_body)
-        self.assertIn('/tmp/sway-client.log', helper_body)
+        self.assertIn('/run/dpadcloud/sway-client.log', helper_body)
+        self.assertIn('/run/dpadcloud/labwc-client.log', helper_body)
 
         self.assertEqual(entrypoint.count(initial_cleanup_call), 1)
         self.assertEqual(entrypoint.count(relaunch_cleanup_call), 1)

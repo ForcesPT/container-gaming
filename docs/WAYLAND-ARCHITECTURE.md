@@ -1,9 +1,16 @@
 # DpadCloud Image — Full-Desktop Wayland Architecture (`gst-wayland-display`)
 
-> **2026-08-16 CURRENT IMPLEMENTATION.** The final architecture is now fixed:
-> `gst-wayland-display` → nested Sway/XWayland → DpadPlay launcher. Sway is no
-> longer an optional client selected by an environment variable; it is the only
-> desktop client. The DpadPlay launcher is the only session shell, and Steam is
+> **2026-08-22 LABWC CANARY.** The production nested desktop remains Sway, but
+> candidate source can select Labwc with `DPAD_DESKTOP_CLIENT=labwc`. The outer
+> Smithay compositor/capture architecture is unchanged. Labwc is being evaluated
+> because its stacking model better matches Steam/store installers, transient
+> login dialogs, and other multi-window desktop applications. Sway remains the
+> default and rollback until OVH L4, reconnect/restart, and user validation pass.
+
+> **2026-08-22 CURRENT IMPLEMENTATION.** The outer architecture remains fixed:
+> `gst-wayland-display` → selected desktop/XWayland → DpadPlay launcher. Sway is
+> the production default and Labwc is an explicit canary selected by
+> `DPAD_DESKTOP_CLIENT`. The DpadPlay launcher is the only session shell, and Steam is
 > a standard desktop store application launched from its card. All references
 > below to the retired compositor as a runtime option, a Steam shell, or client/
 > shell selection variables are historical validation context and are not

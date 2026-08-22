@@ -557,7 +557,17 @@ setup_gamepad_interposer() {
 }
 
 start_launcher_session() {
-    echo "[*] Launcher-only desktop: gst-wayland-display + nested Sway + DpadPlay launcher"
+    local DPAD_DESKTOP_CLIENT="${DPAD_DESKTOP_CLIENT:-sway}"
+    case "$DPAD_DESKTOP_CLIENT" in
+        sway|labwc) ;;
+        *) echo "[!] Unsupported DPAD_DESKTOP_CLIENT '$DPAD_DESKTOP_CLIENT' (expected sway or labwc)" >&2; return 1 ;;
+    esac
+    export DPAD_DESKTOP_CLIENT
+    if ! install -d -o root -g root -m 0755 /run/dpadcloud; then
+        echo "[!] Failed to create protected desktop runtime state" >&2
+        return 1
+    fi
+    echo "[*] Launcher-only desktop: gst-wayland-display + nested ${DPAD_DESKTOP_CLIENT} + DpadPlay launcher"
     echo "[*] Steam is installed as a standard store application and opens from the DpadPlay launcher."
 
     # --- input hotfix overlay ---
@@ -693,7 +703,9 @@ start_launcher_session() {
     # resolution-triggered Selkies relaunch. Only clean them at process
     # boundaries; peer disconnects keep the current Selkies process and socket.
     _dpad_clean_wayland_sockets() {
-        rm -f -- "${XDG_RUNTIME_DIR}"/wayland-[0-9]* /tmp/sway-client.log 2>/dev/null || true
+        rm -f -- "${XDG_RUNTIME_DIR}"/wayland-[0-9]* \
+            /run/dpadcloud/sway-client.log /run/dpadcloud/labwc-client.log \
+            2>/dev/null || true
     }
     _dpad_clean_wayland_sockets
     echo "[*] Launching selkies (wayland-display compositor; video_src=${video_src}, encoder=${enc})..."
@@ -705,33 +717,43 @@ start_launcher_session() {
     fi
     echo "    Selkies listening on ${DPAD_SELKIES_BIND:-127.0.0.1}:16100 (wayland-display compositor; encoder=${enc}, audio_fec=${DPAD_AUDIO_PACKETLOSS:-0}%, video_fec=${DPAD_VIDEO_PACKETLOSS:-0}%)"
     echo "DPAD_READY slot=${DPAD_SLOT:-0} bind=${DPAD_SELKIES_BIND:-127.0.0.1}:16100 encoder=${enc}"
-    echo "    NOTE: video appears after a peer connects and the Sway launcher desktop starts"
+    echo "    NOTE: video appears after a peer connects and the ${DPAD_DESKTOP_CLIENT} launcher desktop starts"
 
-    # Nested Sway is the only desktop client. It provides XWayland for the
-    # official Steam desktop client and Windows store launchers while remaining a
-    # render-node client of gst-wayland-display (no DRM master).
+    # The selected nested desktop provides XWayland for Steam and Windows store
+    # launchers while remaining a render-node client of gst-wayland-display.
     _launch_sway() {
         local wl_name="$1"
         local egl_unset="unset DISPLAY __EGL_VENDOR_LIBRARY_FILENAMES"
         local egl_set="__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
         local shared_env="WAYLAND_DISPLAY=${wl_name} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'"
-        cat > /tmp/dpad-sway.config <<SWAYCFG
-# DpadPlay nested Sway desktop
-output * mode --custom $(_dpad_w)x$(_dpad_h)
-default_border none
-default_floating_border none
-for_window [app_id=".*"] fullscreen enable
-for_window [class=".*"] fullscreen enable
-bindsym Mod4+l exec /opt/dpadcloud/launcher-toggle
-bindsym Mod4+q kill
-bindsym Mod4+k kill
-exec ${SHELL_APP}
-SWAYCFG
-        as_user "cd ${USER_HOME}; ${egl_unset}; export ${shared_env} ${egl_set} WLR_BACKENDS=wayland XDG_CURRENT_DESKTOP=sway WLR_LIBINPUT_NO_DEVICES=1; exec sway --unsupported-gpu -c /tmp/dpad-sway.config -d" >>/tmp/sway-client.log 2>&1 &
+        if ! /opt/dpadcloud/dpad-publish-desktop-config sway "$SHELL_APP" "$(_dpad_w)" "$(_dpad_h)"; then
+            echo "[!] Failed to publish Sway configuration" >&2
+            return 1
+        fi
+        as_user "cd ${USER_HOME}; ${egl_unset}; export ${shared_env} ${egl_set} WLR_BACKENDS=wayland XDG_CURRENT_DESKTOP=sway WLR_LIBINPUT_NO_DEVICES=1; exec sway --unsupported-gpu -c /run/dpadcloud/sway.config -d" >>/run/dpadcloud/sway-client.log 2>&1 &
     }
 
-    # --- health loop: peer starts compositor -> launch the Sway desktop ---
-    local sway_pid="" sway_launched=0
+    _launch_labwc() {
+        local wl_name="$1"
+        local egl_unset="unset DISPLAY __EGL_VENDOR_LIBRARY_FILENAMES"
+        local egl_set="__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
+        local shared_env="WAYLAND_DISPLAY=${wl_name} SWAYSOCK=${XDG_RUNTIME_DIR}/sway-ipc.labwc-compat.sock XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'"
+        if ! /opt/dpadcloud/dpad-publish-desktop-config labwc "$SHELL_APP" "$(_dpad_w)" "$(_dpad_h)"; then
+            echo "[!] Failed to publish Labwc configuration" >&2
+            return 1
+        fi
+        as_user "cd ${USER_HOME}; ${egl_unset}; export ${shared_env} ${egl_set} WLR_BACKENDS=wayland XDG_CURRENT_DESKTOP=labwc WLR_LIBINPUT_NO_DEVICES=1; exec labwc --config-dir /run/dpadcloud/labwc-current" >>/run/dpadcloud/labwc-client.log 2>&1 &
+    }
+
+    _launch_desktop() {
+        case "$DPAD_DESKTOP_CLIENT" in
+            sway) _launch_sway "$1" ;;
+            labwc) _launch_labwc "$1" ;;
+        esac
+    }
+
+    # --- health loop: peer starts compositor -> launch the selected desktop ---
+    local desktop_pid="" desktop_launched=0
     while true; do
         sleep 5
         local wl_sock="" wl_name=""
@@ -739,30 +761,38 @@ SWAYCFG
             [ -S "$f" ] || continue
             wl_sock="$f"; wl_name="$(basename "$f")"; break
         done
-        if [ -n "$wl_name" ] && [ $sway_launched -eq 0 ]; then
-            echo "[*] Compositor socket ${wl_name} appeared — launching Sway + DpadPlay launcher"
-            _launch_sway "$wl_name"
-            sway_pid=$!
-            sway_launched=1
-        fi
-        if [ $sway_launched -eq 1 ] && [ -n "$sway_pid" ] && ! kill -0 "$sway_pid" 2>/dev/null; then
-            echo "[*] WARNING: Sway desktop died — restarting..."
-            pkill -9 -x sway 2>/dev/null || true
-            if [ -n "$wl_name" ] && [ -S "$wl_sock" ]; then
-                _launch_sway "$wl_name"
-                sway_pid=$!
+        if [ -n "$wl_name" ] && [ $desktop_launched -eq 0 ]; then
+            echo "[*] Compositor socket ${wl_name} appeared — launching ${DPAD_DESKTOP_CLIENT} + DpadPlay launcher"
+            if _launch_desktop "$wl_name"; then
+                desktop_pid=$!
+                desktop_launched=1
             else
-                sway_launched=0
+                echo "[!] Failed to launch ${DPAD_DESKTOP_CLIENT}; refusing partial desktop state" >&2
+                return 1
+            fi
+        fi
+        if [ $desktop_launched -eq 1 ] && [ -n "$desktop_pid" ] && ! kill -0 "$desktop_pid" 2>/dev/null; then
+            echo "[*] WARNING: ${DPAD_DESKTOP_CLIENT} desktop died — restarting..."
+            pkill -9 -x "$DPAD_DESKTOP_CLIENT" 2>/dev/null || true
+            if [ -n "$wl_name" ] && [ -S "$wl_sock" ]; then
+                if _launch_desktop "$wl_name"; then
+                    desktop_pid=$!
+                else
+                    echo "[!] Failed to restart ${DPAD_DESKTOP_CLIENT}; refusing partial desktop state" >&2
+                    return 1
+                fi
+            else
+                desktop_launched=0
             fi
         fi
         if ! pgrep -f selkies-gstreamer >/dev/null; then
             echo "[*] WARNING: selkies-gstreamer died — restarting compositor and desktop..."
             pkill -f selkies-gstreamer 2>/dev/null || true
-            pkill -9 -x sway 2>/dev/null || true
+            pkill -9 -x "$DPAD_DESKTOP_CLIENT" 2>/dev/null || true
             sleep 2
             _dpad_clean_wayland_sockets
             as_user "$(build_selkies_cmd)" >>/tmp/selkies.log 2>&1 &
-            sway_launched=0
+            desktop_launched=0
         fi
         if [ "${DPAD_GAMEPAD_INTERPOSER:-}" = "evdev" ] && ! pgrep -f evdev_bridge.py >/dev/null; then
             echo "[*] WARNING: evdev_bridge.py died — restarting..."
@@ -946,5 +976,5 @@ fi
 sleep 1
 
 # --- Start the only supported session architecture ---
-start_launcher_session
+start_launcher_session || exit 1
 exit 0

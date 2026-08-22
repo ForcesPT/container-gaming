@@ -17,14 +17,42 @@ if ! pgrep -x dpad-launcher >/dev/null 2>&1; then
   exec /opt/dpadcloud/launcher-shell
 fi
 
-# Launcher is running — try to show it from scratchpad.
+# Launcher is running — use the selected compositor's native control path.
+case "${DPAD_DESKTOP_CLIENT:-sway}" in
+labwc)
+  WLRCTL="${DPAD_WLRCTL:-/usr/bin/wlrctl}"
+  MATCH=""
+  if "$WLRCTL" window focus title:DpadPlay 2>>"$LOG"; then
+    MATCH=title:DpadPlay
+  elif "$WLRCTL" window focus app_id:com.dpadplay.launcher 2>>"$LOG"; then
+    MATCH=app_id:com.dpadplay.launcher
+  else
+    echo "$(date -Is) Labwc could not focus launcher" >> "$LOG"
+    exit 1
+  fi
+  if ! "$WLRCTL" window fullscreen "$MATCH" 2>>"$LOG"; then
+    echo "$(date -Is) Labwc focused launcher but could not restore fullscreen" >> "$LOG"
+    exit 1
+  fi
+  echo "$(date -Is) launcher focused via Labwc foreign-toplevel protocol" >> "$LOG"
+  exit 0
+  ;;
+sway) ;;
+*) echo "$(date -Is) unsupported desktop ${DPAD_DESKTOP_CLIENT}" >> "$LOG"; exit 2 ;;
+esac
+
+# Sway: show the launcher from scratchpad.
 # Find the sway socket
 SOCK=""
 if [ -n "${SWAYSOCK:-}" ]; then
   SOCK="$SWAYSOCK"
 else
   RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-  SOCK=$(ls "${RUNTIME_DIR}"/sway-ipc.*.sock 2>/dev/null | head -1 || true)
+  for candidate in "${RUNTIME_DIR}"/sway-ipc.*.sock; do
+    [ -S "$candidate" ] || continue
+    SOCK="$candidate"
+    break
+  done
 fi
 
 if [ -z "$SOCK" ]; then

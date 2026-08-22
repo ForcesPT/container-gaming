@@ -1,5 +1,21 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-08-22 Labwc stacking-desktop canary — SOURCE IMPLEMENTED, GPU/USER
+> VALIDATION PENDING.** Sway remains the production default and immediate
+> fallback. The image now installs Ubuntu Noble's Labwc alongside Sway, and the
+> fail-closed `DPAD_DESKTOP_CLIENT=sway|labwc` selector chooses the nested
+> desktop/XWayland provider without changing Selkies, gst-wayland-display,
+> input, audio, stores, or volumes. Labwc starts the same DpadPlay launcher from
+> its autostart file and intentionally keeps normal stacking/transient-dialog
+> behaviour instead of globally forcing every application surface fullscreen.
+> The session launcher forwards the selector and the health loop monitors the
+> selected desktop. Protected config publication fails closed through
+> `dpad-publish-desktop-config`; Labwc launcher hide/focus/fullscreen operations
+> use Noble's `wlrctl` through a tested Sway-IPC compatibility wrapper. Source
+> guards: `test_desktop_client_selection.py` and `test_desktop_runtime_helpers.py`.
+> Do not promote Labwc or move the current r8 production pin until OVH L4 GPU,
+> real-browser reconnect/restart, and ForcesPT user testing pass.
+
 > **Lean handoff (2026-07-30).** Current state of the
 > `forcespt/dpadcloud-gaming` images: what's built, what's validated, the
 > baked-in fixes, the known limitations, and the open image-side items. The full

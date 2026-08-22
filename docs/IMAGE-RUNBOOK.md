@@ -1,8 +1,8 @@
 # DpadPlay Gaming Image Runbook
 
 > **Current source architecture (2026-08-16): launcher-only desktop.** The image
-> has one supported runtime: Selkies with `gst-wayland-display` as the compositor
-> and capture source, nested Sway as the desktop/XWayland provider, and the
+> has one production runtime: Selkies with `gst-wayland-display` as the compositor
+> and capture source, nested Sway as the default desktop/XWayland provider, and the
 > DpadPlay store launcher as the sole session shell. Steam is Valve's official
 > Linux desktop client, installed in the image and opened from the Steam card.
 > There is no alternate compositor, Steam shell, or Big Picture startup path.
@@ -15,6 +15,13 @@
 > this immutable digest; `r7` digest
 > `sha256:b85954a28aa37c8e9c2bb1e86db7314b5eecaa6136f4cf8c0d5fed4c5b259209`
 > is the immediate rollback.
+>
+> **Experimental canary (2026-08-22):** candidate source also installs Labwc
+> 0.7.1 from Ubuntu Noble and accepts `DPAD_DESKTOP_CLIENT=labwc`. This changes
+> only the nested desktop/XWayland provider and preserves Sway as the default.
+> Labwc is not production-approved until OVH GPU and user testing complete. Its
+> launcher recovery and the prebuilt launcher's limited Sway IPC calls are
+> translated through Noble's `wlrctl` foreign-toplevel client.
 >
 > `r8` preserves the same Smithay compositor, Wayland socket, nested Sway,
 > XWayland, and DpadPlay launcher across transient signaling/browser disconnects.
@@ -45,7 +52,7 @@ The final image includes:
 - Valve's official Steam Linux desktop client, pre-bootstrapped on Xvfb.
 - `/usr/local/bin/steam`, a stable desktop-client target used by the launcher.
 - DpadPlay launcher, Heroic, Lutris, umu, GE-Proton, and store wrappers.
-- Selkies 1.6.2, `gst-wayland-display`, Sway/XWayland, PipeWire, coturn, and NVENC.
+- Selkies 1.6.2, `gst-wayland-display`, Sway/Labwc, XWayland, `wlrctl`, PipeWire, coturn, and NVENC.
 - No retired compositor binaries or alternate Steam startup mode.
 
 ## Warm-VM deployment
@@ -90,8 +97,8 @@ Expected flow:
 
 1. `DPAD_READY` appears when Selkies is listening.
 2. The browser peer starts `waylanddisplaysrc` and creates `wayland-N`.
-3. The entrypoint starts nested Sway.
-4. Sway opens the DpadPlay launcher.
+3. The entrypoint starts the selected nested desktop (Sway by default, Labwc for the canary).
+4. The selected desktop opens the DpadPlay launcher.
 5. Selecting **Steam** opens Valve's standard desktop application.
 6. Closing Steam returns the user to the DpadPlay launcher.
 
@@ -100,6 +107,7 @@ Expected flow:
 | Variable | Default | Purpose |
 |---|---:|---|
 | `DPAD_STORES` | unset | Comma-separated store state to wire, e.g. `steam,epic,gog,battlenet,ea-app,ubisoft`. It does not choose the shell; the DpadPlay launcher is always the shell. |
+| `DPAD_DESKTOP_CLIENT` | `sway` | Nested desktop/XWayland provider: `sway` (production default) or `labwc` (experimental stacking canary). Any other value fails closed. |
 | `DPAD_VOLUME_MOUNT` | unset | In-container persistent library mount. Steam's complete install root is linked to `<volume>/steam-install`. |
 | `DPAD_GAMEPAD_INTERPOSER` | classic | Set `evdev` for the fake-libudev + evdev interposer path. |
 | `DPAD_ENCODER` | `nvh264enc` | Selkies encoder. Use another validated Selkies encoder only after a GPU/browser canary. |
@@ -135,7 +143,8 @@ DPAD_READY slot=<n> bind=0.0.0.0:16100 encoder=nvh264enc
 Useful logs inside the container:
 
 - `/tmp/selkies.log`
-- `/tmp/sway-client.log`
+- `/run/dpadcloud/sway-client.log`
+- `/run/dpadcloud/labwc-client.log` (Labwc canary only)
 - `/tmp/launcher.log`
 - `/tmp/pipewire.log`
 - `/tmp/pipewire-pulse.log`
@@ -157,7 +166,7 @@ Useful logs inside the container:
 |---|---|
 | Container exits before `DPAD_READY` | Inspect `/tmp/selkies.log`, PipeWire logs, and `docker logs`. Verify `/dev/dri` and the assigned NVIDIA device are exposed. |
 | `waylanddisplaysrc` EGL init fails with `dri2 screen` | Wrong provider driver variant. Apply the driver matrix above; Scaleway server-580 and UpCloud 595 are not usable. |
-| `DPAD_READY` appears but no launcher after connecting | Inspect `/tmp/sway-client.log`; verify the browser reached Selkies through HTTPS and created a real WebRTC peer. |
+| `DPAD_READY` appears but no launcher after connecting | Inspect `/run/dpadcloud/${DPAD_DESKTOP_CLIENT:-sway}-client.log`; verify the browser reached Selkies through HTTPS and created a real WebRTC peer. |
 | Steam card appears to do nothing | Inspect `/tmp/launcher.log`, `/tmp/steam-bootstrap.log`, and Steam processes. Verify `/usr/local/bin/steam` and `/usr/bin/steam` are executable. |
 | Steam opens an unexpected presentation mode | The image is stale. Current source installs `/usr/local/bin/steam`, which always starts the standard desktop client even if a cached launcher bundle supplies obsolete flags. |
 | Steam login or games disappear after relaunch | Verify the volume is mounted at `DPAD_VOLUME_MOUNT` and `~/.steam/debian-installation` resolves to `<volume>/steam-install`. |
@@ -165,19 +174,22 @@ Useful logs inside the container:
 | No audio | Verify `pipewire`, `pipewire-pulse`, the Pulse socket, `dummy` sink, and `dummy.monitor`. |
 | No gamepad | Check Selkies joystick sockets/nodes and the selected interposer. The DpadPlay launcher itself uses SDL3 through koffi. |
 | No TURN relay | Verify the correct UDP/TCP port mapping and `DPAD_TURN_PUBLIC_IP`; signaling without a relay is not enough. |
-| Browser remains on waiting state after reconnect | A peer disconnect must not restart Selkies or the nested desktop. Check `/tmp/selkies.log` for pipeline errors and verify the Sway/XWayland/launcher PID+start-time identities and the `wayland-N` socket inode did not change. A dead Selkies process is a separate process-relaunch path. |
-| Container remains `starting` after Docker restart | Confirm the entrypoint cleaned stale numeric `wayland-N` socket/lock paths and `/tmp/sway-client.log` immediately before starting the new Selkies process. Do not move this cleanup into peer-disconnect handling. |
+| Browser remains on waiting state after reconnect | A peer disconnect must not restart Selkies or the selected desktop. Check `/tmp/selkies.log` for pipeline errors and verify the selected-desktop/XWayland/launcher PID+start-time identities and the `wayland-N` socket inode did not change. A dead Selkies process is a separate process-relaunch path. |
+| Container remains `starting` after Docker restart | Confirm the entrypoint cleaned stale numeric `wayland-N` socket/lock paths and both protected desktop logs immediately before starting the new Selkies process. Do not move this cleanup into peer-disconnect handling. |
 | Live resolution changed but old size remains | Use the drawer's Refresh action after selecting a resolution; NVENC/WebRTC requires a fresh peer pipeline. |
 
 ## Source validation
 
 ```bash
 python3 scripts/test_launcher_only_architecture.py
+python3 scripts/test_desktop_client_selection.py
+python3 scripts/test_desktop_runtime_helpers.py
 python3 scripts/test_obsolete_components_removed.py
 python3 scripts/test_stream_fps_plumbing.py
 python3 scripts/test_dockerfile_pins.py
 python3 scripts/test_dockerfile_pins_mutations.py
-bash -n entrypoint.sh healthcheck.sh scripts/dpad-launch-session scripts/vm-bootstrap.sh
+bash -n entrypoint.sh healthcheck.sh scripts/dpad-launch-session scripts/vm-bootstrap.sh \
+  scripts/launcher-toggle scripts/dpad-publish-desktop-config scripts/swaymsg-desktop-compat
 ```
 
 A source-only pass is not a production release. A new image must still be built,

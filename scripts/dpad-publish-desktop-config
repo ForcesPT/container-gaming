@@ -1,0 +1,77 @@
+#!/bin/bash
+# Publish a complete Sway or Labwc config set under protected runtime state.
+set -euo pipefail
+
+DESKTOP="${1:-}"
+SHELL_APP="${2:-}"
+WIDTH="${3:-}"
+HEIGHT="${4:-}"
+RUNTIME_DIR="${DPAD_RUNTIME_DIR:-/run/dpadcloud}"
+
+if [ "$EUID" -eq 0 ] && [ "$RUNTIME_DIR" != /run/dpadcloud ]; then
+    echo "root desktop publication is restricted to /run/dpadcloud" >&2
+    exit 2
+fi
+
+case "$DESKTOP" in sway|labwc) ;; *) echo "unsupported desktop: $DESKTOP" >&2; exit 2 ;; esac
+[ -n "$SHELL_APP" ] || { echo "missing shell app" >&2; exit 2; }
+[[ "$WIDTH" =~ ^[0-9]+$ && "$HEIGHT" =~ ^[0-9]+$ ]] || { echo "invalid dimensions" >&2; exit 2; }
+
+install -d -m 0755 "$RUNTIME_DIR"
+exec 9>"$RUNTIME_DIR/.desktop-config.lock"
+chmod 0600 "$RUNTIME_DIR/.desktop-config.lock"
+flock -x 9
+
+if [ "$DESKTOP" = sway ]; then
+    tmp="$RUNTIME_DIR/sway.config.tmp"
+    trap 'rm -f -- "$tmp"' EXIT
+    cat > "$tmp" <<SWAYCFG
+# DpadPlay nested Sway desktop
+output * mode --custom ${WIDTH}x${HEIGHT}
+default_border none
+default_floating_border none
+for_window [app_id=".*"] fullscreen enable
+for_window [class=".*"] fullscreen enable
+bindsym Mod4+l exec /opt/dpadcloud/launcher-toggle
+bindsym Mod4+q kill
+bindsym Mod4+k kill
+exec ${SHELL_APP}
+SWAYCFG
+    chmod 0644 "$tmp"
+    mv -fT "$tmp" "$RUNTIME_DIR/sway.config"
+else
+    generation="$(mktemp -d "$RUNTIME_DIR/labwc.gen.XXXXXX")"
+    link_tmp="$RUNTIME_DIR/labwc-current.tmp.$$"
+    cleanup_labwc_generation() {
+        [ -z "${generation:-}" ] || rm -rf -- "$generation"
+        [ -z "${link_tmp:-}" ] || rm -f -- "$link_tmp"
+    }
+    trap cleanup_labwc_generation EXIT
+    chmod 0755 "$generation"
+    cat > "$generation/rc.xml" <<'LABWCRC'
+<?xml version="1.0"?>
+<labwc_config>
+  <keyboard>
+    <keybind key="W-l"><action name="Execute"><command>/opt/dpadcloud/launcher-toggle</command></action></keybind>
+    <keybind key="W-q"><action name="Close" /></keybind>
+    <keybind key="W-k"><action name="Close" /></keybind>
+  </keyboard>
+</labwc_config>
+LABWCRC
+    printf '%s\n' "${SHELL_APP} &" > "$generation/autostart"
+    chmod 0644 "$generation/rc.xml" "$generation/autostart"
+    rm -f -- "$link_tmp"
+    ln -s "$(basename "$generation")" "$link_tmp"
+    # A single rename publishes both files as one complete generation.
+    mv -fT "$link_tmp" "$RUNTIME_DIR/labwc-current"
+    generation=""
+    link_tmp=""
+    current_target="$(readlink "$RUNTIME_DIR/labwc-current")"
+    for old in "$RUNTIME_DIR"/labwc.gen.*; do
+        [ -d "$old" ] || continue
+        [ ! -L "$old" ] || continue
+        [ "$(basename "$old")" = "$current_target" ] && continue
+        rm -rf -- "$old" || echo "warning: could not remove old Labwc generation $old" >&2
+    done
+fi
+trap - EXIT

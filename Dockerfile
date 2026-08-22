@@ -509,7 +509,7 @@ RUN set -e; \
 
 # =============================================================================
 # Stage: vast-vm  ->  :dpad-SteamOS
-#   Full-root VM: gst-wayland-display + nested Sway + DpadPlay launcher.
+#   Full-root VM: gst-wayland-display + nested Sway/Labwc + DpadPlay launcher.
 #   Valve's official Steam desktop client is installed and launched only from
 #   the DpadPlay store card. There is no alternate compositor or Steam shell.
 # =============================================================================
@@ -541,17 +541,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends zenity && rm -r
     fi
 
 # --- Launcher desktop runtime ---
-# gst-wayland-display is the compositor/capture source. Nested Sway supplies
-# window management and XWayland for Steam, Heroic and Wine/Proton launchers.
+# gst-wayland-display is the compositor/capture source. Nested Sway (default)
+# or Labwc (canary) supplies window management and XWayland for Steam, Heroic
+# and Wine/Proton launchers.
 # PipeWire provides session audio for Selkies.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         pipewire pipewire-audio pipewire-pulse pipewire-audio-client-libraries \
         wireplumber libeis-dev gstreamer1.0-pipewire \
         gstreamer1.0-tools gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
         gstreamer1.0-x gstreamer1.0-plugins-base pulseaudio-utils \
-        sway xwayland \
+        sway labwc wlrctl xwayland util-linux \
     && command -v sway \
     && sway --version \
+    && command -v labwc \
+    && labwc --version \
+    && command -v wlrctl \
+    && command -v flock \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Fix ~/.steam/root: Steam's steam.sh expects a symlink it can rm -f and
@@ -803,6 +808,8 @@ RUN set -e; \
 COPY scripts/launcher-shell /opt/dpadcloud/launcher-shell
 COPY scripts/steam-desktop /usr/local/bin/steam
 COPY scripts/launcher-toggle /opt/dpadcloud/launcher-toggle
+COPY scripts/dpad-publish-desktop-config /opt/dpadcloud/dpad-publish-desktop-config
+COPY scripts/swaymsg-desktop-compat /usr/local/bin/swaymsg
 COPY scripts/battlenet-launch /opt/dpadcloud/battlenet-launch
 COPY scripts/ea-launch /opt/dpadcloud/ea-launch
 COPY scripts/ubisoft-launch /opt/dpadcloud/ubisoft-launch
@@ -816,7 +823,8 @@ RUN set -e; \
       /opt/dpadcloud/dpad-open-url /opt/dpadcloud/epic-launch /opt/dpadcloud/gog-launch \
     && chmod +x \
       /usr/local/bin/steam \
-      /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle \
+      /usr/local/bin/swaymsg \
+      /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/dpad-publish-desktop-config \
       /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
       /opt/dpadcloud/dpad-open-url /opt/dpadcloud/epic-launch /opt/dpadcloud/gog-launch \
     && ln -sf /opt/dpadcloud/battlenet-launch /usr/local/bin/battlenet-launch \

@@ -8,6 +8,9 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = sys.argv[1] if len(sys.argv) > 1 else "dpad-reconnect-spike:latest"
+DESKTOP = os.environ.get("DPAD_DESKTOP_CLIENT", "sway")
+if DESKTOP not in ("sway", "labwc"):
+    raise SystemExit(f"Unsupported DPAD_DESKTOP_CLIENT for GPU test: {DESKTOP}")
 NAME = f"dpad-reconnect-test-{os.getpid()}"
 DOCKER_RUN = [
     "docker", "run", "-d", "--name", NAME,
@@ -23,6 +26,7 @@ DOCKER_RUN = [
     "-e", "DPAD_SELKIES_BIND=0.0.0.0",
     "-e", "SELKIES_BASIC_AUTH_USER=dpad",
     "-e", "SELKIES_BASIC_AUTH_PASSWORD=testpass",
+    "-e", f"DPAD_DESKTOP_CLIENT={DESKTOP}",
     IMAGE,
 ]
 ENTRYPOINT_OVERRIDE = os.environ.get("DPAD_TEST_ENTRYPOINT_OVERRIDE")
@@ -175,18 +179,18 @@ try:
     wait_healthy()
 
     start_peer("peer1", 20)
-    sway = wait_process_identity("sway")
+    desktop = wait_process_identity(DESKTOP)
     xwayland = wait_process_identity("Xwayland")
     launcher = wait_process_identity("dpad-launcher")
     socket = wayland_socket_identity()
     print(
-        f"first peer: sway={sway} Xwayland={xwayland} "
+        f"first peer: {DESKTOP}={desktop} Xwayland={xwayland} "
         f"launcher={launcher} socket={socket}"
     )
 
     wait_peer_video_offer("peer1", 30)
     time.sleep(2)
-    assert_identity("sway", sway, "after first peer disconnected")
+    assert_identity(DESKTOP, desktop, "after first peer disconnected")
     assert_identity("Xwayland", xwayland, "after first peer disconnected")
     assert_identity("dpad-launcher", launcher, "after first peer disconnected")
     if wayland_socket_identity() != socket:
@@ -194,7 +198,7 @@ try:
 
     start_peer("peer2", 10)
     time.sleep(5)
-    assert_identity("sway", sway, "during second peer connection")
+    assert_identity(DESKTOP, desktop, "during second peer connection")
     assert_identity("Xwayland", xwayland, "during second peer connection")
     assert_identity("dpad-launcher", launcher, "during second peer connection")
     if wayland_socket_identity() != socket:
@@ -202,7 +206,7 @@ try:
 
     wait_peer_video_offer("peer2", 20)
     time.sleep(2)
-    assert_identity("sway", sway, "after second peer disconnected")
+    assert_identity(DESKTOP, desktop, "after second peer disconnected")
     assert_identity("Xwayland", xwayland, "after second peer disconnected")
     assert_identity("dpad-launcher", launcher, "after second peer disconnected")
     if wayland_socket_identity() != socket:
@@ -210,25 +214,33 @@ try:
     assert_selkies_log_clean()
 
     # A container-level restart intentionally starts a fresh desktop, but stale
-    # socket pathnames or Sway logs from the prior process must not block health
+    # socket pathnames or desktop logs from the prior process must not block health
     # or make that desktop attach to the dead compositor.
     run("docker", "restart", NAME)
     wait_healthy(120)
     start_peer("peer3", 10)
-    restarted_sway = wait_process_identity("sway")
+    restarted_desktop = wait_process_identity(DESKTOP)
     restarted_xwayland = wait_process_identity("Xwayland")
     restarted_launcher = wait_process_identity("dpad-launcher")
     restarted_socket = wayland_socket_identity()
+    if restarted_desktop == desktop:
+        raise AssertionError(f"{DESKTOP} identity did not refresh across container restart")
+    if restarted_xwayland == xwayland:
+        raise AssertionError("Xwayland identity did not refresh across container restart")
+    if restarted_launcher == launcher:
+        raise AssertionError("launcher identity did not refresh across container restart")
+    if restarted_socket == socket:
+        raise AssertionError("Wayland socket identity did not refresh across container restart")
     wait_peer_video_offer("peer3", 20)
     time.sleep(2)
-    assert_identity("sway", restarted_sway, "after post-restart peer disconnected")
+    assert_identity(DESKTOP, restarted_desktop, "after post-restart peer disconnected")
     assert_identity("Xwayland", restarted_xwayland, "after post-restart peer disconnected")
     assert_identity("dpad-launcher", restarted_launcher, "after post-restart peer disconnected")
     if wayland_socket_identity() != restarted_socket:
         raise AssertionError("Wayland socket changed after post-restart peer disconnected")
 
     print(
-        "PASS: Wayland socket, Sway, Xwayland, and launcher identities "
+        f"PASS: Wayland socket, {DESKTOP}, Xwayland, and launcher identities "
         "survived two peer lifecycles; container restart recovered a fresh "
         "desktop and completed a third peer lifecycle"
     )
