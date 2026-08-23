@@ -709,18 +709,32 @@ start_launcher_session() {
         echo "    ERROR: refusing unsafe or unsupported DPAD_STREAM_FPS"
         return 1
     fi
-    # Live-resolution helpers (§18.7): /tmp/dpad_resolution is written by the
-    # selkies _arg_res data-channel handler (the web dropdown). Both the
-    # compositor caps (DPAD_STREAM_WIDTH/HEIGHT) + the sway `output * mode`
-    # read it, so a live change → handler kills selkies → this health loop
-    # relaunches selkies (new caps) + sway (new output mode) at the new res.
-    # Defaults to DPAD_WD_WIDTH/HEIGHT (the launch env / 1080p).
-    _dpad_res() { [ -f /tmp/dpad_resolution ] && cat /tmp/dpad_resolution || echo "${DPAD_WD_WIDTH:-1920}x${DPAD_WD_HEIGHT:-1080}"; }
+    # Live-resolution helpers (§18.7). Browser commands are disabled unless the
+    # session launcher explicitly forwards DPAD_ALLOW_LIVE_RESOLUTION=1. Ignore
+    # stale state by default, and revalidate opted-in state before it reaches the
+    # shell-built Selkies command or nested desktop configuration.
+    local base_width="${DPAD_WD_WIDTH:-1920}" base_height="${DPAD_WD_HEIGHT:-1080}"
+    if ! [[ "$base_width" =~ ^[1-9][0-9]{2,4}$ && "$base_height" =~ ^[1-9][0-9]{2,4}$ ]] \
+        || (( base_width < 320 || base_width > 16384 || base_height < 200 || base_height > 16384 )); then
+        echo "    ERROR: refusing unsafe DPAD_WD dimensions" >&2
+        return 1
+    fi
+    _dpad_res() {
+        local candidate=""
+        if [ "${DPAD_ALLOW_LIVE_RESOLUTION:-0}" = "1" ] && [ -f /tmp/dpad_resolution ]; then
+            IFS= read -r candidate < /tmp/dpad_resolution || true
+            case "$candidate" in
+                1280x720|1920x1080|2560x1440|3840x2160) printf '%s\n' "$candidate"; return ;;
+                *) echo "    WARNING: ignoring invalid live resolution state" >&2 ;;
+            esac
+        fi
+        printf '%sx%s\n' "$base_width" "$base_height"
+    }
     _dpad_w() { _dpad_res | cut -dx -f1; }
     _dpad_h() { _dpad_res | cut -dx -f2; }
     # Build the selkies-gstreamer launch command. A function (not a captured
-    # string) so each (re)launch re-reads /tmp/dpad_resolution — the health
-    # loop's restart-on-death path picks up a live resolution change.
+    # string) so an explicitly enabled live change is re-read after Selkies is
+    # restarted by the health loop.
     build_selkies_cmd() {
       echo "export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_STREAM_WIDTH=$(_dpad_w) DPAD_STREAM_HEIGHT=$(_dpad_h) XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=${selkies_port} --enable_https=false --encoder=${enc} --framerate=${stream_fps} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
     }

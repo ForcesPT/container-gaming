@@ -244,11 +244,12 @@ def test_brands_selkies_and_places_manual_refresh_notice_by_resolution() -> None
         # to schedule its self-SIGTERM thread.
         class LogCapture:
             def __init__(self) -> None:
+                self.infos: list[str] = []
                 self.warnings: list[str] = []
                 self.errors: list[str] = []
 
-            def info(self, *_args: object) -> None:
-                pass
+            def info(self, message: str) -> None:
+                self.infos.append(message)
 
             def warning(self, message: str) -> None:
                 self.warnings.append(message)
@@ -260,11 +261,30 @@ def test_brands_selkies_and_places_manual_refresh_notice_by_resolution() -> None
         namespace: dict[str, Any] = {"logger": logger}
         exec(patched_input, namespace)
         input_handler = namespace["WebRTCInput"]()
+
+        # A browser persists its resolution dropdown and sends _arg_res during
+        # connection. The default fail-closed runtime must not let that command
+        # override the control-plane dimensions when live resize is disabled.
+        prior_resize = os.environ.pop("DPAD_ALLOW_LIVE_RESOLUTION", None)
+        real_open = builtins.open
+        try:
+            def reject_unexpected_state_write(*_args: object, **_kwargs: object) -> object:
+                raise AssertionError("disabled live resolution attempted a state write")
+
+            builtins.open = reject_unexpected_state_write
+            input_handler.on_message("_arg_res,1920x1080")
+        finally:
+            builtins.open = real_open
+            if prior_resize is not None:
+                os.environ["DPAD_ALLOW_LIVE_RESOLUTION"] = prior_resize
+        assert not logger.errors
+        assert logger.infos and "live resolution disabled" in logger.infos[-1]
+
         for command in ("_arg_res", "_arg_res,99999x99999", "_arg_res,1920x1080,extra"):
             input_handler.on_message(command)
         assert len(logger.warnings) == 3
 
-        real_open = builtins.open
+        os.environ["DPAD_ALLOW_LIVE_RESOLUTION"] = "1"
         try:
             def deny_state_write(*_args: object, **_kwargs: object) -> object:
                 raise OSError("read-only test state")
@@ -273,6 +293,10 @@ def test_brands_selkies_and_places_manual_refresh_notice_by_resolution() -> None
             input_handler.on_message("_arg_res,1920x1080")
         finally:
             builtins.open = real_open
+            if prior_resize is None:
+                os.environ.pop("DPAD_ALLOW_LIVE_RESOLUTION", None)
+            else:
+                os.environ["DPAD_ALLOW_LIVE_RESOLUTION"] = prior_resize
         assert logger.errors and "restart cancelled" in logger.errors[-1]
 
         # A container with the prior permissive overlay must be migrated in

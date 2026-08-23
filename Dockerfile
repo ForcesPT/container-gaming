@@ -550,12 +550,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         wireplumber libeis-dev gstreamer1.0-pipewire \
         gstreamer1.0-tools gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
         gstreamer1.0-x gstreamer1.0-plugins-base pulseaudio-utils \
-        sway labwc wlrctl xwayland util-linux \
+        sway labwc wlrctl wlr-randr xwayland util-linux \
     && command -v sway \
     && sway --version \
     && command -v labwc \
     && labwc --version \
     && command -v wlrctl \
+    && command -v wlr-randr \
     && command -v flock \
     && rm -rf /var/lib/apt/lists/*
 
@@ -666,7 +667,7 @@ RUN mkdir -p "${HOME}/.config/heroic/store" && \
 #        the SDL3 gamepad poll. The Electron runtime libs (libnss/libgtk/
 #        libasound/libxss/...) are already present; libSDL3.so.0 below supplies
 #        the launcher's koffi input path. See launcher/README.
-COPY --from=forcespt/dpadcloud-launcher:0.1.3 /opt/dpadcloud/launcher /opt/dpadcloud/launcher
+COPY --from=forcespt/dpadcloud-launcher:0.1.4 /opt/dpadcloud/launcher /opt/dpadcloud/launcher
 RUN chmod +x /opt/dpadcloud/launcher/dpad-launcher
 
 #    (a) GE-Proton11-3 into compatibilitytools.d. The Battle.net white-screen
@@ -808,6 +809,7 @@ RUN set -e; \
 COPY scripts/launcher-shell /opt/dpadcloud/launcher-shell
 COPY scripts/steam-desktop /usr/local/bin/steam
 COPY scripts/launcher-toggle /opt/dpadcloud/launcher-toggle
+COPY scripts/dpad-labwc-set-output-mode /opt/dpadcloud/dpad-labwc-set-output-mode
 COPY scripts/dpad-publish-desktop-config /opt/dpadcloud/dpad-publish-desktop-config
 COPY scripts/swaymsg-desktop-compat /usr/local/bin/swaymsg
 COPY scripts/battlenet-launch /opt/dpadcloud/battlenet-launch
@@ -818,13 +820,13 @@ COPY scripts/epic-launch /opt/dpadcloud/epic-launch
 COPY scripts/gog-launch /opt/dpadcloud/gog-launch
 RUN set -e; \
     sed -i 's/\r$//' \
-      /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle \
+      /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/dpad-labwc-set-output-mode \
       /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
       /opt/dpadcloud/dpad-open-url /opt/dpadcloud/epic-launch /opt/dpadcloud/gog-launch \
     && chmod +x \
       /usr/local/bin/steam \
       /usr/local/bin/swaymsg \
-      /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/dpad-publish-desktop-config \
+      /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/dpad-labwc-set-output-mode /opt/dpadcloud/dpad-publish-desktop-config \
       /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
       /opt/dpadcloud/dpad-open-url /opt/dpadcloud/epic-launch /opt/dpadcloud/gog-launch \
     && ln -sf /opt/dpadcloud/battlenet-launch /usr/local/bin/battlenet-launch \

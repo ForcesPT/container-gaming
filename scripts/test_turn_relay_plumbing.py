@@ -61,6 +61,10 @@ require('-e DPAD_TURN_RELAY_MIN_PORT="$relay_min"', launcher,
         "launcher must pass the relay minimum into the container")
 require('-e DPAD_TURN_RELAY_MAX_PORT="$relay_max"', launcher,
         "launcher must pass the relay maximum into the container")
+forbid('${pass:0', launcher,
+       "launcher logs must never reveal a password prefix")
+forbid('login dpad/', launcher,
+       "launcher logs must not include credential-shaped login text")
 
 require('DPAD_TURN_RELAY_MIN_PORT', entrypoint,
         "entrypoint must consume the relay minimum")

@@ -7,8 +7,10 @@ GOG (all via launch scripts) — instead of Lutris's library-aggregator model
 (which showed "no games found" on a fresh VM until each store was logged in +
 synced).
 
-Selecting a store card spawns that store's client (e.g. `steam -gamepadui`) in
-the same sway/XWayland session; quitting the store returns to the launcher.
+Selecting a store card spawns that store's standard desktop client in the same
+Sway/Labwc XWayland session; quitting the store returns to the launcher. If a
+store is already visible, selecting a card resumes that existing window instead
+of spawning a duplicate.
 
 ## Files
 - `src/main.js` — Electron main: kiosk fullscreen window; IPC `launch-store`
@@ -28,7 +30,7 @@ the same sway/XWayland session; quitting the store returns to the launcher.
 - `scripts/gen-logos.js` — regenerate `src/logos/*.svg` from simple-icons.
 - `Dockerfile` — package the AppDir into `forcespt/dpadcloud-launcher`
   (FROM scratch, COPY the AppDir to `/opt/dpadcloud/launcher`); the
-  container-gaming Dockerfile `COPY --from=forcespt/dpadcloud-launcher:0.1.0`
+  container-gaming Dockerfile `COPY --from=forcespt/dpadcloud-launcher:0.1.4`
   bakes it into the `:dpad-SteamOS` image.
 - `../scripts/launcher-shell` — the wrapper the entrypoint execs as sway's
   startup app (`DPAD_STORE_SHELL=picker`).
@@ -38,8 +40,8 @@ the same sway/XWayland session; quitting the store returns to the launcher.
 npm install                       # local deps (for `npm start` preview)
 npm start                         # local preview (DPAD_LAUNCHER_DEV=1 mocks Steam available)
 ./scripts/build.sh                # cross-build the Linux AppDir -> dist/linux-unpacked/
-docker build -t forcespt/dpadcloud-launcher:0.1.0 -t forcespt/dpadcloud-launcher:latest .
-docker push forcespt/dpadcloud-launcher:0.1.0
+docker build -t forcespt/dpadcloud-launcher:0.1.4 -t forcespt/dpadcloud-launcher:latest .
+docker push forcespt/dpadcloud-launcher:0.1.4
 docker push forcespt/dpadcloud-launcher:latest
 ```
 
@@ -54,6 +56,7 @@ docker push forcespt/dpadcloud-launcher:latest
 - Navigate: arrow keys / d-pad / left stick.
 - Launch: Enter / gamepad A. Cancel overlay / quit store-back: Esc / gamepad B.
 - The launch overlay (store logo + spinner) is dismissed only by B/Esc.
+- Labwc window fallback: Alt+Tab / Shift+Alt+Tab.
 
 ## Wiring
 `entrypoint.sh`: `DPAD_STORE_SHELL=picker` → `SHELL_APP=/opt/dpadcloud/launcher-shell`

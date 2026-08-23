@@ -21,7 +21,11 @@
 > only the nested desktop/XWayland provider and preserves Sway as the default.
 > Labwc is not production-approved until OVH GPU and user testing complete. Its
 > launcher recovery and the prebuilt launcher's limited Sway IPC calls are
-> translated through Noble's `wlrctl` foreign-toplevel client.
+> translated through Noble's `wlrctl` foreign-toplevel client. Labwc startup
+> applies the requested stream width/height to its nested output before starting
+> the launcher. `Super+L` restores the launcher; selecting a card for an already
+> visible store resumes that store. Alt+Tab and Shift+Alt+Tab cycle windows as a
+> fallback.
 >
 > `r8` preserves the same Smithay compositor, Wayland socket, nested Sway,
 > XWayland, and DpadPlay launcher across transient signaling/browser disconnects.
@@ -111,8 +115,9 @@ Expected flow:
 | `DPAD_VOLUME_MOUNT` | unset | In-container persistent library mount. Steam's complete install root is linked to `<volume>/steam-install`. |
 | `DPAD_GAMEPAD_INTERPOSER` | classic | Set `evdev` for the fake-libudev + evdev interposer path. |
 | `DPAD_ENCODER` | `nvh264enc` | Selkies encoder. Use another validated Selkies encoder only after a GPU/browser canary. |
-| `DPAD_WD_WIDTH` / `DPAD_WD_HEIGHT` | `1920` / `1080` | Initial compositor and Sway output resolution. |
+| `DPAD_WD_WIDTH` / `DPAD_WD_HEIGHT` | `1920` / `1080` | Initial outer compositor and selected nested desktop output resolution. Labwc explicitly synchronizes its output to these dimensions after startup. |
 | `DPAD_STREAM_WIDTH` / `DPAD_STREAM_HEIGHT` | `1920` / `1080` | Values forwarded by the session launcher; normally match the compositor size. |
+| `DPAD_ALLOW_LIVE_RESOLUTION` | `0` | Browser `_arg_res` commands are ignored by default so persisted client settings cannot override control-plane dimensions. Set exactly `1` only when per-session live resizing is intentionally enabled. |
 | `DPAD_STREAM_FPS` | `60` | Initial Selkies/compositor capture frame rate. Supported presets are 30, 60, 120, 144, and 240; unsupported or malformed values fail closed before constructing the Selkies command. The worker passes the user's selected launch profile per session; live Selkies FPS changes continue to use the patched `set_framerate` path. |
 | `DPAD_SELKIES_BIND` | `127.0.0.1` | Production session launcher sets `0.0.0.0` for stream-bridge access. |
 | `DPAD_COTURN_PORT` | `3478` | Coturn listening port inside the container. |
@@ -186,7 +191,7 @@ Useful logs inside the container:
 | No TURN relay / browser stays on `Waiting for stream` while input works | Verify host networking and that the slot's TURN listener, Selkies listener, and complete relay range are allowed by the provider firewall. Confirm coturn received matching `DPAD_TURN_RELAY_MIN_PORT`/`MAX_PORT` values and its process includes the expected `--min-port`/`--max-port`. Signaling and an open input data channel do not prove media relay reachability. |
 | Browser remains on waiting state after reconnect | A peer disconnect must not restart Selkies or the selected desktop. Check `/tmp/selkies.log` for pipeline errors and verify the selected-desktop/XWayland/launcher PID+start-time identities and the `wayland-N` socket inode did not change. A dead Selkies process is a separate process-relaunch path. |
 | Container remains `starting` after Docker restart | Confirm the entrypoint cleaned stale numeric `wayland-N` socket/lock paths and both protected desktop logs immediately before starting the new Selkies process. Do not move this cleanup into peer-disconnect handling. |
-| Live resolution changed but old size remains | Use the drawer's Refresh action after selecting a resolution; NVENC/WebRTC requires a fresh peer pipeline. |
+| Browser resolution selection has no effect | This is the secure default: browser-persisted `_arg_res` commands cannot override control-plane dimensions. Use the configured session resolution, or explicitly set `DPAD_ALLOW_LIVE_RESOLUTION=1`; when enabled, select a supported resolution and use Refresh to rebuild the NVENC/WebRTC pipeline. |
 
 ## Source validation
 

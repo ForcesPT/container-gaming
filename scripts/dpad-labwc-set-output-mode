@@ -1,0 +1,30 @@
+#!/bin/bash
+# Match Labwc's nested wlroots output to the Selkies compositor dimensions.
+set -euo pipefail
+
+WIDTH="${1:-}"
+HEIGHT="${2:-}"
+WLR_RANDR="${DPAD_WLR_RANDR:-/usr/bin/wlr-randr}"
+
+[[ "$WIDTH" =~ ^[1-9][0-9]{2,4}$ && "$HEIGHT" =~ ^[1-9][0-9]{2,4}$ ]] \
+    || { echo "invalid Labwc output dimensions" >&2; exit 2; }
+(( WIDTH >= 320 && WIDTH <= 16384 && HEIGHT >= 200 && HEIGHT <= 16384 )) \
+    || { echo "Labwc output dimensions out of range" >&2; exit 2; }
+[ -x "$WLR_RANDR" ] || { echo "wlr-randr is unavailable" >&2; exit 1; }
+
+# Labwc exports its client-facing WAYLAND_DISPLAY before running autostart.
+# The nested output may need a short moment to appear, so retry discovery and
+# application as one bounded operation. Do not pass a refresh rate: wlroots'
+# nested Wayland backend rejects custom modes with an explicit refresh value.
+for _attempt in $(seq 1 50); do
+    listing="$($WLR_RANDR 2>/dev/null || true)"
+    output="${listing%%[[:space:]]*}"
+    if [[ "$output" =~ ^[A-Za-z0-9_.-]+$ ]] \
+        && "$WLR_RANDR" --output "$output" --custom-mode "${WIDTH}x${HEIGHT}"; then
+        exit 0
+    fi
+    sleep 0.1
+done
+
+echo "could not apply Labwc output mode ${WIDTH}x${HEIGHT}" >&2
+exit 1

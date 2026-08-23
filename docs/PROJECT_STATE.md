@@ -1,5 +1,17 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-08-23 Labwc output/store recovery canary — LIVE VALIDATED.** Labwc's
+> nested Wayland backend initially exposed 1280x720 while Selkies and
+> `gst-wayland-display` captured the requested larger frame, producing encoded
+> black space on the right and bottom. `dpad-labwc-set-output-mode` now applies
+> the validated stream dimensions with `wlr-randr --custom-mode` before the
+> launcher starts. The live canary cold-started with Selkies, Labwc, XWayland,
+> and the launcher all at 1920x984. Launcher 0.1.4 also resumes an existing
+> visible store when its card is selected, adopts visible stores after launcher
+> restart, and adds Alt+Tab / Shift+Alt+Tab Labwc window cycling. The exact live
+> Steam flow (launch, restore launcher, select Steam again) returned to the
+> existing Steam login window without spawning a duplicate.
+>
 > **2026-08-22 Labwc stacking-desktop canary — GPU + INITIAL USER VALIDATION
 > PASSED.** Sway remains the production default and immediate fallback. The
 > image installs Ubuntu Noble's Labwc alongside Sway, and the

@@ -15,10 +15,11 @@ toggle = (root / "scripts/launcher-toggle").read_text()
 publisher = (root / "scripts/dpad-publish-desktop-config").read_text()
 
 for required in (
-    "sway labwc wlrctl xwayland util-linux",
+    "sway labwc wlrctl wlr-randr xwayland util-linux",
     "command -v labwc",
     "labwc --version",
     "command -v wlrctl",
+    "command -v wlr-randr",
     "command -v flock",
     "COPY scripts/dpad-publish-desktop-config /opt/dpadcloud/dpad-publish-desktop-config",
     "COPY scripts/swaymsg-desktop-compat /usr/local/bin/swaymsg",

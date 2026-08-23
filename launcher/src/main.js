@@ -20,6 +20,7 @@ const path = require('path');
 const fs = require('fs');
 const { spawn, execSync } = require('child_process');
 const { pollGamepads, mapToWebApi } = require('./sdl_manager.cjs');
+const { detectStoreIdFromTitles, resumeActiveStore } = require('./store_lifecycle.cjs');
 
 const USER_HOME = process.env.HOME || '/home/dpad';
 const LOG_FILE = path.join('/tmp', 'launcher.log');
@@ -159,12 +160,12 @@ function showLauncherFromScratchpad() {
   }, 200);
 }
 
-// Check if the store's window has appeared in the sway tree. We poll the
-// sway tree for any window that is NOT our launcher — once we see one, the
-// store is visible.
-function checkStoreWindowVisible(storeId) {
+// Return visible non-launcher window titles from the desktop tree. Keeping the
+// titles lets a restarted launcher adopt an already-running store instead of
+// losing its in-memory child handle and spawning a duplicate.
+function getStoreWindowTitles() {
   const output = swaymsg('-t get_tree');
-  if (!output) return false;
+  if (!output) return [];
   try {
     const tree = JSON.parse(output);
     // Walk the tree looking for any window (leaf node) whose name is not
@@ -184,10 +185,14 @@ function checkStoreWindowVisible(storeId) {
       return found;
     }
     const storeWindows = findStoreWindows(tree);
-    return storeWindows.length > 0;
+    return storeWindows.map(node => node.name);
   } catch (e) {
-    return false;
+    return [];
   }
+}
+
+function checkStoreWindowVisible(_storeId) {
+  return getStoreWindowTitles().length > 0;
 }
 
 // --- Window lifecycle ---
@@ -234,10 +239,20 @@ ipcMain.handle('launch-store', (event, storeId) => {
   if (!store) return { ok: false, error: 'unknown store' };
   if (store.comingSoon || !store.cmd) return { ok: false, error: 'coming soon / no command' };
 
-  // Don't launch if a store is already running
-  if (activeStoreChild) {
-    log(`launch-store ${storeId}: another store (${activeStoreId}) is already running`);
-    return { ok: false, error: 'another store is already running' };
+  // If a store is already running, return to its existing window instead of
+  // trapping the user in the launcher or spawning a duplicate client.
+  const existingStoreId = activeStoreId || detectStoreIdFromTitles(getStoreWindowTitles());
+  if (existingStoreId) {
+    return resumeActiveStore({
+      activeStoreId: existingStoreId,
+      activeStorePid: activeStoreChild ? activeStoreChild.pid : null,
+      isWindowVisible: checkStoreWindowVisible,
+      hideLauncher: hideLauncherToScratchpad,
+      notifyVisible: id => {
+        if (mainWindow) mainWindow.webContents.send('store-visible', id);
+      },
+      log,
+    });
   }
 
   log(`launch-store ${storeId}: ${store.cmd.join(' ')}`);

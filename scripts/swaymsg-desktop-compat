@@ -11,7 +11,7 @@ if [ "$DESKTOP" = sway ]; then
 fi
 [ "$DESKTOP" = labwc ] || { echo "unsupported desktop: $DESKTOP" >&2; exit 2; }
 
-# Launcher v0.1.3 must supply the exact marker derived from this session's
+# The launcher must supply the exact marker derived from this session's
 # XDG_RUNTIME_DIR. Reject missing/different transport options fail-closed.
 [ -n "${XDG_RUNTIME_DIR:-}" ] || { echo "missing XDG_RUNTIME_DIR" >&2; exit 2; }
 EXPECTED_MARKER="$XDG_RUNTIME_DIR/sway-ipc.labwc-compat.sock"

@@ -55,10 +55,12 @@ else
     <keybind key="W-l"><action name="Execute"><command>/opt/dpadcloud/launcher-toggle</command></action></keybind>
     <keybind key="W-q"><action name="Close" /></keybind>
     <keybind key="W-k"><action name="Close" /></keybind>
+    <keybind key="A-Tab"><action name="NextWindow" /></keybind>
+    <keybind key="A-S-Tab"><action name="PreviousWindow" /></keybind>
   </keyboard>
 </labwc_config>
 LABWCRC
-    printf '%s\n' "${SHELL_APP} &" > "$generation/autostart"
+    printf '%s\n' "/opt/dpadcloud/dpad-labwc-set-output-mode ${WIDTH} ${HEIGHT} && ${SHELL_APP} &" > "$generation/autostart"
     chmod 0644 "$generation/rc.xml" "$generation/autostart"
     rm -f -- "$link_tmp"
     ln -s "$(basename "$generation")" "$link_tmp"

@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PUBLISHER = ROOT / "scripts" / "dpad-publish-desktop-config"
 COMPAT = ROOT / "scripts" / "swaymsg-desktop-compat"
 TOGGLE = ROOT / "scripts" / "launcher-toggle"
+LABWC_MODE = ROOT / "scripts" / "dpad-labwc-set-output-mode"
 
 
 class DesktopRuntimeHelpersTests(unittest.TestCase):
@@ -38,7 +39,19 @@ class DesktopRuntimeHelpersTests(unittest.TestCase):
             self.assertTrue(current.is_symlink())
             config_dir = current.resolve()
             self.assertEqual(ET.parse(config_dir / "rc.xml").getroot().tag, "labwc_config")
-            self.assertEqual((config_dir / "autostart").read_text(), "/opt/dpadcloud/launcher-shell &\n")
+            autostart = (config_dir / "autostart").read_text()
+            self.assertEqual(
+                autostart,
+                "/opt/dpadcloud/dpad-labwc-set-output-mode 1920 1080 && "
+                "/opt/dpadcloud/launcher-shell &\n",
+            )
+            rc = ET.parse(config_dir / "rc.xml").getroot()
+            actions = {
+                node.attrib["key"]: [action.attrib["name"] for action in node.findall("action")]
+                for node in rc.findall("./keyboard/keybind")
+            }
+            self.assertEqual(actions["A-Tab"], ["NextWindow"])
+            self.assertEqual(actions["A-S-Tab"], ["PreviousWindow"])
             self.assertFalse((config_dir / "rc.xml.tmp").exists())
             self.assertFalse((config_dir / "autostart.tmp").exists())
 
@@ -89,7 +102,11 @@ class DesktopRuntimeHelpersTests(unittest.TestCase):
             self.run_cmd(str(PUBLISHER), "labwc", "/opt/dpadcloud/launcher-shell-v2", "1920", "1080", env=env)
             second_target = os.readlink(current)
             self.assertNotEqual(first_target, second_target)
-            self.assertEqual((current.resolve() / "autostart").read_text(), "/opt/dpadcloud/launcher-shell-v2 &\n")
+            self.assertEqual(
+                (current.resolve() / "autostart").read_text(),
+                "/opt/dpadcloud/dpad-labwc-set-output-mode 1920 1080 && "
+                "/opt/dpadcloud/launcher-shell-v2 &\n",
+            )
             self.assertFalse(Path(tmp, first_target).exists())
 
     def test_concurrent_labwc_publications_leave_a_live_complete_generation(self):
@@ -116,6 +133,34 @@ class DesktopRuntimeHelpersTests(unittest.TestCase):
             env = {**os.environ, "DPAD_RUNTIME_DIR": tmp}
             result = self.run_cmd(str(PUBLISHER), "unknown", "shell", "1", "1", env=env, check=False)
             self.assertNotEqual(result.returncode, 0)
+
+    def test_labwc_mode_helper_applies_exact_custom_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp, "wlr-randr.log")
+            fake = Path(tmp, "wlr-randr")
+            fake.write_text(
+                "#!/bin/sh\n"
+                f"printf '%s\\n' \"$*\" >> {log}\n"
+                "if [ $# -eq 0 ]; then printf '%s\\n' 'WL-1 \"Wayland output 1\"'; fi\n"
+            )
+            fake.chmod(0o755)
+            env = {**os.environ, "DPAD_WLR_RANDR": str(fake)}
+            self.run_cmd(str(LABWC_MODE), "1920", "984", env=env)
+            self.assertEqual(
+                log.read_text().splitlines(),
+                ["", "--output WL-1 --custom-mode 1920x984"],
+            )
+
+    def test_labwc_mode_helper_rejects_malformed_dimensions_without_running_tool(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp, "called")
+            fake = Path(tmp, "wlr-randr")
+            fake.write_text(f"#!/bin/sh\ntouch {marker}\n")
+            fake.chmod(0o755)
+            env = {**os.environ, "DPAD_WLR_RANDR": str(fake)}
+            result = self.run_cmd(str(LABWC_MODE), "1920x1", "984", env=env, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(marker.exists())
 
     def test_sway_mode_delegates_to_real_swaymsg(self):
         with tempfile.TemporaryDirectory() as tmp:

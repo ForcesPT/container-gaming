@@ -20,6 +20,18 @@ class StreamFpsPlumbingTests(unittest.TestCase):
         launcher = (ROOT / "scripts" / "dpad-launch-session").read_text()
         self.assertIn('-e DPAD_STREAM_FPS="${DPAD_STREAM_FPS:-60}"', launcher)
 
+    def test_live_resolution_is_validated_and_forwarded_by_session_launcher(self) -> None:
+        launcher = (ROOT / "scripts" / "dpad-launch-session").read_text()
+        self.assertIn('case "${DPAD_ALLOW_LIVE_RESOLUTION:-0}" in', launcher)
+        self.assertIn('-e DPAD_ALLOW_LIVE_RESOLUTION="${DPAD_ALLOW_LIVE_RESOLUTION:-0}"', launcher)
+
+    def test_entrypoint_uses_live_resolution_only_after_explicit_opt_in(self) -> None:
+        entrypoint = (ROOT / "entrypoint.sh").read_text()
+        self.assertIn('[ "${DPAD_ALLOW_LIVE_RESOLUTION:-0}" = "1" ]', entrypoint)
+        self.assertIn('1280x720|1920x1080|2560x1440|3840x2160', entrypoint)
+        self.assertIn('ignoring invalid live resolution state', entrypoint)
+        self.assertIn('refusing unsafe DPAD_WD dimensions', entrypoint)
+
     def test_entrypoint_uses_validated_initial_frame_rate(self) -> None:
         entrypoint = (ROOT / "entrypoint.sh").read_text()
         self.assertIn('/opt/dpadcloud/dpad-validate-stream-fps "${DPAD_STREAM_FPS:-60}"', entrypoint)

@@ -573,6 +573,10 @@ def patch_webrtc_input(source: str) -> str | None:
             }:
                 logger.warning("DPAD: rejecting unsupported resolution command: %s" % msg)
                 return
+            import os as _os
+            if _os.environ.get("DPAD_ALLOW_LIVE_RESOLUTION", "0") != "1":
+                logger.info("DPAD: live resolution disabled; ignoring command: %s" % msg)
+                return
             res = toks[1]
             logger.info("DPAD: live resolution change to %s -- writing /tmp/dpad_resolution + restarting selkies" % res)
             try:
@@ -581,7 +585,7 @@ def patch_webrtc_input(source: str) -> str | None:
             except Exception as e:
                 logger.error("failed to write /tmp/dpad_resolution; restart cancelled: %s" % e)
                 return
-            import os as _os, signal as _signal, threading as _threading
+            import signal as _signal, threading as _threading
             def _selfterm(_delay=0.5):
                 import time; time.sleep(_delay)
                 _os.kill(_os.getpid(), _signal.SIGTERM)
@@ -615,6 +619,7 @@ for candidate in dict.fromkeys(candidate_paths):
         lambda source: (
             'toks[0] == "_arg_res"' in source
             and 'if len(toks) != 2 or toks[1] not in {' in source
+            and 'DPAD_ALLOW_LIVE_RESOLUTION' in source
             and 'restart cancelled' in source
         ),
         patch_webrtc_input,
