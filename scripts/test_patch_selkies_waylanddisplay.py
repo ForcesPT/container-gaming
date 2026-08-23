@@ -72,6 +72,8 @@ with tempfile.TemporaryDirectory() as td:
     assert 'Gst.ElementFactory.make("waylanddisplaysrc", "x11")' in patched
     assert 'if self.ximagesrc is None:' in patched
     assert 'Reusing persistent waylanddisplaysrc compositor' in patched
+    assert 'from dpad_wayland_input import register_source' in patched
+    assert 'register_source(self.ximagesrc)' in patched
     assert 'DPAD_VIDEO_SRC", "") == "pipewiresrc"' not in patched
     assert 'set_property("show-pointer", 0)' not in patched
     assert 'set_property("endx", 0)' not in patched

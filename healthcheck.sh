@@ -29,6 +29,19 @@ fi
 if [ -e "/run/dpadcloud/${desktop}-client.log" ] && ! pgrep -x "$desktop" >/dev/null; then
     echo "UNHEALTHY: $desktop desktop exited"; exit 1
 fi
+if [ "$desktop" = "labwc" ] && pgrep -x labwc >/dev/null; then
+    dpad_uid="$(id -u dpad 2>/dev/null || printf '1000')"
+    waybar_state="/run/user/${dpad_uid}/dpad-waybar.state"
+    if [ ! -r "$waybar_state" ]; then
+        labwc_pid="$(pgrep -n -x labwc 2>/dev/null || true)"
+        labwc_age="$(ps -o etimes= -p "$labwc_pid" 2>/dev/null | tr -d ' ' || true)"
+        if ! [[ "$labwc_age" =~ ^[0-9]+$ ]] || [ "$labwc_age" -ge 30 ]; then
+            echo "UNHEALTHY: Labwc Waybar taskbar has no readiness state"; exit 1
+        fi
+    else
+        /opt/dpadcloud/dpad-waybar-state-check "$waybar_state" || exit 1
+    fi
+fi
 if command -v nvidia-smi >/dev/null 2>&1 && ! nvidia-smi >/dev/null 2>&1; then
     echo "UNHEALTHY: NVIDIA GPU is inaccessible"; exit 1
 fi

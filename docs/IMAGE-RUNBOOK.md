@@ -27,6 +27,20 @@
 > visible store resumes that store. Alt+Tab and Shift+Alt+Tab cycle windows as a
 > fallback.
 >
+> **Taskbar/input candidate (2026-08-23, source-only):** Labwc autostarts Waybar
+> with its native `wlr/taskbar` module after output synchronization. Waybar owns
+> its layer-shell exclusive zone; there is no static Labwc margin and no custom
+> Electron/Tint2 panel. Selkies first sends mouse and keyboard events to the
+> persistent `waylanddisplaysrc` compositor seat using custom upstream
+> GStreamer events, then falls back to XTest if the Wayland source is not
+> available. This route is gated to Labwc; production Sway remains XTest-only.
+> Labwc keyboard events use the XWayland keymap for translation before Smithay
+> injection. This candidate has no GPU/image/live acceptance yet.
+> Waybar is launched through `/opt/dpadcloud/dpad-waybar`, which publishes a
+> PID-bound starting/ready state, validates the panel JSON, positively probes
+> the foreign-toplevel manager and Wayland seat before launch, and kills the
+> whole panel on module-init failure. Live mapped geometry remains a VM gate.
+>
 > `r8` preserves the same Smithay compositor, Wayland socket, nested Sway,
 > XWayland, and DpadPlay launcher across transient signaling/browser disconnects.
 > It also removes process-owned stale Wayland socket paths and the stale Sway
@@ -56,7 +70,7 @@ The final image includes:
 - Valve's official Steam Linux desktop client, pre-bootstrapped on Xvfb.
 - `/usr/local/bin/steam`, a stable desktop-client target used by the launcher.
 - DpadPlay launcher, Heroic, Lutris, umu, GE-Proton, and store wrappers.
-- Selkies 1.6.2, `gst-wayland-display`, Sway/Labwc, XWayland, `wlrctl`, PipeWire, coturn, and NVENC.
+- Selkies 1.6.2, `gst-wayland-display`, Sway/Labwc, Labwc-only Waybar, XWayland, `wlrctl`, PipeWire, coturn, and NVENC.
 - No retired compositor binaries or alternate Steam startup mode.
 
 ## Warm-VM deployment
@@ -199,6 +213,10 @@ Useful logs inside the container:
 python3 scripts/test_launcher_only_architecture.py
 python3 scripts/test_desktop_client_selection.py
 python3 scripts/test_desktop_runtime_helpers.py
+python3 scripts/test_waybar_taskbar.py
+python3 scripts/test_wayland_input_bridge.py
+python3 scripts/test_selkies_wayland_input_routing.py
+python3 scripts/test_selkies_wayland_input_behavior.py
 python3 scripts/test_turn_relay_plumbing.py
 python3 scripts/test_obsolete_components_removed.py
 python3 scripts/test_stream_fps_plumbing.py

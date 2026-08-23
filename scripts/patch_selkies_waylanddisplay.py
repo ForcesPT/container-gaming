@@ -39,6 +39,8 @@ if PERSIST_MARK not in source:
         '                self.ximagesrc.set_property("cuda-device-id", self.gpu_id)\n'
         '        else:\n'
         '            logger.info("Reusing persistent waylanddisplaysrc compositor")\n'
+        '        from dpad_wayland_input import register_source\n'
+        '        register_source(self.ximagesrc)\n'
         '        self.ximagesrc_caps = Gst.caps_from_string("video/x-raw,format=RGBx")\n'
         '        self.ximagesrc_caps.set_value("width", int(os.environ.get("DPAD_STREAM_WIDTH", "1920")))\n'
         '        self.ximagesrc_caps.set_value("height", int(os.environ.get("DPAD_STREAM_HEIGHT", "1080")))\n'

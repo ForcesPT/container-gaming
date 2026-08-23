@@ -45,5 +45,20 @@ if [ "$#" -eq 3 ] && [ "$1" = "[title=DpadPlay]" ] \
     && [ "$2" = fullscreen ] && [ "$3" = enable ]; then
     exec "$WLRCTL" window fullscreen title:DpadPlay
 fi
+if [ "$#" -eq 2 ] && { [ "$2" = focus ] || [ "$2" = kill ]; }; then
+    case "$1" in
+        '[class=steam]') APP_ID=steam ;;
+        '[class=Battle.net.exe]') APP_ID=Battle.net.exe ;;
+        '[class=EpicGamesLauncher.exe]') APP_ID=EpicGamesLauncher.exe ;;
+        '[class=GalaxyClient.exe]') APP_ID=GalaxyClient.exe ;;
+        '[class=EADesktop.exe]') APP_ID=EADesktop.exe ;;
+        '[class=upc.exe]') APP_ID=upc.exe ;;
+        *) APP_ID= ;;
+    esac
+    if [ -n "$APP_ID" ]; then
+        [ "$2" = focus ] && exec "$WLRCTL" window focus "app_id:$APP_ID"
+        exec "$WLRCTL" window close "app_id:$APP_ID"
+    fi
+fi
 echo "unsupported Labwc swaymsg compatibility command: $*" >&2
 exit 2

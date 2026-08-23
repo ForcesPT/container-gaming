@@ -16,6 +16,7 @@ TOGGLE = ROOT / "scripts" / "launcher-toggle"
 LABWC_MODE = ROOT / "scripts" / "dpad-labwc-set-output-mode"
 
 
+
 class DesktopRuntimeHelpersTests(unittest.TestCase):
     def run_cmd(self, *args: str, env: dict[str, str] | None = None, check: bool = True):
         return subprocess.run(args, text=True, capture_output=True, env=env, check=check)
@@ -34,17 +35,17 @@ class DesktopRuntimeHelpersTests(unittest.TestCase):
     def test_labwc_config_and_autostart_are_published_together(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = {**os.environ, "DPAD_RUNTIME_DIR": tmp}
-            self.run_cmd(str(PUBLISHER), "labwc", "/opt/dpadcloud/launcher-shell", "1920", "1080", env=env)
+            self.run_cmd(str(PUBLISHER), "labwc", "/opt/dpadcloud/launcher-shell", "1920", "984", env=env)
             current = Path(tmp, "labwc-current")
             self.assertTrue(current.is_symlink())
             config_dir = current.resolve()
             self.assertEqual(ET.parse(config_dir / "rc.xml").getroot().tag, "labwc_config")
             autostart = (config_dir / "autostart").read_text()
-            self.assertEqual(
-                autostart,
-                "/opt/dpadcloud/dpad-labwc-set-output-mode 1920 1080 && "
-                "/opt/dpadcloud/launcher-shell &\n",
-            )
+            self.assertIn("/opt/dpadcloud/dpad-labwc-set-output-mode 1920 984 || exit 1", autostart)
+            self.assertIn("/opt/dpadcloud/dpad-waybar --config", autostart)
+            self.assertIn("--style", autostart)
+            self.assertIn("/opt/dpadcloud/launcher-shell &", autostart)
+            self.assertLess(autostart.index("dpad-labwc-set-output-mode"), autostart.index("dpad-waybar --config"))
             rc = ET.parse(config_dir / "rc.xml").getroot()
             actions = {
                 node.attrib["key"]: [action.attrib["name"] for action in node.findall("action")]
@@ -52,8 +53,23 @@ class DesktopRuntimeHelpersTests(unittest.TestCase):
             }
             self.assertEqual(actions["A-Tab"], ["NextWindow"])
             self.assertEqual(actions["A-S-Tab"], ["PreviousWindow"])
+            self.assertIsNone(rc.find("./margin"))
+            self.assertIsNone(rc.find("./windowRules"))
+            waybar = json.loads((config_dir / "waybar.json").read_text())
+            self.assertEqual(waybar["position"], "bottom")
+            self.assertNotIn("mode", waybar)
+            self.assertEqual(waybar["layer"], "overlay")
+            self.assertFalse(waybar["start_hidden"])
+            self.assertTrue(waybar["exclusive"])
+            self.assertFalse(waybar["passthrough"])
+            self.assertEqual(waybar["height"], 46)
+            self.assertIn("wlr/taskbar", waybar["modules-left"])
+            self.assertEqual(waybar["wlr/taskbar"]["on-click"], "activate")
+            self.assertNotIn("on-click-middle", waybar["wlr/taskbar"])
+            self.assertIn("#taskbar", (config_dir / "waybar.css").read_text())
             self.assertFalse((config_dir / "rc.xml.tmp").exists())
             self.assertFalse((config_dir / "autostart.tmp").exists())
+
 
     def test_publication_failure_is_nonzero_and_does_not_publish(self):
         env = {**os.environ, "DPAD_RUNTIME_DIR": "/proc/dpadcloud-test-forbidden"}
@@ -102,11 +118,9 @@ class DesktopRuntimeHelpersTests(unittest.TestCase):
             self.run_cmd(str(PUBLISHER), "labwc", "/opt/dpadcloud/launcher-shell-v2", "1920", "1080", env=env)
             second_target = os.readlink(current)
             self.assertNotEqual(first_target, second_target)
-            self.assertEqual(
-                (current.resolve() / "autostart").read_text(),
-                "/opt/dpadcloud/dpad-labwc-set-output-mode 1920 1080 && "
-                "/opt/dpadcloud/launcher-shell-v2 &\n",
-            )
+            autostart = (current.resolve() / "autostart").read_text()
+            self.assertIn("/opt/dpadcloud/launcher-shell-v2 &", autostart)
+            self.assertIn("/opt/dpadcloud/dpad-waybar --config", autostart)
             self.assertFalse(Path(tmp, first_target).exists())
 
     def test_concurrent_labwc_publications_leave_a_live_complete_generation(self):
@@ -172,6 +186,7 @@ class DesktopRuntimeHelpersTests(unittest.TestCase):
             self.run_cmd(str(COMPAT), "-t", "get_tree", env=env)
             self.assertEqual(log.read_text().strip(), "-t get_tree")
 
+
     def test_labwc_get_tree_filters_launcher_and_reports_store(self):
         with tempfile.TemporaryDirectory() as tmp:
             fake = Path(tmp, "wlrctl")
@@ -182,7 +197,7 @@ class DesktopRuntimeHelpersTests(unittest.TestCase):
             tree = json.loads(result.stdout)
             self.assertEqual([node["name"] for node in tree["nodes"]], ["Steam"])
 
-    def test_labwc_translates_hide_restore_and_fullscreen(self):
+    def test_labwc_translates_hide_restore_fullscreen_and_store_focus(self):
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp, "wlrctl.log")
             fake = Path(tmp, "wlrctl")
@@ -193,10 +208,14 @@ class DesktopRuntimeHelpersTests(unittest.TestCase):
             self.run_cmd(str(COMPAT), "-s", marker, "[title=DpadPlay]", "move", "container", "to", "scratchpad", env=env)
             self.run_cmd(str(COMPAT), "-s", marker, "scratchpad", "show", env=env)
             self.run_cmd(str(COMPAT), "-s", marker, "[title=DpadPlay]", "fullscreen", "enable", env=env)
+            self.run_cmd(str(COMPAT), "-s", marker, "[class=steam]", "focus", env=env)
+            self.run_cmd(str(COMPAT), "-s", marker, "[class=steam]", "kill", env=env)
             self.assertEqual(log.read_text().splitlines(), [
                 "window minimize title:DpadPlay",
                 "window focus title:DpadPlay",
                 "window fullscreen title:DpadPlay",
+                "window focus app_id:steam",
+                "window close app_id:steam",
             ])
 
     def test_labwc_rejects_extended_or_malformed_swaymsg_commands(self):

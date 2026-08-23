@@ -11,18 +11,26 @@ dockerfile = (root / "Dockerfile").read_text()
 entrypoint = (root / "entrypoint.sh").read_text()
 launcher = (root / "scripts/dpad-launch-session").read_text()
 healthcheck = (root / "healthcheck.sh").read_text()
+waybar_state_check = (root / "scripts/dpad-waybar-state-check").read_text()
+waybar_wrapper = (root / "scripts/dpad-waybar").read_text()
 toggle = (root / "scripts/launcher-toggle").read_text()
 publisher = (root / "scripts/dpad-publish-desktop-config").read_text()
 
 for required in (
-    "sway labwc wlrctl wlr-randr xwayland util-linux",
+    "sway labwc waybar wayland-utils wlrctl wlr-randr xwayland util-linux",
     "command -v labwc",
     "labwc --version",
     "command -v wlrctl",
     "command -v wlr-randr",
+    "command -v waybar",
+    "command -v wayland-info",
+
     "command -v flock",
     "COPY scripts/dpad-publish-desktop-config /opt/dpadcloud/dpad-publish-desktop-config",
+    "COPY scripts/dpad-waybar /opt/dpadcloud/dpad-waybar",
+    "COPY scripts/dpad-waybar-state-check /opt/dpadcloud/dpad-waybar-state-check",
     "COPY scripts/swaymsg-desktop-compat /usr/local/bin/swaymsg",
+
 ):
     if required not in dockerfile:
         errors.append(f"Dockerfile missing desktop package contract: {required}")
@@ -80,9 +88,33 @@ for required in (
     'desktop="${DPAD_DESKTOP_CLIENT:-sway}"',
     "/run/dpadcloud/${desktop}-client.log",
     'pgrep -x "$desktop"',
+    '"$desktop" = "labwc"',
+    "dpad-waybar.state",
+    "/opt/dpadcloud/dpad-waybar-state-check",
 ):
     if required not in healthcheck:
         errors.append(f"healthcheck missing selected-desktop contract: {required}")
+
+for required in (
+    "Waybar supervisor exceeded startup grace",
+    "readiness PID is a zombie",
+    "readiness PID was reused",
+):
+    if required not in waybar_state_check:
+        errors.append(f"Waybar state validator missing fail-closed contract: {required}")
+
+for required in (
+    "object_pairs_hook",
+    '"$WAYBAR_BIN" --log-level info "${waybar_args[@]}" 9>&-',
+    'publish_state starting "$child"',
+    'wait "$child" 2>/dev/null\n        status=$?\n        child=""',
+    'wait "$child"\nstatus=$?\nchild=""',
+):
+    if required not in waybar_wrapper:
+        errors.append(f"Waybar wrapper missing exact/reap-safe contract: {required}")
+
+if 'kill -TERM -- "-$child"' in waybar_wrapper or 'kill -KILL -- "-$child"' in waybar_wrapper:
+    errors.append("Waybar wrapper retains unsafe negative-PGID signaling")
 
 gpu_test = (root / "scripts/test_reconnect_persistence_gpu.py").read_text()
 for required in (

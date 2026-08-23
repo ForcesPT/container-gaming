@@ -21,12 +21,27 @@ const resumed = resumeActiveStore({
   activeStoreId: 'steam',
   activeStorePid: 42,
   isWindowVisible: id => { calls.push(`visible:${id}`); return true; },
+  focusStore: id => { calls.push(`focus:${id}`); return true; },
   hideLauncher: () => calls.push('hide'),
   notifyVisible: id => calls.push(`notify:${id}`),
   log: line => calls.push(`log:${line}`),
 });
 assert.deepStrictEqual(resumed, { ok: true, resumed: true, storeId: 'steam', pid: 42 });
-assert.deepStrictEqual(calls.slice(0, 3), ['visible:steam', 'hide', 'notify:steam']);
+assert.deepStrictEqual(calls.slice(0, 4), ['visible:steam', 'focus:steam', 'hide', 'notify:steam']);
+
+const focusFailedCalls = [];
+const focusFailed = resumeActiveStore({
+  activeStoreId: 'steam',
+  isWindowVisible: () => true,
+  focusStore: id => { focusFailedCalls.push(`focus:${id}`); return false; },
+  hideLauncher: () => focusFailedCalls.push('hide'),
+});
+assert.deepStrictEqual(focusFailed, {
+  ok: false,
+  activeStoreId: 'steam',
+  error: 'Steam is running but its window could not be focused',
+});
+assert.deepStrictEqual(focusFailedCalls, ['focus:steam']);
 
 const waitingCalls = [];
 const waiting = resumeActiveStore({

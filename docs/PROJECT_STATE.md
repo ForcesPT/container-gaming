@@ -1,5 +1,25 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-08-23 Waybar taskbar + native Wayland input — SOURCE COMPLETE, VM
+> ACCEPTANCE PENDING.** The Labwc canary now uses the maintained Waybar
+> `wlr/taskbar` module as its only panel; the experimental Electron/Xlib,
+> Tint2, manual-margin, and helper implementations are removed. Waybar maps as
+> a bottom layer-shell overlay with an exclusive 46px zone and left-click
+> activation. Unsafe global middle-click close is intentionally disabled. The
+> panel starts only after Labwc's output is synced. A PID-bound supervisor
+> validates the exact panel JSON and positively probes the foreign-toplevel
+> manager and Wayland seat before Waybar can create an exclusive surface. It
+> removes Waybar on module-init failure; health checks validate its exact PID.
+> Under Labwc, Selkies pointer events now enter the persistent
+> `waylanddisplaysrc` Smithay seat through the plugin's supported custom upstream
+> events, with the existing XTest route retained as fallback. Keyboard events
+> use XWayland's keymap for keysym-to-evdev translation and then enter the same
+> Smithay seat. Production Sway remains XTest-only. Source/behavior tests pass,
+> including a reproduction where XWayland is unavailable but a Wayland pointer
+> event is delivered. No GPU VM currently
+> exists, so image build, Waybar hover/click, Steam/XWayland input, fullscreen,
+> mapped geometry, reconnect, scroll, and controller acceptance remain pending.
+
 > **2026-08-23 Labwc output/store recovery canary — LIVE VALIDATED.** Labwc's
 > nested Wayland backend initially exposed 1280x720 while Selkies and
 > `gst-wayland-display` captured the requested larger frame, producing encoded

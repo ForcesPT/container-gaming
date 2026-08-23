@@ -1,0 +1,177 @@
+#!/bin/bash
+# Supervise the Labwc Waybar and publish PID-bound taskbar readiness.
+set -u
+
+WAYBAR_BIN="${WAYBAR_BIN:-waybar}"
+WAYLAND_INFO_BIN="${WAYLAND_INFO_BIN:-wayland-info}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+RUNTIME_DIR="${DPAD_WAYBAR_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
+STATE_FILE="${RUNTIME_DIR}/dpad-waybar.state"
+STATE_TMP="${STATE_FILE}.tmp.$$"
+LOCK_FILE="${RUNTIME_DIR}/dpad-waybar.lock"
+SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
+STATE_CHECK_BIN="${DPAD_WAYBAR_STATE_CHECK_BIN:-${SCRIPT_DIR}/dpad-waybar-state-check}"
+LOG_FILE="${DPAD_WAYBAR_LOG:-/tmp/dpad-waybar.log}"
+PROBE_TICKS="${DPAD_WAYBAR_PROBE_TICKS:-20}"
+PROBE_INTERVAL="${DPAD_WAYBAR_PROBE_INTERVAL:-0.1}"
+LOCK_TIMEOUT="${DPAD_WAYBAR_LOCK_TIMEOUT:-2}"
+child=""
+lock_owned=false
+waybar_args=("$@")
+config_file=""
+
+for ((arg = 0; arg < ${#waybar_args[@]}; arg++)); do
+    case "${waybar_args[$arg]}" in
+        --config)
+            next=$((arg + 1))
+            [ "$next" -lt "${#waybar_args[@]}" ] && config_file="${waybar_args[$next]}"
+            ;;
+        --config=*) config_file="${waybar_args[$arg]#--config=}" ;;
+    esac
+done
+
+publish_state() {
+    proc_stat="$(< "/proc/$2/stat")"
+    proc_fields="${proc_stat##*) }"
+    read -r -a fields <<< "$proc_fields"
+    start_ticks="${fields[19]:-}"
+    [[ "$start_ticks" =~ ^[1-9][0-9]*$ ]] || return 1
+    printf '%s %s %s\n' "$1" "$2" "$start_ticks" > "$STATE_TMP"
+    chmod 0644 "$STATE_TMP"
+    mv -f "$STATE_TMP" "$STATE_FILE"
+}
+
+process_running() {
+    [ -n "$1" ] \
+        && kill -0 "$1" 2>/dev/null \
+        && [ "$(ps -o stat= -p "$1" 2>/dev/null | cut -c1)" != "Z" ]
+}
+
+cleanup() {
+    if [[ "$child" =~ ^[1-9][0-9]*$ ]]; then
+        if [ ! -r "$STATE_FILE" ] && process_running "$child"; then
+            publish_state starting "$child" || true
+        fi
+        [ ! -r "$STATE_FILE" ] || "$STATE_CHECK_BIN" --terminate "$STATE_FILE" >/dev/null 2>&1 || true
+        wait "$child" 2>/dev/null || true
+        child=""
+    fi
+    if [ "$lock_owned" = true ]; then
+        rm -f -- "$STATE_TMP" "$STATE_FILE"
+    fi
+}
+trap cleanup EXIT
+trap 'exit 143' TERM INT
+
+mkdir -p "$RUNTIME_DIR"
+exec 9> "$LOCK_FILE"
+if ! flock -w "$LOCK_TIMEOUT" 9; then
+    echo "Waybar supervisor already owns the runtime lock" >&2
+    exit 1
+fi
+lock_owned=true
+
+# Recover only the exact pidfd-bound Waybar from an abruptly exited supervisor.
+if [ -r "$STATE_FILE" ]; then
+    "$STATE_CHECK_BIN" --terminate "$STATE_FILE" || exit 1
+fi
+rm -f -- "$STATE_FILE" "$STATE_TMP"
+
+if [ -z "$config_file" ] || ! "$PYTHON_BIN" -c '
+import json, sys
+def reject_duplicates(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+with open(sys.argv[1], encoding="utf-8") as stream:
+    config = json.load(stream, object_pairs_hook=reject_duplicates)
+expected = {
+    "position": "bottom",
+    "layer": "overlay",
+    "start_hidden": False,
+    "exclusive": True,
+    "passthrough": False,
+    "height": 46,
+    "spacing": 6,
+    "modules-left": ["wlr/taskbar"],
+    "modules-right": ["clock"],
+    "wlr/taskbar": {
+        "format": "{icon}  {title}",
+        "icon-size": 24,
+        "max-length": 48,
+        "tooltip-format": "{title}",
+        "on-click": "activate",
+    },
+    "clock": {"format": "{:%H:%M}"},
+}
+def exact(left, right):
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(exact(left[key], right[key]) for key in left)
+    if isinstance(left, list):
+        return len(left) == len(right) and all(exact(a, b) for a, b in zip(left, right))
+    return left == right
+valid = exact(config, expected)
+raise SystemExit(0 if valid else 1)
+' "$config_file"; then
+    echo "Waybar taskbar configuration preflight failed" >&2
+    exit 1
+fi
+
+protocols="$("$WAYLAND_INFO_BIN" 2>> "$LOG_FILE")" || {
+    echo "Waybar protocol preflight failed" >&2
+    exit 1
+}
+if ! grep -q "interface: 'wl_seat'" <<< "$protocols" \
+    || ! grep -q "interface: 'zwlr_foreign_toplevel_manager_v1'" <<< "$protocols"; then
+    echo "Waybar taskbar protocols are unavailable; panel will not be mapped" >&2
+    exit 1
+fi
+
+: > "$LOG_FILE"
+setsid bash -c 'kill -STOP "$$"; exec "$@"' dpad-waybar-child \
+    "$WAYBAR_BIN" --log-level info "${waybar_args[@]}" 9>&- >> "$LOG_FILE" 2>&1 &
+child=$!
+for _ in {1..100}; do
+    child_state="$(ps -o stat= -p "$child" 2>/dev/null | cut -c1)"
+    [ "$child_state" = "T" ] && break
+    process_running "$child" || break
+    sleep 0.01
+done
+if [ "$child_state" != "T" ]; then
+    wait "$child" 2>/dev/null
+    status=$?
+    child=""
+    [ "$status" -ne 0 ] || status=1
+    exit "$status"
+fi
+publish_state starting "$child"
+kill -CONT "$child"
+
+for ((tick = 0; tick < PROBE_TICKS; tick++)); do
+    if ! process_running "$child"; then
+        wait "$child" 2>/dev/null
+        status=$?
+        child=""
+        [ "$status" -ne 0 ] || status=1
+        exit "$status"
+    fi
+    if grep -Eq 'Failed to register as toplevel manager|Failed to get wayland seat|module wlr/taskbar:|Unknown module: wlr/taskbar' "$LOG_FILE"; then
+        echo "Waybar taskbar readiness failed; removing panel surface" >&2
+        exit 1
+    fi
+    sleep "$PROBE_INTERVAL"
+done
+
+publish_state ready "$child"
+while process_running "$child"; do
+    sleep 0.2
+done
+wait "$child"
+status=$?
+child=""
+exit "$status"

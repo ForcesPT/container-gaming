@@ -39,6 +39,7 @@ function resumeActiveStore({
   activeStoreId,
   activeStorePid = null,
   isWindowVisible = () => false,
+  focusStore = () => false,
   hideLauncher = () => {},
   notifyVisible = () => {},
   log = () => {},
@@ -55,6 +56,19 @@ function resumeActiveStore({
     };
   }
 
+  // Focusing must succeed before the launcher is hidden. Labwc does not
+  // reliably transfer focus when a fullscreen toplevel is merely minimized,
+  // so hiding first can leave the user with no visible store or launcher.
+  if (!focusStore(activeStoreId)) {
+    log(`resume-store ${activeStoreId}: failed to focus existing store window`);
+    const name = STORE_NAMES[activeStoreId] || activeStoreId;
+    return {
+      ok: false,
+      activeStoreId,
+      error: `${name} is running but its window could not be focused`,
+    };
+  }
+
   hideLauncher();
   notifyVisible(activeStoreId);
   log(`resume-store ${activeStoreId}: focused existing store window`);
@@ -66,4 +80,7 @@ function resumeActiveStore({
   };
 }
 
-module.exports = { detectStoreIdFromTitles, resumeActiveStore };
+module.exports = {
+  detectStoreIdFromTitles,
+  resumeActiveStore,
+};

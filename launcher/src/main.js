@@ -20,7 +20,10 @@ const path = require('path');
 const fs = require('fs');
 const { spawn, execSync } = require('child_process');
 const { pollGamepads, mapToWebApi } = require('./sdl_manager.cjs');
-const { detectStoreIdFromTitles, resumeActiveStore } = require('./store_lifecycle.cjs');
+const {
+  detectStoreIdFromTitles,
+  resumeActiveStore,
+} = require('./store_lifecycle.cjs');
 
 const USER_HOME = process.env.HOME || '/home/dpad';
 const LOG_FILE = path.join('/tmp', 'launcher.log');
@@ -102,6 +105,18 @@ const STORES = [
     color: '#0078ff',
   },
 ];
+
+// XWayland WM_CLASS values used by native Sway criteria. The Labwc swaymsg
+// compatibility wrapper translates this same narrow selector to wlrctl's
+// foreign-toplevel app_id matcher.
+const STORE_WINDOW_CLASSES = {
+  steam: 'steam',
+  battlenet: 'Battle.net.exe',
+  epic: 'EpicGamesLauncher.exe',
+  gog: 'GalaxyClient.exe',
+  ea: 'EADesktop.exe',
+  ubisoft: 'upc.exe',
+};
 
 function log(line) {
   const stamp = new Date().toISOString();
@@ -195,6 +210,15 @@ function checkStoreWindowVisible(_storeId) {
   return getStoreWindowTitles().length > 0;
 }
 
+function focusStoreWindow(storeId) {
+  const windowClass = STORE_WINDOW_CLASSES[storeId];
+  if (!windowClass) {
+    log(`focus-store ${storeId}: no window class configured`);
+    return false;
+  }
+  return swaymsg(`[class="${windowClass}"] focus`) !== null;
+}
+
 // --- Window lifecycle ---
 
 function createWindow() {
@@ -247,6 +271,7 @@ ipcMain.handle('launch-store', (event, storeId) => {
       activeStoreId: existingStoreId,
       activeStorePid: activeStoreChild ? activeStoreChild.pid : null,
       isWindowVisible: checkStoreWindowVisible,
+      focusStore: focusStoreWindow,
       hideLauncher: hideLauncherToScratchpad,
       notifyVisible: id => {
         if (mainWindow) mainWindow.webContents.send('store-visible', id);

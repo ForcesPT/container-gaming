@@ -1,5 +1,23 @@
 # DpadCloud Image — Full-Desktop Wayland Architecture (`gst-wayland-display`)
 
+> **2026-08-23 LABWC TASKBAR INPUT CANDIDATE — SOURCE COMPLETE, LIVE PENDING.**
+> Labwc uses Waybar's maintained `wlr/taskbar` layer-shell panel; no custom
+> Electron or X11 taskbar remains. The original Waybar canary rendered but did
+> not receive hover/click because Selkies injected directly into nested
+> XWayland through XTest. The source now registers Selkies' persistent
+> `waylanddisplaysrc` and sends the plugin's supported `MouseMoveAbsolute`,
+> `MouseMoveRelative`, `MouseButton`, `MouseAxis`, and `KeyboardKey` custom
+> upstream events into the Smithay seat under Labwc. Pointer delivery does not
+> depend on XWayland; keyboard uses XWayland only to translate keysyms to evdev
+> codes before Smithay injection. XTest remains a bounded fallback, and Sway is
+> explicitly kept on its validated XTest-only path. Source tests are green; a
+> new GPU VM is required for image and user acceptance.
+> The Labwc panel is supervised separately: taskbar protocol/seat initialization
+> and JSON contract are checked before launch; initialization errors terminate
+> Waybar and remove its exclusive layer-shell surface. A PID-bound state file
+> distinguishes startup from readiness. Mapped geometry and input remain live
+> VM acceptance gates.
+
 > **2026-08-22 LABWC CANARY.** The production nested desktop remains Sway, but
 > candidate source can select Labwc with `DPAD_DESKTOP_CLIENT=labwc`. The outer
 > Smithay compositor/capture architecture is unchanged. OVH L4 GPU,

@@ -300,6 +300,8 @@ RUN sed -i 's/\r$//' /tmp/extract-nvrtc.sh && chmod +x /tmp/extract-nvrtc.sh \
 # Selkies input router (.pth, auto-loaded). The launcher desktop points it at
 # Sway/XWayland :0 after the peer-created compositor socket appears.
 COPY scripts/dpad_input_patch.py scripts/dpad_input_patch.pth /usr/local/lib/python3.12/dist-packages/
+COPY scripts/dpad_wayland_input.py /usr/local/lib/python3.12/dist-packages/dpad_wayland_input.py
+RUN test -f /usr/local/lib/python3.12/dist-packages/dpad_wayland_input.py
 # dpad_gamepad_patch.py: under DPAD_GAMEPAD_INTERPOSER=evdev, makes Selkies emit the
 # 1360B MAIN-branch js_config_t (vendor 0x045e XBox 360) on the js socket, which
 # evdev_bridge.py discards + re-serves on the event100N sockets. Harmless when the
@@ -550,13 +552,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         wireplumber libeis-dev gstreamer1.0-pipewire \
         gstreamer1.0-tools gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
         gstreamer1.0-x gstreamer1.0-plugins-base pulseaudio-utils \
-        sway labwc wlrctl wlr-randr xwayland util-linux \
+        sway labwc waybar wayland-utils wlrctl wlr-randr xwayland util-linux \
     && command -v sway \
     && sway --version \
     && command -v labwc \
     && labwc --version \
     && command -v wlrctl \
     && command -v wlr-randr \
+    && command -v waybar \
+    && command -v wayland-info \
     && command -v flock \
     && rm -rf /var/lib/apt/lists/*
 
@@ -811,6 +815,8 @@ COPY scripts/steam-desktop /usr/local/bin/steam
 COPY scripts/launcher-toggle /opt/dpadcloud/launcher-toggle
 COPY scripts/dpad-labwc-set-output-mode /opt/dpadcloud/dpad-labwc-set-output-mode
 COPY scripts/dpad-publish-desktop-config /opt/dpadcloud/dpad-publish-desktop-config
+COPY scripts/dpad-waybar /opt/dpadcloud/dpad-waybar
+COPY scripts/dpad-waybar-state-check /opt/dpadcloud/dpad-waybar-state-check
 COPY scripts/swaymsg-desktop-compat /usr/local/bin/swaymsg
 COPY scripts/battlenet-launch /opt/dpadcloud/battlenet-launch
 COPY scripts/ea-launch /opt/dpadcloud/ea-launch
@@ -820,13 +826,13 @@ COPY scripts/epic-launch /opt/dpadcloud/epic-launch
 COPY scripts/gog-launch /opt/dpadcloud/gog-launch
 RUN set -e; \
     sed -i 's/\r$//' \
-      /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/dpad-labwc-set-output-mode \
+      /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/dpad-labwc-set-output-mode /opt/dpadcloud/dpad-waybar /opt/dpadcloud/dpad-waybar-state-check \
       /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
       /opt/dpadcloud/dpad-open-url /opt/dpadcloud/epic-launch /opt/dpadcloud/gog-launch \
     && chmod +x \
       /usr/local/bin/steam \
       /usr/local/bin/swaymsg \
-      /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/dpad-labwc-set-output-mode /opt/dpadcloud/dpad-publish-desktop-config \
+      /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/dpad-labwc-set-output-mode /opt/dpadcloud/dpad-publish-desktop-config /opt/dpadcloud/dpad-waybar /opt/dpadcloud/dpad-waybar-state-check \
       /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
       /opt/dpadcloud/dpad-open-url /opt/dpadcloud/epic-launch /opt/dpadcloud/gog-launch \
     && ln -sf /opt/dpadcloud/battlenet-launch /usr/local/bin/battlenet-launch \

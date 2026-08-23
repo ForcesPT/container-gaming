@@ -60,8 +60,75 @@ else
   </keyboard>
 </labwc_config>
 LABWCRC
-    printf '%s\n' "/opt/dpadcloud/dpad-labwc-set-output-mode ${WIDTH} ${HEIGHT} && ${SHELL_APP} &" > "$generation/autostart"
-    chmod 0644 "$generation/rc.xml" "$generation/autostart"
+    cat > "$generation/waybar.json" <<'WAYBARJSON'
+{
+  "position": "bottom",
+  "layer": "overlay",
+  "start_hidden": false,
+  "exclusive": true,
+  "passthrough": false,
+  "height": 46,
+  "spacing": 6,
+  "modules-left": ["wlr/taskbar"],
+  "modules-right": ["clock"],
+  "wlr/taskbar": {
+    "format": "{icon}  {title}",
+    "icon-size": 24,
+    "max-length": 48,
+    "tooltip-format": "{title}",
+    "on-click": "activate"
+  },
+  "clock": {
+    "format": "{:%H:%M}"
+  }
+}
+WAYBARJSON
+    cat > "$generation/waybar.css" <<'WAYBARCSS'
+* {
+  border: none;
+  border-radius: 0;
+  min-height: 0;
+  font-family: "Noto Sans", sans-serif;
+  font-size: 14px;
+}
+window#waybar {
+  background: #0b0e14;
+  color: #dce4f2;
+  border-top: 1px solid #242b38;
+}
+#taskbar {
+  padding: 4px 8px;
+}
+#taskbar button {
+  min-width: 132px;
+  margin: 1px 3px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: #151a24;
+  color: #aeb9ca;
+}
+#taskbar button:hover {
+  background: #242c3b;
+  color: #ffffff;
+}
+#taskbar button.active {
+  background: #2d5cff;
+  color: #ffffff;
+}
+#clock {
+  margin: 5px 9px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: #151a24;
+  color: #dce4f2;
+}
+WAYBARCSS
+    cat > "$generation/autostart" <<AUTOSTART
+/opt/dpadcloud/dpad-labwc-set-output-mode ${WIDTH} ${HEIGHT} || exit 1
+/opt/dpadcloud/dpad-waybar --config "${generation}/waybar.json" --style "${generation}/waybar.css" &
+${SHELL_APP} &
+AUTOSTART
+    chmod 0644 "$generation/rc.xml" "$generation/waybar.json" "$generation/waybar.css" "$generation/autostart"
     rm -f -- "$link_tmp"
     ln -s "$(basename "$generation")" "$link_tmp"
     # A single rename publishes both files as one complete generation.

@@ -41,11 +41,13 @@ def _patch():
         from Xlib.ext import xtest
         from selkies_gstreamer import webrtc_input as w
         import webrtc_input as w_top
+        import dpad_wayland_input as wayland_input
     except Exception as e:
         _log("disabled (%r)" % e)
         return
 
     dbg = os.environ.get("DPAD_INPUT_DEBUG", "")
+    native_wayland = os.environ.get("DPAD_DESKTOP_CLIENT") == "labwc"
 
     # --- python-xlib 0.33 bug fix -----------------------------------------
     # python-xlib 0.33 bug: add_extension_event stores a base event as
@@ -115,6 +117,11 @@ def _patch():
             return None
 
     XBTN = {M.MOUSE_BUTTON_LEFT: 1, M.MOUSE_BUTTON_MIDDLE: 2, M.MOUSE_BUTTON_RIGHT: 3}
+    LINUX_BUTTON = {
+        M.MOUSE_BUTTON_LEFT: 0x110,
+        M.MOUSE_BUTTON_RIGHT: 0x111,
+        M.MOUSE_BUTTON_MIDDLE: 0x112,
+    }
     W = next(iter(classes.values()))
 
     _orig_connect = W.connect
@@ -142,6 +149,10 @@ def _patch():
         try:
             kc = d.keysym_to_keycode(keysym)
             if kc:
+                if native_wayland and wayland_input.keyboard_key(kc - 8, down):
+                    if dbg:
+                        _log("key keysym=%s evdev=%s down=%s Wayland OK" % (keysym, kc - 8, down))
+                    return
                 xtest.fake_input(d, X.KeyPress if down else X.KeyRelease, detail=kc)
                 d.sync()
                 if dbg:
@@ -157,9 +168,41 @@ def _patch():
 
     _orig_mouse = W.send_mouse
     def send_mouse(self, action, data):
+        # Labwc routes through gst-wayland-display so Waybar and XWayland share
+        # the compositor seat. Sway keeps its validated production XTest path.
+        if native_wayland:
+            try:
+                if action == M.MOUSE_POSITION:
+                    x, y = data
+                    if wayland_input.pointer_motion_absolute(x, y):
+                        return
+                elif action == M.MOUSE_MOVE:
+                    x, y = data
+                    if wayland_input.pointer_motion_relative(x, y):
+                        return
+                elif action == M.MOUSE_SCROLL_UP:
+                    # Selkies 1.6.2 reports physical wheel-down as SCROLL_UP.
+                    if wayland_input.pointer_axis(0, 120):
+                        return
+                elif action == M.MOUSE_SCROLL_DOWN:
+                    # Selkies 1.6.2 reports physical wheel-up as SCROLL_DOWN.
+                    if wayland_input.pointer_axis(0, -120):
+                        return
+                elif action == M.MOUSE_BUTTON:
+                    btn_action, btn_enum = data
+                    linux_button = LINUX_BUTTON.get(btn_enum, 0x110)
+                    pressed = btn_action == M.MOUSE_BUTTON_PRESS
+                    if wayland_input.pointer_button(linux_button, pressed):
+                        return
+                else:
+                    return _orig_mouse(self, action, data)
+            except Exception as e:
+                if dbg:
+                    _log("Wayland mouse route failed: %r (trying XTest)" % e)
+
         d = _get_dpy() or getattr(self, "xdisplay", None)
         if d is None:
-            return  # :0 not up yet; drop the event (retry on the next one)
+            return
         try:
             if action == M.MOUSE_POSITION:
                 x, y = data
@@ -169,34 +212,18 @@ def _patch():
                 x, y = data
                 xtest.fake_input(d, X.MotionNotify, detail=True, root=X.NONE, x=x, y=y)
                 d.sync()
-            # Selkies v1.6.2 scroll constants are INVERTED relative to the physical
-            # wheel, so the button numbers here look "backwards" — do NOT swap them.
-            # The web client (gst-web/input.js _mouseWheel) sets button bit 4 for
-            # deltaY<0 (wheel UP) and bit 3 (default) for deltaY>0 (wheel DOWN).
-            # The server (webrtc_input.send_x11_mouse) maps bit 3 -> MOUSE_SCROLL_UP
-            # and bit 4 -> MOUSE_SCROLL_DOWN. So MOUSE_SCROLL_UP is actually sent on
-            # a wheel-DOWN and MOUSE_SCROLL_DOWN on a wheel-UP. Stock Selkies cancels
-            # this with pynput.mouse.scroll(0,-1) for UP / scroll(0,1) for DOWN
-            # (pynput's dy sign is itself flipped), but XTest button numbers are
-            # literal: X button 4 = scroll UP, button 5 = scroll DOWN. To get
-            # wheel-UP -> screen-UP we must inject button 4 for MOUSE_SCROLL_DOWN
-            # (wheel-UP) and button 5 for MOUSE_SCROLL_UP (wheel-DOWN). Swapping
-            # these back to 4/5 re-reverses scrolling (the original bug).
+            # Keep the confirmed Selkies 1.6.2 scroll inversion in the XTest fallback.
             elif action == M.MOUSE_SCROLL_UP:
-                # sent on wheel-DOWN -> inject X button 5 (screen-DOWN)
                 xtest.fake_input(d, X.ButtonPress, detail=5); xtest.fake_input(d, X.ButtonRelease, detail=5); d.sync()
             elif action == M.MOUSE_SCROLL_DOWN:
-                # sent on wheel-UP -> inject X button 4 (screen-UP)
                 xtest.fake_input(d, X.ButtonPress, detail=4); xtest.fake_input(d, X.ButtonRelease, detail=4); d.sync()
             elif action == M.MOUSE_BUTTON:
                 btn_action, btn_enum = data
                 xb = XBTN.get(btn_enum, 1)
                 etype = X.ButtonPress if btn_action == M.MOUSE_BUTTON_PRESS else X.ButtonRelease
                 xtest.fake_input(d, etype, detail=xb); d.sync()
-            else:
-                _orig_mouse(self, action, data)
         except Exception:
-            _gs_dpy[0] = None  # display may have died -> reopen next time
+            _gs_dpy[0] = None
             try: _orig_mouse(self, action, data)
             except Exception: pass
 
