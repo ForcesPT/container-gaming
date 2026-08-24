@@ -1,0 +1,31 @@
+From: DpadPlay <fernandomlmarques@gmail.com>
+Subject: [PATCH] xwayland: fall back when game root loses its view
+
+Backport the Labwc 0.8.3 behavior to Ubuntu 24.04's Labwc 0.7.1.
+Some XWayland games change the root surface to override-redirect, leaving
+root->data NULL. Returning NULL makes view_move_to_front() abort. Keep the
+live view as the safe root fallback, matching upstream.
+---
+ src/xwayland.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/xwayland.c b/src/xwayland.c
+index 7d276b1..c19859b 100644
+--- a/src/xwayland.c
++++ b/src/xwayland.c
+@@ -769,6 +769,12 @@ xwayland_view_get_root(struct view *view)
+ {
+ 	struct wlr_xwayland_surface *root = top_parent_of(view);
+-	return (struct view *)root->data;
++
++	/*
++	 * XWayland games can set override-redirect on the root surface,
++	 * disassociating it from a view. Keep the mapped child as the root
++	 * fallback instead of returning NULL and aborting while raising it.
++	 */
++	return (root && root->data) ? (struct view *)root->data : view;
+ }
+ 
+ static void
+-- 
+2.51.0

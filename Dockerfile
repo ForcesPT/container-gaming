@@ -510,6 +510,38 @@ RUN set -e; \
     && rm -rf /tmp/gwd "/tmp/${GWD_ARCHIVE}"
 
 # =============================================================================
+# Stage: labwc-builder
+#   Ubuntu 24.04 ships Labwc 0.7.1. Its XWayland root lookup returns NULL when
+#   games such as AirMech/Fall Guys change a parent to override-redirect, which
+#   aborts view_move_to_front(). Backport the upstream 0.8.3 fallback while
+#   retaining Noble's wlroots 0.17 ABI and all distro runtime integration.
+# =============================================================================
+FROM ubuntu:24.04 AS labwc-builder
+ARG DEBIAN_FRONTEND=noninteractive
+ARG LABWC_REF=0.7.1
+ARG LABWC_SHA256=1810ec55e287708e7a3cd44c726aa887db02480704db82b3d0bd550a6c4bfb76
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl patch build-essential meson ninja-build pkgconf \
+        libwlroots-dev libxml2-dev liblzma-dev libglib2.0-dev libcairo2-dev \
+        libpango1.0-dev libinput-dev libpng-dev librsvg2-dev wayland-protocols \
+        libxkbcommon-dev libdrm-dev scdoc gettext \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /tmp
+RUN curl -fL --retry 8 --retry-all-errors --retry-delay 3 \
+      -o labwc.tar.gz "https://codeload.github.com/labwc/labwc/tar.gz/refs/tags/${LABWC_REF}" \
+    && echo "${LABWC_SHA256}  labwc.tar.gz" | sha256sum -c - \
+    && tar -xzf labwc.tar.gz \
+    && mv "labwc-${LABWC_REF}" labwc
+COPY patches/labwc-0.7.1-xwayland-game-root.patch /tmp/labwc-game-root.patch
+RUN cd /tmp/labwc \
+    && patch -p1 < /tmp/labwc-game-root.patch \
+    && grep -Fq 'return (root && root->data) ? (struct view *)root->data : view;' src/xwayland.c \
+    && meson setup build --prefix=/usr --buildtype=release \
+    && ninja -C build \
+    && DESTDIR=/out meson install -C build \
+    && test -x /out/usr/bin/labwc
+
+# =============================================================================
 # Stage: vast-vm  ->  :dpad-SteamOS
 #   Full-root VM: gst-wayland-display + nested Sway/Labwc + DpadPlay launcher.
 #   Valve's official Steam desktop client is installed and launched only from
@@ -563,6 +595,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && command -v wayland-info \
     && command -v flock \
     && rm -rf /var/lib/apt/lists/*
+
+# Replace Noble's crashing 0.7.1 binary with the same source plus the upstream
+# XWayland game-root fallback built against Noble's wlroots 0.17 libraries.
+COPY --from=labwc-builder /out/usr/bin/labwc /usr/bin/labwc
+RUN labwc --version | grep -Fq 'labwc 0.7.1' \
+    && ! ldd /usr/bin/labwc | grep -q 'not found'
 
 # --- Fix ~/.steam/root: Steam's steam.sh expects a symlink it can rm -f and
 #    recreate; a real dir there makes steam.sh's rm fail and corrupts Steam's

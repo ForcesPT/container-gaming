@@ -10,3 +10,5 @@ healthcheck.sh text eol=lf
 entrypoint.sh  text eol=lf
 scripts/*      text eol=lf
 configs/**     text eol=lf
+# Unified diffs necessarily contain prefix characters before source indentation.
+*.patch        text eol=lf -whitespace

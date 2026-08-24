@@ -14,12 +14,20 @@ PUBLISHER = ROOT / "scripts" / "dpad-publish-desktop-config"
 COMPAT = ROOT / "scripts" / "swaymsg-desktop-compat"
 TOGGLE = ROOT / "scripts" / "launcher-toggle"
 LABWC_MODE = ROOT / "scripts" / "dpad-labwc-set-output-mode"
+ENTRYPOINT = ROOT / "entrypoint.sh"
 
 
 
 class DesktopRuntimeHelpersTests(unittest.TestCase):
     def run_cmd(self, *args: str, env: dict[str, str] | None = None, check: bool = True):
         return subprocess.run(args, text=True, capture_output=True, env=env, check=check)
+
+    def test_dummy_xvfb_stale_lock_is_removed_before_restart(self):
+        text = ENTRYPOINT.read_text()
+        cleanup = "rm -f /tmp/.X99-lock"
+        start = 'as_user "Xvfb :99'
+        self.assertIn(cleanup, text)
+        self.assertLess(text.index(cleanup), text.index(start))
 
     def test_sway_config_is_published_as_a_complete_set(self):
         with tempfile.TemporaryDirectory() as tmp:

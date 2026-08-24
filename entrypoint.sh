@@ -644,6 +644,9 @@ start_launcher_session() {
     setup_gamepad_interposer
 
     # Sway's XWayland requires the standard root-owned X11 socket directory.
+    # Docker restarts preserve /tmp but kill Xvfb, so clear its stale lock before
+    # starting the dummy :99 server used by Selkies' pynput import.
+    rm -f /tmp/.X99-lock
     rm -rf /tmp/.X11-unix; mkdir -p /tmp/.X11-unix; chown root:root /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix
     # Dummy Xvfb :99 exists only for pynput import before Sway creates XWayland.
     # The input patch switches to Sway's :0 display when it becomes available.
