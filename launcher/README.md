@@ -30,7 +30,7 @@ of spawning a duplicate.
 - `scripts/gen-logos.js` — regenerate `src/logos/*.svg` from simple-icons.
 - `Dockerfile` — package the AppDir into `forcespt/dpadcloud-launcher`
   (FROM scratch, COPY the AppDir to `/opt/dpadcloud/launcher`); the
-  container-gaming Dockerfile `COPY --from=forcespt/dpadcloud-launcher:0.1.4`
+  container-gaming Dockerfile `COPY --from=forcespt/dpadcloud-launcher:0.1.5`
   bakes it into the `:dpad-SteamOS` image.
 - `../scripts/launcher-shell` — the wrapper the entrypoint execs as sway's
   startup app (`DPAD_STORE_SHELL=picker`).
@@ -40,8 +40,8 @@ of spawning a duplicate.
 npm install                       # local deps (for `npm start` preview)
 npm start                         # local preview (DPAD_LAUNCHER_DEV=1 mocks Steam available)
 ./scripts/build.sh                # cross-build the Linux AppDir -> dist/linux-unpacked/
-docker build -t forcespt/dpadcloud-launcher:0.1.4 -t forcespt/dpadcloud-launcher:latest .
-docker push forcespt/dpadcloud-launcher:0.1.4
+docker build -t forcespt/dpadcloud-launcher:0.1.5 -t forcespt/dpadcloud-launcher:latest .
+docker push forcespt/dpadcloud-launcher:0.1.5
 docker push forcespt/dpadcloud-launcher:latest
 ```
 
@@ -56,7 +56,8 @@ docker push forcespt/dpadcloud-launcher:latest
 - Navigate: arrow keys / d-pad / left stick.
 - Launch: Enter / gamepad A. Cancel overlay / quit store-back: Esc / gamepad B.
 - The launch overlay (store logo + spinner) is dismissed only by B/Esc.
-- Labwc window fallback: Alt+Tab / Shift+Alt+Tab.
+- Labwc window fallback: Alt+Tab / Shift+Alt+Tab, or browser-safe
+  Ctrl+Alt+N / Ctrl+Alt+P when the local OS captures Alt+Tab.
 
 ## Wiring
 `entrypoint.sh`: `DPAD_STORE_SHELL=picker` → `SHELL_APP=/opt/dpadcloud/launcher-shell`

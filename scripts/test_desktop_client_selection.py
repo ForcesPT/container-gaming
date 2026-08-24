@@ -79,10 +79,15 @@ for required in (
     'window focus app_id:com.dpadplay.launcher',
     'MATCH=title:DpadPlay',
     'MATCH=app_id:com.dpadplay.launcher',
-    'window fullscreen "$MATCH"',
+    'window maximize "$MATCH"',
 ):
     if required not in toggle:
         errors.append(f"launcher-toggle missing Labwc recovery contract: {required}")
+
+if "swaymsg -s \"$SOCK\" '[title=\"DpadPlay\"] scratchpad show" not in toggle:
+    errors.append("launcher-toggle Sway recovery must target DpadPlay")
+if "swaymsg -s \"$SOCK\" 'scratchpad show'" in toggle:
+    errors.append("launcher-toggle Sway recovery must not show an arbitrary scratchpad window")
 
 for required in (
     'desktop="${DPAD_DESKTOP_CLIENT:-sway}"',

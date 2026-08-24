@@ -22,8 +22,18 @@ const { spawn, execSync } = require('child_process');
 const { pollGamepads, mapToWebApi } = require('./sdl_manager.cjs');
 const {
   detectStoreIdFromTitles,
+  detectStoreIdsFromTitles,
+  chooseStoreAction,
+  clearOwnedTimer,
+  createLauncherRestoreReconciler,
+  nextLauncherHiddenAfterHide,
+  launcherWindowPolicy,
+  shouldMonitorAdoptedStore,
+  createLauncherVisibilityGeneration,
   resumeActiveStore,
 } = require('./store_lifecycle.cjs');
+
+const launcherPolicy = launcherWindowPolicy(process.env.DPAD_DESKTOP_CLIENT || 'sway');
 
 const USER_HOME = process.env.HOME || '/home/dpad';
 const LOG_FILE = path.join('/tmp', 'launcher.log');
@@ -146,41 +156,76 @@ function resolveStores() {
 
 let mainWindow = null;
 let quitting = false;
-let activeStoreChild = null;   // the current store's child process
-let activeStoreId = null;      // the current store's id
-let storeVisibleTimer = null;  // poll timer for store window detection
+let launcherHidden = false;
+const launcherVisibilityGeneration = createLauncherVisibilityGeneration();
+const activeStoreChildren = new Map(); // store id -> detached child process
+const storeVisibleTimers = new Map();  // store id -> visibility poll timer
 
 // --- Sway window management ---
 
 // Move the launcher window to the sway scratchpad (hide it) so the store
 // client can take over the full output without side-by-side tiling.
 function hideLauncherToScratchpad() {
+  // Any hide attempt supersedes a delayed restore callback, even if the
+  // compositor command itself fails and the previous hidden state is retained.
+  launcherVisibilityGeneration.invalidate();
   // Focus the launcher window first (in case it lost focus), then move it.
   if (mainWindow) {
     try { mainWindow.focus(); } catch (_) {}
   }
   // Use [title="DpadPlay"] to match our launcher window (the index.html title).
   // Moving to scratchpad hides it completely — no tiling side-by-side.
-  swaymsg('[title="DpadPlay"] move container to scratchpad');
-  log('launcher hidden to scratchpad');
+  const moved = swaymsg('[title="DpadPlay"] move container to scratchpad');
+  const hideSucceeded = moved !== null;
+  launcherHidden = nextLauncherHiddenAfterHide(launcherHidden, hideSucceeded);
+  log(hideSucceeded ? 'launcher hidden to scratchpad' : 'launcher hide failed; preserving state');
 }
 
-// Restore the launcher from scratchpad + fullscreen it.
+// Restore the launcher without hiding Labwc's exclusive-zone taskbar.
 function showLauncherFromScratchpad() {
-  swaymsg('scratchpad show');
-  // Give sway a moment to map the window, then fullscreen it.
+  const shown = swaymsg('[title="DpadPlay"] scratchpad show');
+  if (shown === null) {
+    log('launcher restore failed; will retry');
+    return false;
+  }
+  const restoreGeneration = launcherVisibilityGeneration.capture();
+  // Give the compositor a moment to map the window, then apply its policy.
   setTimeout(() => {
-    swaymsg('[title="DpadPlay"] fullscreen enable');
-    log('launcher restored from scratchpad + fullscreened');
+    if (!launcherVisibilityGeneration.isCurrent(restoreGeneration)) {
+      log('ignoring stale launcher restore callback');
+      return;
+    }
+    const configured = swaymsg(launcherPolicy.restoreCommand);
+    if (configured !== null) {
+      launcherHidden = false;
+      log(`launcher restored from scratchpad (${launcherPolicy.maximize ? 'maximized' : 'fullscreen'})`);
+    } else {
+      log('launcher restore policy failed; will retry');
+    }
   }, 200);
+  // Completion is asynchronous. The reconciler keeps one retry scheduled; it
+  // stops when the successful policy command clears launcherHidden.
+  return false;
 }
+
+const launcherRestoreReconciler = createLauncherRestoreReconciler({
+  hasActiveChildren: () => activeStoreChildren.size > 0,
+  getWindowTitles: () => getStoreWindowTitles(),
+  isLauncherHidden: () => launcherHidden,
+  restoreLauncher: () => showLauncherFromScratchpad(),
+  schedule: (fn, delay) => {
+    const timer = setTimeout(fn, delay);
+    if (timer.unref) timer.unref();
+    return timer;
+  },
+});
 
 // Return visible non-launcher window titles from the desktop tree. Keeping the
 // titles lets a restarted launcher adopt an already-running store instead of
 // losing its in-memory child handle and spawning a duplicate.
 function getStoreWindowTitles() {
   const output = swaymsg('-t get_tree');
-  if (!output) return [];
+  if (!output) return null;
   try {
     const tree = JSON.parse(output);
     // Walk the tree looking for any window (leaf node) whose name is not
@@ -202,12 +247,17 @@ function getStoreWindowTitles() {
     const storeWindows = findStoreWindows(tree);
     return storeWindows.map(node => node.name);
   } catch (e) {
-    return [];
+    return null;
   }
 }
 
-function checkStoreWindowVisible(_storeId) {
-  return getStoreWindowTitles().length > 0;
+function checkStoreWindowVisible(storeId) {
+  const titles = getStoreWindowTitles();
+  return Array.isArray(titles) && detectStoreIdsFromTitles(titles).includes(storeId);
+}
+
+function clearStoreVisibleTimer(storeId, owner = null) {
+  return clearOwnedTimer(storeVisibleTimers, storeId, owner);
 }
 
 function focusStoreWindow(storeId) {
@@ -223,7 +273,7 @@ function focusStoreWindow(storeId) {
 
 function createWindow() {
   const win = new BrowserWindow({
-    fullscreen: true,
+    fullscreen: launcherPolicy.fullscreen,
     frame: false,
     autoHideMenuBar: true,
     menuBarVisible: false,
@@ -239,6 +289,7 @@ function createWindow() {
   });
 
   win.loadFile(path.join(__dirname, 'index.html'));
+  if (launcherPolicy.maximize) win.maximize();
   if (process.env.DPAD_LAUNCHER_DEV) win.webContents.openDevTools({ mode: 'detach' });
 
   // The launcher must never die. If its window is closed, recreate it.
@@ -263,13 +314,34 @@ ipcMain.handle('launch-store', (event, storeId) => {
   if (!store) return { ok: false, error: 'unknown store' };
   if (store.comingSoon || !store.cmd) return { ok: false, error: 'coming soon / no command' };
 
-  // If a store is already running, return to its existing window instead of
-  // trapping the user in the launcher or spawning a duplicate client.
-  const existingStoreId = activeStoreId || detectStoreIdFromTitles(getStoreWindowTitles());
-  if (existingStoreId) {
-    return resumeActiveStore({
-      activeStoreId: existingStoreId,
-      activeStorePid: activeStoreChild ? activeStoreChild.pid : null,
+  // Resume only the requested store when it already exists. Other stores may
+  // remain open concurrently and are independently switchable through Waybar.
+  const storeTitles = getStoreWindowTitles();
+  const visibleStoreIds = Array.isArray(storeTitles)
+    ? detectStoreIdsFromTitles(storeTitles)
+    : [];
+  const runningStoreIds = Array.from(new Set([
+    ...activeStoreChildren.keys(),
+    ...visibleStoreIds,
+  ]));
+  const action = chooseStoreAction({
+    requestedStoreId: storeId,
+    runningStoreIds,
+    snapshotAvailable: Array.isArray(storeTitles),
+  });
+  if (action.action === 'wait') {
+    log(`launch-store ${storeId}: desktop snapshot unavailable; refusing duplicate-risk launch`);
+    return {
+      ok: false,
+      activeStoreId: storeId,
+      error: 'Desktop state is temporarily unavailable; try again',
+    };
+  }
+  if (action.action === 'resume') {
+    const existingChild = activeStoreChildren.get(storeId);
+    const resumed = resumeActiveStore({
+      activeStoreId: storeId,
+      activeStorePid: existingChild ? existingChild.pid : null,
       isWindowVisible: checkStoreWindowVisible,
       focusStore: focusStoreWindow,
       hideLauncher: hideLauncherToScratchpad,
@@ -278,6 +350,10 @@ ipcMain.handle('launch-store', (event, storeId) => {
       },
       log,
     });
+    if (shouldMonitorAdoptedStore(resumed.ok, Boolean(existingChild))) {
+      launcherRestoreReconciler.request(); // monitor adopted store closure
+    }
+    return resumed;
   }
 
   log(`launch-store ${storeId}: ${store.cmd.join(' ')}`);
@@ -287,13 +363,12 @@ ipcMain.handle('launch-store', (event, storeId) => {
       stdio: 'ignore',
       env: { ...process.env },
     });
-    activeStoreChild = child;
-    activeStoreId = storeId;
+    activeStoreChildren.set(storeId, child);
 
     child.on('error', (e) => {
       log(`launch-store ${storeId} spawn error: ${e.message}`);
-      activeStoreChild = null;
-      activeStoreId = null;
+      if (activeStoreChildren.get(storeId) === child) activeStoreChildren.delete(storeId);
+      clearStoreVisibleTimer(storeId, child);
       // Notify renderer to dismiss overlay + show error
       if (mainWindow) mainWindow.webContents.send('store-launch-failed', storeId, e.message);
     });
@@ -309,15 +384,14 @@ ipcMain.handle('launch-store', (event, storeId) => {
     const SHORT_TIMEOUT = 30;  // seconds before switching to "installing" message
     const MAX_TIMEOUT = 900;   // 15 min hard cap (give up + hide launcher)
     let installingNotified = false;
-    if (storeVisibleTimer) clearInterval(storeVisibleTimer);
-    storeVisibleTimer = setInterval(() => {
+    clearStoreVisibleTimer(storeId);
+    const storeVisibleTimer = setInterval(() => {
       pollCount++;
       const elapsedSec = Math.round(pollCount * POLL_MS / 1000);
       const visible = checkStoreWindowVisible(storeId);
       if (visible) {
         log(`launch-store ${storeId}: store window detected after ${elapsedSec}s`);
-        clearInterval(storeVisibleTimer);
-        storeVisibleTimer = null;
+        clearStoreVisibleTimer(storeId, child);
         hideLauncherToScratchpad();
         // Notify renderer that the store is visible (dismiss overlay)
         if (mainWindow) mainWindow.webContents.send('store-visible', storeId);
@@ -330,22 +404,20 @@ ipcMain.handle('launch-store', (event, storeId) => {
         if (mainWindow) mainWindow.webContents.send('store-installing', storeId);
       } else if (elapsedSec >= MAX_TIMEOUT) {
         log(`launch-store ${storeId}: no window after ${MAX_TIMEOUT}s, giving up`);
-        clearInterval(storeVisibleTimer);
-        storeVisibleTimer = null;
+        clearStoreVisibleTimer(storeId, child);
         // Last resort: hide launcher. The store may still appear later.
         hideLauncherToScratchpad();
         if (mainWindow) mainWindow.webContents.send('store-visible', storeId);
       }
     }, POLL_MS);
+    storeVisibleTimers.set(storeId, { timer: storeVisibleTimer, owner: child });
 
-    // When the store client exits, restore the launcher.
+    // When one store client exits, preserve every other store's lifecycle.
     child.on('exit', (code, sig) => {
       log(`launch-store ${storeId} exited (code=${code} sig=${sig})`);
-      if (storeVisibleTimer) { clearInterval(storeVisibleTimer); storeVisibleTimer = null; }
-      activeStoreChild = null;
-      activeStoreId = null;
-      // Restore launcher from scratchpad + fullscreen
-      showLauncherFromScratchpad();
+      clearStoreVisibleTimer(storeId, child);
+      if (activeStoreChildren.get(storeId) === child) activeStoreChildren.delete(storeId);
+      launcherRestoreReconciler.request();
       // Notify renderer to dismiss any lingering overlay
       if (mainWindow) mainWindow.webContents.send('store-exited', storeId);
     });
@@ -353,8 +425,8 @@ ipcMain.handle('launch-store', (event, storeId) => {
     child.unref();
     return { ok: true, pid: child.pid };
   } catch (e) {
-    activeStoreChild = null;
-    activeStoreId = null;
+    activeStoreChildren.delete(storeId);
+    clearStoreVisibleTimer(storeId);
     return { ok: false, error: e.message };
   }
 });
@@ -362,17 +434,23 @@ ipcMain.handle('launch-store', (event, storeId) => {
 // Check if a store is currently running (used by the renderer to decide
 // whether to show the overlay on focus).
 ipcMain.handle('get-active-store', () => {
-  return activeStoreId || null;
+  const titles = getStoreWindowTitles();
+  return activeStoreChildren.keys().next().value
+    || (Array.isArray(titles) ? detectStoreIdFromTitles(titles) : null)
+    || null;
 });
 
-// Kill the active store (called by the "back to launcher" shortcut).
+// Legacy back action terminates one managed store. Normal multi-store switching
+// is handled through Waybar and selecting an existing launcher card.
 ipcMain.handle('kill-active-store', () => {
-  if (!activeStoreChild) return { ok: false, error: 'no store running' };
-  log(`kill-active-store: killing ${activeStoreId} (pid ${activeStoreChild.pid})`);
+  const entry = activeStoreChildren.entries().next().value;
+  if (!entry) return { ok: false, error: 'no store running' };
+  const [storeId, child] = entry;
+  log(`kill-active-store: killing ${storeId} (pid ${child.pid})`);
   try {
-    process.kill(-activeStoreChild.pid, 'SIGTERM');
+    process.kill(-child.pid, 'SIGTERM');
   } catch (_) {
-    try { activeStoreChild.kill('SIGTERM'); } catch (__) {}
+    try { child.kill('SIGTERM'); } catch (__) {}
   }
   return { ok: true };
 });

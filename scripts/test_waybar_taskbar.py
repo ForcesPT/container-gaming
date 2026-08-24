@@ -33,7 +33,7 @@ for path in (
     if path.exists():
         raise SystemExit(f"obsolete Electron taskbar asset remains: {path.name}")
 
-for required in ("wlr/taskbar", '"layer": "overlay"', '"start_hidden": false', '"passthrough": false'):
+for required in ("wlr/taskbar", '"layer": "top"', '"start_hidden": false', '"passthrough": false'):
     if required not in PUBLISHER:
         raise SystemExit(f"Waybar publisher missing contract: {required}")
 
@@ -42,5 +42,8 @@ if "on-click-middle" in PUBLISHER:
 
 if '"mode":' in PUBLISHER:
     raise SystemExit("Waybar preset modes override the required overlay layer in 0.9.24")
+
+if '"layer": "overlay"' in PUBLISHER:
+    raise SystemExit("Waybar overlay layer must not cover true fullscreen games")
 
 print("Waybar is the sole Labwc taskbar: PASS")

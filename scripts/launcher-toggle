@@ -30,8 +30,8 @@ labwc)
     echo "$(date -Is) Labwc could not focus launcher" >> "$LOG"
     exit 1
   fi
-  if ! "$WLRCTL" window fullscreen "$MATCH" 2>>"$LOG"; then
-    echo "$(date -Is) Labwc focused launcher but could not restore fullscreen" >> "$LOG"
+  if ! "$WLRCTL" window maximize "$MATCH" 2>>"$LOG"; then
+    echo "$(date -Is) Labwc focused launcher but could not restore maximized state" >> "$LOG"
     exit 1
   fi
   echo "$(date -Is) launcher focused via Labwc foreign-toplevel protocol" >> "$LOG"
@@ -60,8 +60,14 @@ if [ -z "$SOCK" ]; then
   exit 1
 fi
 
-# Show from scratchpad + fullscreen
-swaymsg -s "$SOCK" 'scratchpad show' 2>>"$LOG" || true
+# Show the exact launcher from scratchpad + fullscreen.
+if ! swaymsg -s "$SOCK" '[title="DpadPlay"] scratchpad show' 2>>"$LOG"; then
+  echo "$(date -Is) failed to show DpadPlay from scratchpad" >> "$LOG"
+  exit 1
+fi
 sleep 0.2
-swaymsg -s "$SOCK" '[title="DpadPlay"] fullscreen enable' 2>>"$LOG" || true
+if ! swaymsg -s "$SOCK" '[title="DpadPlay"] fullscreen enable' 2>>"$LOG"; then
+  echo "$(date -Is) showed DpadPlay but failed to restore fullscreen" >> "$LOG"
+  exit 1
+fi
 echo "$(date -Is) launcher shown from scratchpad" >> "$LOG"

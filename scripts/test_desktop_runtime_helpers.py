@@ -53,12 +53,14 @@ class DesktopRuntimeHelpersTests(unittest.TestCase):
             }
             self.assertEqual(actions["A-Tab"], ["NextWindow"])
             self.assertEqual(actions["A-S-Tab"], ["PreviousWindow"])
+            self.assertEqual(actions["C-A-n"], ["NextWindow"])
+            self.assertEqual(actions["C-A-p"], ["PreviousWindow"])
             self.assertIsNone(rc.find("./margin"))
             self.assertIsNone(rc.find("./windowRules"))
             waybar = json.loads((config_dir / "waybar.json").read_text())
             self.assertEqual(waybar["position"], "bottom")
             self.assertNotIn("mode", waybar)
-            self.assertEqual(waybar["layer"], "overlay")
+            self.assertEqual(waybar["layer"], "top")
             self.assertFalse(waybar["start_hidden"])
             self.assertTrue(waybar["exclusive"])
             self.assertFalse(waybar["passthrough"])
@@ -206,13 +208,15 @@ class DesktopRuntimeHelpersTests(unittest.TestCase):
             env = {**os.environ, "DPAD_DESKTOP_CLIENT": "labwc", "DPAD_WLRCTL": str(fake), "XDG_RUNTIME_DIR": "/run/user/1000"}
             marker = "/run/user/1000/sway-ipc.labwc-compat.sock"
             self.run_cmd(str(COMPAT), "-s", marker, "[title=DpadPlay]", "move", "container", "to", "scratchpad", env=env)
-            self.run_cmd(str(COMPAT), "-s", marker, "scratchpad", "show", env=env)
+            self.run_cmd(str(COMPAT), "-s", marker, "[title=DpadPlay]", "scratchpad", "show", env=env)
+            self.run_cmd(str(COMPAT), "-s", marker, "[title=DpadPlay]", "maximize", "enable", env=env)
             self.run_cmd(str(COMPAT), "-s", marker, "[title=DpadPlay]", "fullscreen", "enable", env=env)
             self.run_cmd(str(COMPAT), "-s", marker, "[class=steam]", "focus", env=env)
             self.run_cmd(str(COMPAT), "-s", marker, "[class=steam]", "kill", env=env)
             self.assertEqual(log.read_text().splitlines(), [
                 "window minimize title:DpadPlay",
                 "window focus title:DpadPlay",
+                "window maximize title:DpadPlay",
                 "window fullscreen title:DpadPlay",
                 "window focus app_id:steam",
                 "window close app_id:steam",
@@ -256,7 +260,7 @@ class DesktopRuntimeHelpersTests(unittest.TestCase):
             self.run_cmd("bash", str(TOGGLE), env=env)
             self.assertEqual(log.read_text().splitlines(), [
                 "window focus title:DpadPlay",
-                "window fullscreen title:DpadPlay",
+                "window maximize title:DpadPlay",
             ])
 
     def test_launcher_toggle_uses_app_id_for_focus_and_fullscreen_fallback(self):
@@ -281,7 +285,7 @@ class DesktopRuntimeHelpersTests(unittest.TestCase):
             self.assertEqual(log.read_text().splitlines(), [
                 "window focus title:DpadPlay",
                 "window focus app_id:com.dpadplay.launcher",
-                "window fullscreen app_id:com.dpadplay.launcher",
+                "window maximize app_id:com.dpadplay.launcher",
             ])
 
 

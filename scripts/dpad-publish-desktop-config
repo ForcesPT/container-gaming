@@ -57,13 +57,16 @@ else
     <keybind key="W-k"><action name="Close" /></keybind>
     <keybind key="A-Tab"><action name="NextWindow" /></keybind>
     <keybind key="A-S-Tab"><action name="PreviousWindow" /></keybind>
+    <!-- Browser-safe alternatives: host Windows captures Alt+Tab. -->
+    <keybind key="C-A-n"><action name="NextWindow" /></keybind>
+    <keybind key="C-A-p"><action name="PreviousWindow" /></keybind>
   </keyboard>
 </labwc_config>
 LABWCRC
     cat > "$generation/waybar.json" <<'WAYBARJSON'
 {
   "position": "bottom",
-  "layer": "overlay",
+  "layer": "top",
   "start_hidden": false,
   "exclusive": true,
   "passthrough": false,

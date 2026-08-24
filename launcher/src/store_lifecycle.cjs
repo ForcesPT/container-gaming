@@ -19,12 +19,105 @@ const STORE_TITLE_PATTERNS = [
 ];
 
 function detectStoreIdFromTitles(titles) {
+  return detectStoreIdsFromTitles(titles)[0] || null;
+}
+
+function detectStoreIdsFromTitles(titles) {
+  const found = [];
   for (const title of titles) {
     for (const [storeId, pattern] of STORE_TITLE_PATTERNS) {
-      if (pattern.test(title)) return storeId;
+      if (pattern.test(title) && !found.includes(storeId)) found.push(storeId);
     }
   }
-  return null;
+  return found;
+}
+
+function chooseStoreAction({ requestedStoreId, runningStoreIds = [], snapshotAvailable = true }) {
+  return {
+    action: runningStoreIds.includes(requestedStoreId)
+      ? 'resume'
+      : (snapshotAvailable ? 'launch' : 'wait'),
+    storeId: requestedStoreId,
+  };
+}
+
+function clearOwnedTimer(timerMap, storeId, owner, clearTimer = clearInterval) {
+  const record = timerMap.get(storeId);
+  if (!record || (owner && record.owner !== owner)) return false;
+  clearTimer(record.timer);
+  timerMap.delete(storeId);
+  return true;
+}
+
+function nextLauncherHiddenAfterHide(currentHidden, hideSucceeded) {
+  return hideSucceeded ? true : currentHidden;
+}
+
+function launcherWindowPolicy(desktopClient) {
+  if (desktopClient === 'labwc') {
+    return {
+      fullscreen: false,
+      maximize: true,
+      restoreCommand: '[title="DpadPlay"] maximize enable',
+    };
+  }
+  return {
+    fullscreen: true,
+    maximize: false,
+    restoreCommand: '[title="DpadPlay"] fullscreen enable',
+  };
+}
+
+function shouldMonitorAdoptedStore(resumeSucceeded, hasManagedChild) {
+  return resumeSucceeded && !hasManagedChild;
+}
+
+function createLauncherVisibilityGeneration() {
+  let generation = 0;
+  return {
+    invalidate() {
+      generation += 1;
+      return generation;
+    },
+    capture() {
+      return generation;
+    },
+    isCurrent(token) {
+      return token === generation;
+    },
+  };
+}
+
+function createLauncherRestoreReconciler({
+  hasActiveChildren,
+  getWindowTitles,
+  isLauncherHidden,
+  restoreLauncher,
+  schedule = (fn, delay) => setTimeout(fn, delay),
+  retryMs = 500,
+}) {
+  let pending = null;
+
+  const reconcile = () => {
+    pending = null;
+    if (!isLauncherHidden() || hasActiveChildren()) return;
+
+    const titles = getWindowTitles();
+    if (Array.isArray(titles) && titles.length === 0) {
+      if (restoreLauncher() === true) return;
+    }
+
+    // Unavailable and non-empty snapshots are both inconclusive. Keep polling
+    // until the compositor confirms that no non-launcher window remains.
+    pending = schedule(reconcile, retryMs);
+  };
+
+  return {
+    request() {
+      if (pending !== null || !isLauncherHidden()) return;
+      pending = schedule(reconcile, retryMs);
+    },
+  };
 }
 
 /**
@@ -82,5 +175,13 @@ function resumeActiveStore({
 
 module.exports = {
   detectStoreIdFromTitles,
+  detectStoreIdsFromTitles,
+  chooseStoreAction,
+  clearOwnedTimer,
+  createLauncherRestoreReconciler,
+  nextLauncherHiddenAfterHide,
+  launcherWindowPolicy,
+  shouldMonitorAdoptedStore,
+  createLauncherVisibilityGeneration,
   resumeActiveStore,
 };

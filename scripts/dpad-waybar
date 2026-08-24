@@ -90,7 +90,7 @@ with open(sys.argv[1], encoding="utf-8") as stream:
     config = json.load(stream, object_pairs_hook=reject_duplicates)
 expected = {
     "position": "bottom",
-    "layer": "overlay",
+    "layer": "top",
     "start_hidden": False,
     "exclusive": True,
     "passthrough": False,

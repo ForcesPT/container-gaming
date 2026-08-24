@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory() as tmp:
     style = tmp_path / "waybar.css"
     expected_config = {
         "position": "bottom",
-        "layer": "overlay",
+        "layer": "top",
         "start_hidden": False,
         "exclusive": True,
         "passthrough": False,

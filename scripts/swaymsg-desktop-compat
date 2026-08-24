@@ -38,12 +38,17 @@ if [ "$#" -eq 5 ] && [ "$1" = "[title=DpadPlay]" ] \
     && [ "$2" = move ] && [ "$3" = container ] && [ "$4" = to ] && [ "$5" = scratchpad ]; then
     exec "$WLRCTL" window minimize title:DpadPlay
 fi
-if [ "$#" -eq 2 ] && [ "$1" = scratchpad ] && [ "$2" = show ]; then
+if [ "$#" -eq 3 ] && [ "$1" = "[title=DpadPlay]" ] \
+    && [ "$2" = scratchpad ] && [ "$3" = show ]; then
     exec "$WLRCTL" window focus title:DpadPlay
 fi
 if [ "$#" -eq 3 ] && [ "$1" = "[title=DpadPlay]" ] \
     && [ "$2" = fullscreen ] && [ "$3" = enable ]; then
     exec "$WLRCTL" window fullscreen title:DpadPlay
+fi
+if [ "$#" -eq 3 ] && [ "$1" = "[title=DpadPlay]" ] \
+    && [ "$2" = maximize ] && [ "$3" = enable ]; then
+    exec "$WLRCTL" window maximize title:DpadPlay
 fi
 if [ "$#" -eq 2 ] && { [ "$2" = focus ] || [ "$2" = kill ]; }; then
     case "$1" in
