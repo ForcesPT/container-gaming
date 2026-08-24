@@ -66,6 +66,8 @@ for required in (
     'ln -s "$(basename "$generation")" "$link_tmp"',
     'mv -fT "$link_tmp" "$RUNTIME_DIR/labwc-current"',
     'current_target="$(readlink "$RUNTIME_DIR/labwc-current")"',
+    'bindsym Ctrl+Mod1+c kill',
+    '<keybind key="C-A-c"><action name="Close" /></keybind>',
 ):
     if required not in publisher:
         errors.append(f"publisher missing atomic Labwc generation contract: {required}")

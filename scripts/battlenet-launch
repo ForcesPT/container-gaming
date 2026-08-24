@@ -222,13 +222,45 @@ BNCFG
         # downloader + exit, or block until done — either way we then poll for the
         # launcher to appear. Best-effort: a failed/half install leaves the prefix
         # for inspection; re-launch retries.
-        "$UMU_RUN" "$SETUP_EXE" >>"$LOG" 2>&1 || echo "[battlenet-launch] installer exited $?" >> "$LOG"
+        # Run asynchronously because the installer auto-launches Battle.net and
+        # waits for that client to exit. The auto-launched client does not inherit
+        # our CEF software-rendering flags, so under XWayland it white-screens and
+        # the synchronous wrapper would never reach the controlled launch below.
+        "$UMU_RUN" "$SETUP_EXE" >>"$LOG" 2>&1 &
+        installer_pid=$!
 
-        # Wait (up to 15 min) for the install to produce the launcher.
+        # Wait (up to 15 min) for the install to produce the launcher. Once its
+        # files exist, close only the installer-owned Battle.net window. This lets
+        # the installer return cleanly; the wrapper then relaunches the client with
+        # --disable-gpu --in-process-gpu below.
         i=0
         while [ $i -lt 90 ] && ! bn_installed; do
+            kill -0 "$installer_pid" 2>/dev/null || break
             sleep 10; i=$((i+1))
         done
+        if bn_installed && kill -0 "$installer_pid" 2>/dev/null && command -v wlrctl >/dev/null 2>&1; then
+            j=0
+            while [ $j -lt 30 ]; do
+                if wlrctl toplevel list 2>/dev/null | grep -q '^steam_app_battlenet:'; then
+                    echo "[battlenet-launch] installed client auto-launched without CEF flags; closing it for controlled relaunch" >> "$LOG"
+                    wlrctl window close "app_id:steam_app_battlenet" >>"$LOG" 2>&1 || true
+                    break
+                fi
+                kill -0 "$installer_pid" 2>/dev/null || break
+                sleep 1; j=$((j+1))
+            done
+        fi
+        installer_wait_deadline=$((SECONDS + 30))
+        while kill -0 "$installer_pid" 2>/dev/null && [ "$SECONDS" -lt "$installer_wait_deadline" ]; do
+            sleep 1
+        done
+        if kill -0 "$installer_pid" 2>/dev/null; then
+            echo "[battlenet-launch] installer handoff timed out; terminating owned installer pid $installer_pid" >> "$LOG"
+            kill "$installer_pid" 2>/dev/null || true
+            sleep 2
+            kill -9 "$installer_pid" 2>/dev/null || true
+        fi
+        wait "$installer_pid" || echo "[battlenet-launch] installer exited $?" >> "$LOG"
         rm -rf "$SETUP_DIR" 2>/dev/null || true
     fi
 fi

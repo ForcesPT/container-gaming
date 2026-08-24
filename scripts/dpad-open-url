@@ -5,9 +5,9 @@
 # inside the same sway/XWayland session so the user can interact with it
 # via the Selkies stream — no external browser needed.
 #
-# The dpad-launcher's Electron binary is reused (it's already installed at
-# /opt/dpadcloud/launcher/dpad-launcher). We launch a second instance with
-# ELECTRON_OVERRIDE_URL to load the OAuth page instead of the launcher UI.
+# The dpad-launcher's Electron runtime is reused (it's already installed at
+# /opt/dpadcloud/launcher/dpad-launcher). ELECTRON_OVERRIDE_URL selects its
+# isolated external-browser mode instead of the store-launcher UI.
 #
 # Installed as /usr/local/bin/xdg-open (replacing the system xdg-open) so
 # winebrowser → xdg-open → this script.
@@ -41,13 +41,14 @@ if [ ! -x "$ELECTRON" ]; then
     exit 0
 fi
 
-# Launch Electron in kiosk mode loading the URL. Detached so xdg-open
+# Launch the packaged runtime in isolated external-browser mode. Detached so xdg-open
 # returns immediately (Wine doesn't wait for the browser to close).
 DISPLAY="${DISPLAY:-:0}" \
 HOME="${HOME:-/home/dpad}" \
 USER="${USER:-dpad}" \
 XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/1001}" \
-nohup "$ELECTRON" --kiosk --no-sandbox "$URL" >>"$LOG" 2>&1 &
+ELECTRON_OVERRIDE_URL="$URL" \
+nohup "$ELECTRON" >>"$LOG" 2>&1 &
 
-echo "[dpad-open-url] launched Electron kiosk for $URL (pid $!)" >> "$LOG"
+echo "[dpad-open-url] launched isolated Electron browser for $URL (pid $!)" >> "$LOG"
 exit 0

@@ -53,10 +53,9 @@ fi
 if [ "$#" -eq 2 ] && { [ "$2" = focus ] || [ "$2" = kill ]; }; then
     case "$1" in
         '[class=steam]') APP_ID=steam ;;
-        '[class=Battle.net.exe]') APP_ID=Battle.net.exe ;;
-        '[class=EpicGamesLauncher.exe]') APP_ID=EpicGamesLauncher.exe ;;
-        '[class=GalaxyClient.exe]') APP_ID=GalaxyClient.exe ;;
-        '[class=EADesktop.exe]') APP_ID=EADesktop.exe ;;
+        '[class=Battle.net.exe]') APP_ID=steam_app_battlenet ;;
+        '[class=heroic]') APP_ID=heroic ;;
+        '[class=EADesktop.exe]') APP_ID=steam_app_eaapp ;;
         '[class=upc.exe]') APP_ID=upc.exe ;;
         *) APP_ID= ;;
     esac

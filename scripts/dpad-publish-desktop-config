@@ -35,6 +35,7 @@ for_window [class=".*"] fullscreen enable
 bindsym Mod4+l exec /opt/dpadcloud/launcher-toggle
 bindsym Mod4+q kill
 bindsym Mod4+k kill
+bindsym Ctrl+Mod1+c kill
 exec ${SHELL_APP}
 SWAYCFG
     chmod 0644 "$tmp"
@@ -60,6 +61,7 @@ else
     <!-- Browser-safe alternatives: host Windows captures Alt+Tab. -->
     <keybind key="C-A-n"><action name="NextWindow" /></keybind>
     <keybind key="C-A-p"><action name="PreviousWindow" /></keybind>
+    <keybind key="C-A-c"><action name="Close" /></keybind>
   </keyboard>
 </labwc_config>
 LABWCRC

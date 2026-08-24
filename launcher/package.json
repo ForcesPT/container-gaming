@@ -1,6 +1,6 @@
 {
   "name": "dpad-launcher",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "DpadPlay 10-foot store launcher — a gamepad/keyboard front door to the installed store clients (Steam, Battle.net, ...). Replaces lutris-gamepad-ui as the shell. See README.md.",
   "main": "src/main.js",
   "author": "DpadPlay",

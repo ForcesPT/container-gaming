@@ -79,15 +79,24 @@ export WINEDEBUG="${WINEDEBUG:--all}"
 # the SLR container (same rationale as battlenet-launch).
 unset LD_PRELOAD
 
-# EA App paths. The installer produces "EALauncher.exe" (the main launcher
-# exe); some installs name it "EADesktop.exe". We install-detect + launch
-# whichever is present. EA installs to "Program Files\Electronic Arts\EA
-# Desktop\EA Desktop\".
-EA_DIR="$PREFIX/drive_c/Program Files/Electronic Arts/EA Desktop/EA Desktop"
-EA_INST="$EA_DIR/EALauncher.exe"
-EA_INST_ALT="$EA_DIR/EADesktop.exe"
-EA_EXE='C:\Program Files\Electronic Arts\EA Desktop\EA Desktop\EALauncher.exe'
-EA_EXE_ALT='C:\Program Files\Electronic Arts\EA Desktop\EA Desktop\EADesktop.exe'
+# EA App installs into a versioned directory (for example
+# `EA Desktop/13.768.7.6285/EA Desktop/EALauncher.exe`). Older builds also used
+# a non-versioned `EA Desktop/EA Desktop` path, so support both layouts.
+EA_BASE="$PREFIX/drive_c/Program Files/Electronic Arts/EA Desktop"
+resolve_ea_installed_exe() {
+    local candidate
+    for candidate in \
+        "$EA_BASE"/*/"EA Desktop"/EADesktop.exe \
+        "$EA_BASE"/"EA Desktop"/EADesktop.exe \
+        "$EA_BASE"/*/"EA Desktop"/EALauncher.exe \
+        "$EA_BASE"/"EA Desktop"/EALauncher.exe; do
+        if [ -f "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
 
 # The canonical installer URL (confirmed via NonSteamLaunchers + EA forums).
 # EA hosts the installer on Akamai's CDN. A browser User-Agent avoids CDN
@@ -97,8 +106,12 @@ UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Ge
 SETUP_DIR="$PREFIX/drive_c/ea-setup"
 SETUP_EXE="$SETUP_DIR/EAappInstaller.exe"
 
-# installed = either launcher exe present
-ea_installed() { [ -f "$EA_INST" ] || [ -f "$EA_INST_ALT" ]; }
+# installed = a launcher executable in either the legacy or versioned layout
+EA_INST="$(resolve_ea_installed_exe 2>/dev/null || true)"
+ea_installed() {
+    EA_INST="$(resolve_ea_installed_exe 2>/dev/null || true)"
+    [ -n "$EA_INST" ]
+}
 
 # --- prebaked prefix check (mirrors battlenet-launch) -------------------------
 # If a build-time prebaked prefix is baked in the image (build-bootstrap-ea.sh
@@ -150,30 +163,61 @@ if ! ea_installed; then
     # sway's Xwayland), downloads the EA App client, + installs it. Best-
     # effort: a failed/half install leaves the prefix for inspection;
     # re-launch retries.
-    "$UMU_RUN" "$SETUP_EXE" >>"$LOG" 2>&1 || echo "[ea-launch] installer exited $?" >> "$LOG"
+    # Run asynchronously because the installer auto-launches a transient EA
+    # updater/client and waits for it to exit. That client does not inherit our
+    # CEF software-rendering flags and may disappear during self-update.
+    "$UMU_RUN" "$SETUP_EXE" >>"$LOG" 2>&1 &
+    installer_pid=$!
 
-    # Wait (up to 15 min) for the install to produce the launcher.
+    # Wait (up to 15 min) for a stable installed launcher path. Then close only
+    # the installer-owned EA toplevel so the wrapper can relaunch the installed
+    # version with controlled CEF flags.
     i=0
     while [ $i -lt 90 ] && ! ea_installed; do
+        kill -0 "$installer_pid" 2>/dev/null || break
         sleep 10; i=$((i+1))
     done
+    if ea_installed && kill -0 "$installer_pid" 2>/dev/null && command -v wlrctl >/dev/null 2>&1; then
+        j=0
+        while [ $j -lt 30 ]; do
+            if wlrctl toplevel list 2>/dev/null | grep -q '^steam_app_eaapp:'; then
+                echo "[ea-launch] installed client auto-launched from installer; closing it for controlled relaunch" >> "$LOG"
+                wlrctl window close "app_id:steam_app_eaapp" >>"$LOG" 2>&1 || true
+                break
+            fi
+            kill -0 "$installer_pid" 2>/dev/null || break
+            sleep 1; j=$((j+1))
+        done
+    fi
+    installer_wait_deadline=$((SECONDS + 30))
+    while kill -0 "$installer_pid" 2>/dev/null && [ "$SECONDS" -lt "$installer_wait_deadline" ]; do
+        sleep 1
+    done
+    if kill -0 "$installer_pid" 2>/dev/null; then
+        echo "[ea-launch] installer handoff timed out; terminating owned installer pid $installer_pid" >> "$LOG"
+        kill "$installer_pid" 2>/dev/null || true
+        sleep 2
+        kill -9 "$installer_pid" 2>/dev/null || true
+    fi
+    wait "$installer_pid" || echo "[ea-launch] installer exited $?" >> "$LOG"
     rm -rf "$SETUP_DIR" 2>/dev/null || true
 else
     echo "[ea-launch] EA App already installed in the prebaked prefix — skipping the installer; launching directly" >> "$LOG"
 fi
 
 if ! ea_installed; then
-    echo "[ea-launch] FATAL: EA App launcher not found after install ($EA_INST / $EA_INST_ALT)" | tee -a "$LOG" >&2
+    echo "[ea-launch] FATAL: EA App launcher not found after install under $EA_BASE" | tee -a "$LOG" >&2
     exit 1
 fi
 
-# Pick the launch exe: prefer EALauncher.exe; fall back to EADesktop.exe.
-if [ -f "$EA_INST" ]; then EXE="$EA_EXE"; else EXE="$EA_EXE_ALT"; fi
+# Convert the discovered legacy/versioned Unix path to its Wine C: path.
+EA_REL="${EA_INST#"$PREFIX/drive_c/"}"
+EA_EXE="C:\\${EA_REL//\//\\}"
 # EA App is a Chromium/CEF app. Under Wine/Proton + Xwayland the CEF GPU
 # present path white-screens (same issue as Battle.net). Force CEF software
 # compositing with --disable-gpu + --in-process-gpu. Env-overridable via
 # DPAD_EA_CEF_ARGS (e.g. '' to disable, or PROTON_ENABLE_WAYLAND=1 + the
 # GE-Proton11-2 wine-wayland fix path instead).
 EA_CEF_ARGS="${DPAD_EA_CEF_ARGS:---disable-gpu --in-process-gpu}"
-echo "[ea-launch] launching $EXE under umu/SLR (cef_args=$EA_CEF_ARGS)" >> "$LOG"
-exec "$UMU_RUN" "$EXE" $EA_CEF_ARGS
+echo "[ea-launch] launching $EA_EXE under umu/SLR (cef_args=$EA_CEF_ARGS)" >> "$LOG"
+exec "$UMU_RUN" "$EA_EXE" $EA_CEF_ARGS

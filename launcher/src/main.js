@@ -28,12 +28,21 @@ const {
   createLauncherRestoreReconciler,
   nextLauncherHiddenAfterHide,
   launcherWindowPolicy,
+  launcherFocusBeforeHide,
   shouldMonitorAdoptedStore,
   createLauncherVisibilityGeneration,
   resumeActiveStore,
+  validatedExternalUrl,
 } = require('./store_lifecycle.cjs');
 
 const launcherPolicy = launcherWindowPolicy(process.env.DPAD_DESKTOP_CLIENT || 'sway');
+const focusLauncherBeforeHide = launcherFocusBeforeHide(process.env.DPAD_DESKTOP_CLIENT || 'sway');
+const externalUrl = validatedExternalUrl(process.env.ELECTRON_OVERRIDE_URL);
+if (externalUrl) {
+  // Keep external pages isolated from the store launcher's profile and preload
+  // bridge. OAuth/changelog windows only need their own short-lived web session.
+  app.setPath('userData', path.join('/tmp', `dpad-browser-${process.pid}`));
+}
 
 const USER_HOME = process.env.HOME || '/home/dpad';
 const LOG_FILE = path.join('/tmp', 'launcher.log');
@@ -122,8 +131,8 @@ const STORES = [
 const STORE_WINDOW_CLASSES = {
   steam: 'steam',
   battlenet: 'Battle.net.exe',
-  epic: 'EpicGamesLauncher.exe',
-  gog: 'GalaxyClient.exe',
+  epic: 'heroic',
+  gog: 'heroic',
   ea: 'EADesktop.exe',
   ubisoft: 'upc.exe',
 };
@@ -169,8 +178,10 @@ function hideLauncherToScratchpad() {
   // Any hide attempt supersedes a delayed restore callback, even if the
   // compositor command itself fails and the previous hidden state is retained.
   launcherVisibilityGeneration.invalidate();
-  // Focus the launcher window first (in case it lost focus), then move it.
-  if (mainWindow) {
+  // Native Sway historically needs DpadPlay focused before moving it to the
+  // scratchpad. Labwc's title-targeted minimize does not, and Electron's
+  // asynchronous focus request can otherwise steal focus back from the store.
+  if (focusLauncherBeforeHide && mainWindow) {
     try { mainWindow.focus(); } catch (_) {}
   }
   // Use [title="DpadPlay"] to match our launcher window (the index.html title).
@@ -273,28 +284,34 @@ function focusStoreWindow(storeId) {
 
 function createWindow() {
   const win = new BrowserWindow({
-    fullscreen: launcherPolicy.fullscreen,
+    fullscreen: externalUrl ? true : launcherPolicy.fullscreen,
     frame: false,
     autoHideMenuBar: true,
     menuBarVisible: false,
     backgroundColor: '#0c0d11',
     show: true,
-    title: 'DpadPlay',
+    title: externalUrl ? 'Dpad Browser' : 'DpadPlay',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: externalUrl ? undefined : path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: Boolean(externalUrl),
     },
   });
 
-  win.loadFile(path.join(__dirname, 'index.html'));
-  if (launcherPolicy.maximize) win.maximize();
+  if (externalUrl) win.loadURL(externalUrl);
+  else win.loadFile(path.join(__dirname, 'index.html'));
+  if (!externalUrl && launcherPolicy.maximize) win.maximize();
   if (process.env.DPAD_LAUNCHER_DEV) win.webContents.openDevTools({ mode: 'detach' });
 
   // The launcher must never die. If its window is closed, recreate it.
   win.on('closed', () => {
     mainWindow = null;
+    if (externalUrl) {
+      quitting = true;
+      app.quit();
+      return;
+    }
     if (!quitting) createWindow();
   });
 
@@ -473,5 +490,6 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (!quitting) createWindow();
+  if (externalUrl) app.quit();
+  else if (!quitting) createWindow();
 });

@@ -12,9 +12,9 @@ const STORE_NAMES = {
 const STORE_TITLE_PATTERNS = [
   ['steam', /steam/i],
   ['battlenet', /battle\.net|blizzard/i],
-  ['epic', /epic games/i],
-  ['gog', /\bgog\b|galaxy/i],
-  ['ea', /\bea app\b|electronic arts/i],
+  ['epic', /epic games|heroic games launcher/i],
+  ['gog', /\bgog\b|galaxy|heroic games launcher/i],
+  ['ea', /^ea$|\bea app\b|electronic arts/i],
   ['ubisoft', /ubisoft/i],
 ];
 
@@ -30,6 +30,16 @@ function detectStoreIdsFromTitles(titles) {
     }
   }
   return found;
+}
+
+function validatedExternalUrl(raw) {
+  if (typeof raw !== 'string' || !raw) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
+  } catch {
+    return null;
+  }
 }
 
 function chooseStoreAction({ requestedStoreId, runningStoreIds = [], snapshotAvailable = true }) {
@@ -66,6 +76,10 @@ function launcherWindowPolicy(desktopClient) {
     maximize: false,
     restoreCommand: '[title="DpadPlay"] fullscreen enable',
   };
+}
+
+function launcherFocusBeforeHide(desktopClient) {
+  return desktopClient !== 'labwc';
 }
 
 function shouldMonitorAdoptedStore(resumeSucceeded, hasManagedChild) {
@@ -176,11 +190,13 @@ function resumeActiveStore({
 module.exports = {
   detectStoreIdFromTitles,
   detectStoreIdsFromTitles,
+  validatedExternalUrl,
   chooseStoreAction,
   clearOwnedTimer,
   createLauncherRestoreReconciler,
   nextLauncherHiddenAfterHide,
   launcherWindowPolicy,
+  launcherFocusBeforeHide,
   shouldMonitorAdoptedStore,
   createLauncherVisibilityGeneration,
   resumeActiveStore,

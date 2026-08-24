@@ -18,18 +18,33 @@ const {
   createLauncherRestoreReconciler,
   nextLauncherHiddenAfterHide,
   launcherWindowPolicy,
+  launcherFocusBeforeHide,
   shouldMonitorAdoptedStore,
   createLauncherVisibilityGeneration,
   resumeActiveStore,
+  validatedExternalUrl,
 } = require(process.argv[1]);
+
+assert.strictEqual(validatedExternalUrl('https://example.com/releases'), 'https://example.com/releases');
+assert.strictEqual(validatedExternalUrl('http://127.0.0.1/callback'), 'http://127.0.0.1/callback');
+assert.strictEqual(validatedExternalUrl('javascript:alert(1)'), null);
+assert.strictEqual(validatedExternalUrl('file:///etc/passwd'), null);
+assert.strictEqual(validatedExternalUrl(''), null);
 
 assert.strictEqual(resumeActiveStore({ activeStoreId: null }), null);
 assert.strictEqual(detectStoreIdFromTitles(['Sign in to Steam']), 'steam');
 assert.strictEqual(detectStoreIdFromTitles(['Battle.net Login']), 'battlenet');
+assert.strictEqual(detectStoreIdFromTitles(['EA']), 'ea');
 assert.strictEqual(detectStoreIdFromTitles(['DpadPlay']), null);
 assert.deepStrictEqual(
   detectStoreIdsFromTitles(['Sign in to Steam', 'Epic Games Launcher', 'DpadPlay']),
   ['steam', 'epic'],
+);
+// Epic and GOG share one Heroic client. A live Heroic window must satisfy both
+// cards so either selection focuses the existing process instead of duplicating it.
+assert.deepStrictEqual(
+  detectStoreIdsFromTitles(['Heroic Games Launcher']),
+  ['epic', 'gog'],
 );
 assert.deepStrictEqual(
   chooseStoreAction({ requestedStoreId: 'epic', runningStoreIds: ['steam'] }),
@@ -56,6 +71,8 @@ assert.deepStrictEqual(launcherWindowPolicy('sway'), {
   maximize: false,
   restoreCommand: '[title="DpadPlay"] fullscreen enable',
 });
+assert.strictEqual(launcherFocusBeforeHide('labwc'), false);
+assert.strictEqual(launcherFocusBeforeHide('sway'), true);
 assert.strictEqual(shouldMonitorAdoptedStore(true, false), true);
 assert.strictEqual(shouldMonitorAdoptedStore(true, true), false);
 assert.strictEqual(shouldMonitorAdoptedStore(false, false), false);
@@ -170,6 +187,35 @@ if result.returncode:
     raise SystemExit(result.stderr or result.stdout)
 
 main = (ROOT / "launcher" / "src" / "main.js").read_text()
+compat = (ROOT / "scripts" / "swaymsg-desktop-compat").read_text()
+open_url = (ROOT / "scripts" / "dpad-open-url").read_text()
+for required in (
+    "const externalUrl = validatedExternalUrl(process.env.ELECTRON_OVERRIDE_URL);",
+    "app.setPath('userData'",
+    "if (externalUrl) win.loadURL(externalUrl);",
+    "preload: externalUrl ? undefined : path.join(__dirname, 'preload.js')",
+    "if (externalUrl) app.quit();",
+):
+    if required not in main:
+        raise SystemExit(f"launcher external-browser mode missing: {required}")
+if 'ELECTRON_OVERRIDE_URL="$URL"' not in open_url:
+    raise SystemExit("dpad-open-url does not pass its validated URL through the override environment")
+if '"$ELECTRON" --kiosk' in open_url:
+    raise SystemExit("dpad-open-url incorrectly treats the packaged app binary as generic Electron")
+if 'nohup "$ELECTRON" --no-sandbox' in open_url:
+    raise SystemExit("isolated external browser must not disable Chromium's process sandbox")
+for required in (
+    "epic: 'heroic'",
+    "gog: 'heroic'",
+):
+    if required not in main:
+        raise SystemExit(f"Heroic-backed store focus mapping missing: {required}")
+if "'[class=heroic]') APP_ID=heroic" not in compat:
+    raise SystemExit("Labwc compatibility wrapper cannot focus the shared Heroic client")
+if "'[class=Battle.net.exe]') APP_ID=steam_app_battlenet" not in compat:
+    raise SystemExit("Labwc compatibility wrapper cannot focus Battle.net's actual app ID")
+if "'[class=EADesktop.exe]') APP_ID=steam_app_eaapp" not in compat:
+    raise SystemExit("Labwc compatibility wrapper cannot focus EA App's actual app ID")
 for forbidden in (
     "let activeStoreChild = null",
     "let activeStoreId = null",
@@ -197,10 +243,10 @@ if "if (!launcherVisibilityGeneration.isCurrent(restoreGeneration))" not in main
 package = json.loads((ROOT / "launcher" / "package.json").read_text())
 launcher_dockerfile = (ROOT / "launcher" / "Dockerfile").read_text()
 parent_dockerfile = (ROOT / "Dockerfile").read_text()
-if package["version"] != "0.1.5":
-    raise SystemExit("launcher package version must match release 0.1.5")
-if launcher_dockerfile.count("0.1.5") < 2:
-    raise SystemExit("launcher Dockerfile example and label must both use 0.1.5")
-if "dpadcloud-launcher:0.1.5" not in parent_dockerfile:
-    raise SystemExit("parent image must pin launcher 0.1.5")
+if package["version"] != "0.1.6":
+    raise SystemExit("launcher package version must match release 0.1.6")
+if launcher_dockerfile.count("0.1.6") < 2:
+    raise SystemExit("launcher Dockerfile example and label must both use 0.1.6")
+if "dpadcloud-launcher:0.1.6" not in parent_dockerfile:
+    raise SystemExit("parent image must pin launcher 0.1.6")
 print("Launcher active-store resume: PASS")
