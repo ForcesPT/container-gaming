@@ -57,9 +57,12 @@ GP_DIR="${HOME_DIR}/.steam/debian-installation/compatibilitytools.d/GE-Proton11-
 PREFIX_SRC="/opt/dpadcloud/battlenet-prefix"   # the baked copy source (stable image path, NOT ~/Games which setup_stores symlinks to the volume at runtime)
 MARKER="${PREFIX_SRC}/.dpad-prebaked"
 
-# Already prebaked? (layer cache hit on a rebuild) -> nothing to do.
-if [ -f "${MARKER}" ]; then
-  echo "[*] Battle.net prefix already prebaked — skipping build-time bootstrap"
+# Skip only a genuinely installed client. An old intermediate marker alone can
+# represent merely winetricks + Setup.exe and must never satisfy this gate.
+if { [ -f "${MARKER}" ] || [ -f "${PREFIX_SRC}/.dpad-preinstalled" ]; } && \
+   { [ -f "${PREFIX_SRC}/drive_c/Program Files (x86)/Battle.net/Battle.net Launcher.exe" ] || \
+     [ -f "${PREFIX_SRC}/drive_c/Program Files (x86)/Battle.net/Battle.net.exe" ]; }; then
+  echo "[*] Battle.net client already preinstalled — skipping"
   exit 0
 fi
 
@@ -68,6 +71,8 @@ if [ "$(id -u)" -ne 0 ]; then
   cd "${HOME_DIR}"
   eval "$(dbus-launch --sh-syntax 2>/dev/null)" || true
   export DBUS_SESSION_BUS_ADDRESS
+  pkill -9 -u "${USERNAME}" -x Xvfb 2>/dev/null || true
+  rm -f /tmp/.X9-lock /tmp/.X11-unix/X9
   Xvfb :9 -screen 0 1280x720x24 +extension GLX +extension RANDR >/tmp/xvfb-bnet.log 2>&1 &
   sleep 2
   export DISPLAY=:9 HOME="${HOME_DIR}" USER="${USERNAME}" XDG_RUNTIME_DIR="/run/user/${PUID}"
@@ -109,7 +114,9 @@ if [ "$(id -u)" -ne 0 ]; then
     mkdir -p "$setup_dir" 2>/dev/null || true
     if curl -fsSL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36" \
         -o "$setup_dir/Battle.net-Setup.exe" \
-        "https://www.battle.net/download/getInstallerForGame?os=win&version=LIVE&gameProgram=BATTLENET_APP" 2>/dev/null; then
+        "https://www.battle.net/download/getInstallerForGame?os=win&version=LIVE&gameProgram=BATTLENET_APP" 2>/dev/null \
+        && /opt/dpadcloud/dpad-verify-windows-binary \
+          --publisher 'Blizzard Entertainment, Inc.' "$setup_dir/Battle.net-Setup.exe"; then
       echo "[*] downloaded Battle.net-Setup.exe ($(ls -l "$setup_dir/Battle.net-Setup.exe" 2>/dev/null | awk '{print $5}') bytes)"
       # Silent-install under umu/GE-Proton. The installer hands off to the Agent
       # downloader, so background it + poll for the launcher exe (~2-3 min).
@@ -133,7 +140,7 @@ if [ "$(id -u)" -ne 0 ]; then
         echo "[*] WARNING: umu-run not found — skipping the silent install (Lever 1 prebake only)"
       fi
     else
-      echo "[*] WARNING: Battle.net-Setup.exe download failed (the runtime wrapper will download it)"
+      echo "[*] WARNING: Battle.net installer download or publisher verification failed"
       ok=0
     fi
   fi
@@ -154,8 +161,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # --- root path: set up dirs, chown, re-exec as dpad -----------------------
-mkdir -p "${PREFIX_SRC}" "/run/user/${PUID}"
-# chown the prefix src + ~dpad (a prior root build step may have left
-# ~/.local root-owned -> umu's mkdir ~/.local/share/umu EPERM).
-chown -R "${USERNAME}:${USERNAME}" "${PREFIX_SRC}" "${HOME_DIR}" "/run/user/${PUID}" 2>/dev/null || true
+install -d -m 0755 -o "${USERNAME}" -g "${USERNAME}" "${PREFIX_SRC}" "/run/user/${PUID}"
+# Shared UMU ownership is finalized once by build-preinstall-stores.sh. Never
+# recursively rewrite ~dpad here: that duplicated 4.68 GB layers in r13.
 exec su -s /bin/bash "${USERNAME}" -c "$0"

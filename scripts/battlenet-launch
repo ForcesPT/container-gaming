@@ -60,7 +60,10 @@ echo "[battlenet-launch] $(date -Is) start (HOME=${HOME:-} DISPLAY=${DISPLAY:-})
 # volume; the capped rootfs on ephemeral). An explicit WINEPREFIX override is
 # respected (manual tests / probes).
 PREFIX="${WINEPREFIX:-${HOME}/Games/battlenet}"
-mkdir -p "$PREFIX" 2>/dev/null || true
+if ! mkdir -p -- "$PREFIX" 2>/dev/null || ! PREFIX="$(realpath -e -- "$PREFIX")"; then
+    echo "[battlenet-launch] FATAL: cannot create/canonicalize Wine prefix" | tee -a "$LOG" >&2
+    exit 1
+fi
 export WINEPREFIX="$PREFIX"
 
 # GE-Proton11-3 — the Battle.net white-screen fix is in (GE-Proton11-2
@@ -86,6 +89,9 @@ export PROTON_VERB="${PROTON_VERB:-waitforexitandrun}"
 # Locate umu-run (the deb installs /usr/bin/umu-run; allow a PATH override for
 # manual tests / a user-install at $HOME/.local/bin).
 UMU_RUN="${UMU_RUN:-umu-run}"
+VERIFY_WINDOWS_BINARY="${DPAD_VERIFY_WINDOWS_BINARY:-/opt/dpadcloud/dpad-verify-windows-binary}"
+CLONE_PREFIX_TEMPLATE="${DPAD_CLONE_PREFIX_TEMPLATE:-/opt/dpadcloud/dpad-clone-prefix-template}"
+RANDOMIZE_PREFIX_ID="${DPAD_RANDOMIZE_PREFIX_ID:-/opt/dpadcloud/dpad-randomize-prefix-id}"
 if ! command -v "$UMU_RUN" >/dev/null 2>&1; then
     echo "[battlenet-launch] FATAL: umu-run not found on PATH (install the umu-launcher deb)" | tee -a "$LOG" >&2
     exit 1
@@ -133,12 +139,16 @@ SETUP_DIR="$PREFIX/drive_c/battlenet-setup"
 SETUP_EXE="$SETUP_DIR/Battle.net-Setup.exe"
 
 # installed = either launcher exe present
-bn_installed() { [ -f "$BN_INST" ] || [ -f "$BN_INST_ALT" ]; }
+bn_installed() {
+    [ -f "$BN_INST" ] && "$VERIFY_WINDOWS_BINARY" --pe-only "$BN_INST" >>"$LOG" 2>&1 && return 0
+    [ -f "$BN_INST_ALT" ] && "$VERIFY_WINDOWS_BINARY" --pe-only "$BN_INST_ALT" >>"$LOG" 2>&1 && return 0
+    return 1
+}
 
 # --- first-launch install (one-time per prefix) -------------------------------
 if ! bn_installed; then
     # If a build-time prebaked prefix is baked in the image (build-bootstrap-
-    # battlenet.sh → /opt/dpadcloud/battlenet-prefix with a .dpad-prebaked
+    # battlenet.sh → /opt/dpadcloud/battlenet-prefix with a .dpad-preinstalled
     # marker: the winetricks-initialized prefix + Battle.net.config + the
     # downloaded Battle.net-Setup.exe + the Steam Linux Runtime already
     # downloaded to ~/.local/share/umu), copy it to the session WINEPREFIX
@@ -147,21 +157,31 @@ if ! bn_installed; then
     # only the Blizzard installer (which needs the user to click through it in
     # the stream) runs. The copy is a local cp -a (~seconds on the VM NVMe).
     PREBAKED_SRC="/opt/dpadcloud/battlenet-prefix"
-    if [ ! -f "$PREFIX/.dpad-prebaked" ] && [ -f "$PREBAKED_SRC/.dpad-prebaked" ]; then
-        echo "[battlenet-launch] first launch — copying the prebaked prefix $PREBAKED_SRC -> $PREFIX (skips winetricks + SLR download; ~seconds)" | tee -a "$LOG" >&2
-        mkdir -p "$PREFIX" 2>/dev/null || true
-        if cp -a "$PREBAKED_SRC/." "$PREFIX/" 2>>"$LOG"; then
-            chown -R "${USER:-dpad}:${USER:-dpad}" "$PREFIX" 2>/dev/null || true
-            echo "[battlenet-launch] prebaked prefix copied (winetricks + config + Setup.exe present)" >> "$LOG"
+    if ! bn_installed && [ -f "$PREBAKED_SRC/.dpad-preinstalled" ]; then
+        echo "[battlenet-launch] first launch — atomically cloning the preinstalled prefix" | tee -a "$LOG" >&2
+        if "$CLONE_PREFIX_TEMPLATE" "$PREBAKED_SRC" "$PREFIX" >>"$LOG" 2>&1; then
+            echo "[battlenet-launch] preinstalled prefix cloned with a per-user identity" >> "$LOG"
         else
-            echo "[battlenet-launch] prebaked prefix copy failed — falling back to the full winetricks" >> "$LOG"
+            clone_rc=$?
+            if [ "$clone_rc" -ne 3 ]; then
+                echo "[battlenet-launch] FATAL: atomic preinstalled-prefix clone failed" | tee -a "$LOG" >&2
+                exit 1
+            fi
+            echo "[battlenet-launch] preserving existing non-empty prefix; using runtime installer fallback" >> "$LOG"
         fi
+    fi
+
+    # A marker is valid only while a verified installed client is present. If
+    # the client was removed or corrupted, discard only the stale marker so the
+    # verified runtime installer repairs the existing prefix in place.
+    if ! bn_installed && { [ -e "$PREFIX/.dpad-preinstalled" ] || [ -L "$PREFIX/.dpad-preinstalled" ]; }; then
+        rm -f -- "$PREFIX/.dpad-preinstalled" || exit 1
     fi
 
     # The winetricks prefix-init + config pre-write + Setup.exe download are
     # only needed if the prefix isn't prebaked (no marker) — i.e. the image had
     # no prebake, OR the copy above failed.
-    if [ ! -f "$PREFIX/.dpad-prebaked" ]; then
+    if [ ! -f "$PREFIX/.dpad-preinstalled" ]; then
         echo "[battlenet-launch] first launch — initializing the Wine prefix under umu/SLR, then downloading + installing Battle.net (the installer window will appear in the stream; ~5-10 min, one-time)" | tee -a "$LOG" >&2
 
         # Pre-config the prefix BEFORE the installer (mirrors the Lutris battlenet-
@@ -199,7 +219,12 @@ BNCFG
 
         mkdir -p "$SETUP_DIR" 2>/dev/null || true
         if ! curl -fsSL -A "$UA" -o "$SETUP_EXE" "$SETUP_URL" >>"$LOG" 2>&1; then
-            echo "[battlenet-launch] FATAL: Battle.net-Setup download failed ($SETUP_URL)" | tee -a "$LOG" >&2
+            echo "[battlenet-launch] FATAL: Battle.net-Setup.exe download failed ($SETUP_URL)" | tee -a "$LOG" >&2
+            exit 1
+        fi
+        if ! "$VERIFY_WINDOWS_BINARY" \
+            --publisher 'Blizzard Entertainment, Inc.' "$SETUP_EXE" >>"$LOG" 2>&1; then
+            echo "[battlenet-launch] FATAL: Battle.net installer publisher verification failed" | tee -a "$LOG" >&2
             exit 1
         fi
         echo "[battlenet-launch] downloaded $(ls -l "$SETUP_EXE" 2>/dev/null | awk '{print $5}') bytes — running installer under umu/SLR" >> "$LOG"
@@ -263,6 +288,13 @@ BNCFG
         wait "$installer_pid" || echo "[battlenet-launch] installer exited $?" >> "$LOG"
         rm -rf "$SETUP_DIR" 2>/dev/null || true
     fi
+fi
+
+# A finalized template clone must never launch with the baked placeholder. This
+# recheck is idempotent and safely retries after an interrupted first copy.
+if [ -f "$PREFIX/.dpad-preinstalled" ] && ! "$RANDOMIZE_PREFIX_ID" "$PREFIX" >>"$LOG" 2>&1; then
+    echo "[battlenet-launch] FATAL: per-user Wine MachineGuid is not ready" | tee -a "$LOG" >&2
+    exit 1
 fi
 
 if ! bn_installed; then

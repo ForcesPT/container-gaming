@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""Neutralize a baked Wine MachineGuid or generate a per-user one."""
+import argparse
+import os
+import re
+import tempfile
+import uuid
+from pathlib import Path
+
+PLACEHOLDER = "00000000-0000-0000-0000-000000000000"
+PATTERN = re.compile(rb'("MachineGuid"=")([^"]+)("\r?\n)')
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--template", action="store_true")
+    parser.add_argument("prefix")
+    args = parser.parse_args()
+
+    prefix = Path(args.prefix).resolve(strict=True)
+    registry = prefix / "system.reg"
+    if not registry.is_file() or registry.is_symlink():
+        raise SystemExit(f"regular system.reg missing under {prefix}")
+
+    original = registry.read_bytes()
+    matches = PATTERN.findall(original)
+    if len(matches) != 1:
+        raise SystemExit(f"expected exactly one MachineGuid, found {len(matches)}")
+    current = matches[0][1].decode("ascii")
+    if not args.template:
+        parsed = uuid.UUID(current)
+        if parsed.int != 0:
+            print("WINE_MACHINE_GUID_READY mode=runtime-preserved")
+            return
+
+    value = PLACEHOLDER if args.template else str(uuid.uuid4())
+    replacement = rb'\g<1>' + value.encode("ascii") + rb'\g<3>'
+    updated, count = PATTERN.subn(replacement, original)
+
+    stat = registry.stat()
+    fd, temporary = tempfile.mkstemp(prefix=".system.reg.", dir=prefix)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(updated)
+            f.flush()
+            os.fchmod(f.fileno(), stat.st_mode & 0o7777)
+            if os.geteuid() == 0:
+                os.fchown(f.fileno(), stat.st_uid, stat.st_gid)
+            os.fsync(f.fileno())
+        os.replace(temporary, registry)
+        prefix_fd = os.open(prefix, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(prefix_fd)
+        finally:
+            os.close(prefix_fd)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+    mode = "template" if args.template else "runtime"
+    print(f"WINE_MACHINE_GUID_READY mode={mode}")
+
+
+if __name__ == "__main__":
+    main()

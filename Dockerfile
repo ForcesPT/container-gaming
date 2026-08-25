@@ -829,7 +829,7 @@ ARG UMU_VERSION=1.4.4
 ARG UMU_SHA256=86b7a234f77fbcd13699654656192a12ed3852ec2bcc721506ae4f91436b3793
 RUN set -e; \
     apt-get update && apt-get install -y --no-install-recommends \
-        python3-xlib apparmor-profiles libzstd1 \
+        python3-xlib apparmor-profiles libzstd1 osslsigncode \
         libgl1-mesa-dri:i386 libglx-mesa0:i386 \
     && rm -rf /var/lib/apt/lists/* \
     && cd /tmp && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o /tmp/umu.deb \
@@ -887,53 +887,37 @@ RUN set -e; \
     && test -x /usr/local/bin/epic-launch \
     && test -x /usr/local/bin/gog-launch
 
-#    (f) Build-time Battle.net prefix prebake (STORES-PLAN §7 piece 2 / §10
-#        piece 2). Runs `umu-run winetricks` (corefonts win10 vcrun2022
-#        d3dcompiler_47) at BUILD time as the dpad user on Xvfb :9 (software GL,
-#        no GPU needed) → bakes the winetricks-initialized Wine prefix at
-#        /opt/dpadcloud/battlenet-prefix (+ the Battle.net.config + the downloaded
-#        Battle.net-Setup.exe + a .dpad-prebaked marker) + the Steam Linux
-#        Runtime at /home/dpad/.local/share/umu (~657 MB, reused at runtime → no
-#        first-run umu SLR download). The Blizzard installer itself is NOT run
-#        at build time (its Chromium GUI won't complete headless — validated:
-#        even --disable-gpu under Xvfb stalls before Battle.net.exe); the runtime
-#        battlenet-launch copies this prefix to the session WINEPREFIX on first
-#        launch + runs the installer there (user clicks through in the stream).
-#        Cuts the ~2-min winetricks + the SLR download from every first launch.
-#        Idempotent + best-effort (always exits 0; on failure the marker isn't
-#        written + battlenet-launch falls back to the full runtime winetricks).
-#        Placed late so entrypoint/script edits don't invalidate this expensive
-#        (~3-5 min: SLR download + winetricks) layer.
-#        ⚠️ BAKE METHOD (2026-08-12): this build-time prebake does NOT work
-#        under buildkit — wineserver/wine crash in buildkit's user-namespace
-#        sandbox (the `--security=insecure` RUN entitlement does NOT fix it;
-#        umu's pressure-vessel→bwrap needs full privileges). So this RUN is a
-#        graceful no-op on a standard `docker build` (the script exits 0
-#        without the marker). The prebake is baked via the privileged-container
-#        + commit workflow — see scripts/build-bootstrap-battlenet.sh header
-#        (docker run --privileged → build-bootstrap-battlenet.sh →
-#        docker commit -c 'ENTRYPOINT[...]' -c 'CMD[...]' → a FROM-commit
-#        fixup bakes the latest battlenet-launch). Best-effort: a non-privileged
-#        build ships without the prebake + the runtime battlenet-launch falls
-#        back to the full winetricks + installer (no broken image).
-COPY scripts/build-bootstrap-battlenet.sh /tmp/build-bootstrap-battlenet.sh
-RUN chmod +x /tmp/build-bootstrap-battlenet.sh \
-    && /tmp/build-bootstrap-battlenet.sh \
-    && rm -f /tmp/build-bootstrap-battlenet.sh \
-    && chown -R ${USERNAME}:${USERNAME} /opt/dpadcloud/battlenet-prefix ${HOME}/.local/share/umu 2>/dev/null || true
-
-#    (f3) EA App prebake — same pattern as Battle.net: winetricks-initialized
-#         prefix + EAappInstaller.exe + the SLR (shared with battlenet). The
-#         runtime ea-launch copies this prefix on first launch → skips the
-#         ~2-min winetricks + SLR download + installer download. Same
-#         privileged-container + commit workflow (see battlenet header).
-#         Best-effort: a non-privileged build ships without the prebake +
-#         ea-launch falls back to the full winetricks + installer.
-COPY scripts/build-bootstrap-ea.sh /tmp/build-bootstrap-ea.sh
-RUN chmod +x /tmp/build-bootstrap-ea.sh \
-    && /tmp/build-bootstrap-ea.sh \
-    && rm -f /tmp/build-bootstrap-ea.sh \
-    && chown -R ${USERNAME}:${USERNAME} /opt/dpadcloud/ea-prefix ${HOME}/.local/share/umu 2>/dev/null || true
+#    (f) Windows-store clients are preinstalled after this normal BuildKit
+#        stage, together in ONE disposable privileged container, then committed
+#        once. umu/pressure-vessel/bwrap cannot run reliably in BuildKit's user
+#        namespace. Running the old best-effort scripts here left two duplicate
+#        4.68 GB UMU layers in r13 without usable installed prefixes.
+#
+#        Published releases MUST run /opt/dpadcloud/build-preinstall-stores.sh,
+#        require PREINSTALLED_STORES_READY plus all three launcher executables,
+#        then docker commit with the original ENTRYPOINT/CMD restored. Runtime
+#        wrappers fail safely to installation only for developer/base images.
+COPY scripts/build-bootstrap-battlenet.sh /opt/dpadcloud/build-bootstrap-battlenet.sh
+COPY scripts/build-bootstrap-ea.sh /opt/dpadcloud/build-bootstrap-ea.sh
+COPY scripts/build-bootstrap-ubisoft.sh /opt/dpadcloud/build-bootstrap-ubisoft.sh
+COPY scripts/build-preinstall-stores.sh /opt/dpadcloud/build-preinstall-stores.sh
+COPY scripts/build-click-x11.py /opt/dpadcloud/build-click-x11.py
+COPY scripts/dpad-randomize-prefix-id /opt/dpadcloud/dpad-randomize-prefix-id
+COPY scripts/dpad-sanitize-store-prefix /opt/dpadcloud/dpad-sanitize-store-prefix
+COPY scripts/dpad-verify-windows-binary /opt/dpadcloud/dpad-verify-windows-binary
+COPY scripts/dpad-clone-prefix-template /opt/dpadcloud/dpad-clone-prefix-template
+COPY scripts/microsoft-identity-root-2020.pem /opt/dpadcloud/microsoft-identity-root-2020.pem
+RUN chmod 0755 \
+      /opt/dpadcloud/build-bootstrap-battlenet.sh \
+      /opt/dpadcloud/build-bootstrap-ea.sh \
+      /opt/dpadcloud/build-bootstrap-ubisoft.sh \
+      /opt/dpadcloud/build-preinstall-stores.sh \
+      /opt/dpadcloud/build-click-x11.py \
+      /opt/dpadcloud/dpad-randomize-prefix-id \
+      /opt/dpadcloud/dpad-sanitize-store-prefix \
+      /opt/dpadcloud/dpad-verify-windows-binary \
+      /opt/dpadcloud/dpad-clone-prefix-template \
+    && chmod 0644 /opt/dpadcloud/microsoft-identity-root-2020.pem
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=360s --retries=3 \
     CMD /opt/dpadcloud/healthcheck.sh

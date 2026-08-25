@@ -46,9 +46,12 @@ GP_DIR="${HOME_DIR}/.steam/debian-installation/compatibilitytools.d/GE-Proton11-
 PREFIX_SRC="/opt/dpadcloud/ea-prefix"
 MARKER="${PREFIX_SRC}/.dpad-prebaked"
 
-# Already prebaked? (layer cache hit on a rebuild) -> nothing to do.
-if [ -f "${MARKER}" ]; then
-  echo "[*] EA App prefix already prebaked — skipping build-time bootstrap"
+# Skip only a finalized/intermediate prefix that contains a real installed
+# launcher. A downloaded installer alone is not success.
+if { [ -f "${MARKER}" ] || [ -f "${PREFIX_SRC}/.dpad-preinstalled" ]; } && \
+   find "${PREFIX_SRC}/drive_c/Program Files/Electronic Arts/EA Desktop" -type f \
+     \( -name EALauncher.exe -o -name EADesktop.exe \) -print -quit 2>/dev/null | grep -q .; then
+  echo "[*] EA App client already preinstalled — skipping"
   exit 0
 fi
 
@@ -57,6 +60,8 @@ if [ "$(id -u)" -ne 0 ]; then
   cd "${HOME_DIR}"
   eval "$(dbus-launch --sh-syntax 2>/dev/null)" || true
   export DBUS_SESSION_BUS_ADDRESS
+  pkill -9 -u "${USERNAME}" -x Xvfb 2>/dev/null || true
+  rm -f /tmp/.X9-lock /tmp/.X11-unix/X9
   Xvfb :9 -screen 0 1280x720x24 +extension GLX +extension RANDR >/tmp/xvfb-ea.log 2>&1 &
   sleep 2
   export DISPLAY=:9 HOME="${HOME_DIR}" USER="${USERNAME}" XDG_RUNTIME_DIR="/run/user/${PUID}"
@@ -66,12 +71,10 @@ if [ "$(id -u)" -ne 0 ]; then
   export WINE_SIMULATE_WRITECOPY=1 WINEDLLOVERRIDES=locationapi=d WINEDEBUG=-all
   unset LD_PRELOAD
 
-  ok=0
+  ok=1
   echo "[*] build-time EA App prebake: umu-run winetricks (downloads the SLR ~657 MB + applies corefonts win10 vcrun2022 d3dcompiler_47)..."
-  if umu-run winetricks -q corefonts win10 vcrun2022 d3dcompiler_47 >/tmp/ea-prebuild-wt.log 2>&1; then
-    ok=1
-  else
-    echo "[*] WARNING: build-time umu-run winetricks exited non-zero (see /tmp/ea-prebuild-wt.log); the runtime wrapper will fall back to the full winetricks"
+  if ! umu-run winetricks -q corefonts win10 vcrun2022 d3dcompiler_47 >/tmp/ea-prebuild-wt.log 2>&1; then
+    echo "[*] WARNING: winetricks exited non-zero; continuing to the installer because final executable verification is authoritative"
     tail -20 /tmp/ea-prebuild-wt.log 2>/dev/null | grep -vE 'fsync: up' | sed 's/^/    /' | tail -10
   fi
 
@@ -81,24 +84,34 @@ if [ "$(id -u)" -ne 0 ]; then
     mkdir -p "$setup_dir" 2>/dev/null || true
     SETUP_URL='https://origin-a.akamaihd.net/EA-Desktop-Client-Download/installer-releases/EAappInstaller.exe'
     UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'
-    if curl -fsSL -A "$UA" -o "$setup_dir/EAappInstaller.exe" "$SETUP_URL" 2>/dev/null; then
+    if curl -fsSL -A "$UA" -o "$setup_dir/EAappInstaller.exe" "$SETUP_URL" 2>/dev/null \
+        && /opt/dpadcloud/dpad-verify-windows-binary \
+          --publisher 'Electronic Arts, Inc.' "$setup_dir/EAappInstaller.exe"; then
       echo "[*] downloaded EAappInstaller.exe ($(ls -l "$setup_dir/EAappInstaller.exe" 2>/dev/null | awk '{print $5}') bytes)"
 
       # Best-effort silent install: EAappInstaller.exe may support /silent
       # or --silent. If it produces EALauncher.exe, the runtime skips the
       # installer entirely. If it fails, the runtime runs the installer
       # with the user in the stream (no harm).
-      ea_dir="${PREFIX_SRC}/drive_c/Program Files/Electronic Arts/EA Desktop/EA Desktop"
+      ea_base="${PREFIX_SRC}/drive_c/Program Files/Electronic Arts/EA Desktop"
+      ea_installed() {
+        find "$ea_base" -type f \( -name EALauncher.exe -o -name EADesktop.exe \) -print -quit 2>/dev/null | grep -q .
+      }
       if command -v umu-run >/dev/null 2>&1; then
         echo "[*] silent-installing EA App (umu-run EAappInstaller.exe)..."
         umu-run "$setup_dir/EAappInstaller.exe" >/tmp/ea-silent-build.log 2>&1 &
         si_pid=$!
+        # EA's installer has one deterministic first screen. Activate only the
+        # titled installer window's LET'S GO control; no login window matches.
+        /opt/dpadcloud/build-click-x11.py --display :9 --title-part ea --title-part installer \
+          --timeout 120 --x-fraction 0.5 --y-from-bottom 49 >>/tmp/ea-silent-build.log 2>&1 \
+          || echo "[*] WARNING: EA installer control automation did not complete" >&2
         si=0
-        while [ "$si" -lt 54 ] && [ ! -f "$ea_dir/EALauncher.exe" ] && [ ! -f "$ea_dir/EADesktop.exe" ]; do
+        while [ "$si" -lt 54 ] && ! ea_installed; do
           sleep 10; si=$((si+1))
           kill -0 "$si_pid" 2>/dev/null || break
         done
-        if [ -f "$ea_dir/EALauncher.exe" ] || [ -f "$ea_dir/EADesktop.exe" ]; then
+        if ea_installed; then
           echo "[*] EA App silent-installed OK (launcher exe present — runtime will skip the installer)"
         else
           echo "[*] WARNING: EA App silent-install did not produce the launcher (prefix + installer prebake only; runtime will run the installer)"
@@ -106,7 +119,7 @@ if [ "$(id -u)" -ne 0 ]; then
         pkill -9 -u "${USERNAME}" -f 'EA|EALauncher|EADesktop|wineserver|umu-run' 2>/dev/null || true
       fi
     else
-      echo "[*] WARNING: EAappInstaller.exe download failed (the runtime wrapper will download it)"
+      echo "[*] WARNING: EA installer download or publisher verification failed"
       ok=0
     fi
   fi
@@ -115,16 +128,17 @@ if [ "$(id -u)" -ne 0 ]; then
   pkill -9 -u "${USERNAME}" -x wineserver 2>/dev/null || true
   pkill -9 -u "${USERNAME}" -x Xvfb 2>/dev/null || true
 
-  if [ "$ok" = 1 ]; then
+  if [ "$ok" = 1 ] && find "${PREFIX_SRC}/drive_c/Program Files/Electronic Arts/EA Desktop" -type f \( -name EALauncher.exe -o -name EADesktop.exe \) -print -quit 2>/dev/null | grep -q .; then
     touch "${MARKER}"
-    echo "[*] build-time EA App prebake OK (prefix + SLR + installer baked at ${PREFIX_SRC})"
+    echo "[*] build-time EA App preinstall OK (installed launcher present at ${PREFIX_SRC})"
   else
-    echo "[*] build-time EA App prebake INCOMPLETE — runtime wrapper will do the full winetricks (no harm, just slower first launch)"
+    rm -f "${MARKER}"
+    echo "[*] build-time EA App preinstall INCOMPLETE — no installed launcher executable"
   fi
   exit 0
 fi
 
 # --- root path: set up dirs, chown, re-exec as dpad -----------------------
-mkdir -p "${PREFIX_SRC}" "/run/user/${PUID}"
-chown -R "${USERNAME}:${USERNAME}" "${PREFIX_SRC}" "${HOME_DIR}" "/run/user/${PUID}" 2>/dev/null || true
+install -d -m 0755 -o "${USERNAME}" -g "${USERNAME}" "${PREFIX_SRC}" "/run/user/${PUID}"
+# Shared UMU ownership is finalized once by build-preinstall-stores.sh.
 exec su -s /bin/bash "${USERNAME}" -c "$0"

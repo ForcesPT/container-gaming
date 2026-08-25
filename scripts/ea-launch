@@ -38,7 +38,10 @@ echo "[ea-launch] $(date -Is) start (HOME=${HOME:-} DISPLAY=${DISPLAY:-})" >> "$
 # volume; the capped rootfs on ephemeral). An explicit WINEPREFIX override is
 # respected (manual tests / probes).
 PREFIX="${WINEPREFIX:-${HOME}/Games/ea-app}"
-mkdir -p "$PREFIX" 2>/dev/null || true
+if ! mkdir -p -- "$PREFIX" 2>/dev/null || ! PREFIX="$(realpath -e -- "$PREFIX")"; then
+    echo "[ea-launch] FATAL: cannot create/canonicalize Wine prefix" | tee -a "$LOG" >&2
+    exit 1
+fi
 export WINEPREFIX="$PREFIX"
 
 # GE-Proton11-3 — same as battlenet-launch. Bundles the NVIDIA compat libs
@@ -61,6 +64,9 @@ export PROTON_VERB="${PROTON_VERB:-waitforexitandrun}"
 
 # Locate umu-run (the deb installs /usr/bin/umu-run; allow a PATH override).
 UMU_RUN="${UMU_RUN:-umu-run}"
+VERIFY_WINDOWS_BINARY="${DPAD_VERIFY_WINDOWS_BINARY:-/opt/dpadcloud/dpad-verify-windows-binary}"
+CLONE_PREFIX_TEMPLATE="${DPAD_CLONE_PREFIX_TEMPLATE:-/opt/dpadcloud/dpad-clone-prefix-template}"
+RANDOMIZE_PREFIX_ID="${DPAD_RANDOMIZE_PREFIX_ID:-/opt/dpadcloud/dpad-randomize-prefix-id}"
 if ! command -v "$UMU_RUN" >/dev/null 2>&1; then
     echo "[ea-launch] FATAL: umu-run not found on PATH (install the umu-launcher deb)" | tee -a "$LOG" >&2
     exit 1
@@ -90,7 +96,7 @@ resolve_ea_installed_exe() {
         "$EA_BASE"/"EA Desktop"/EADesktop.exe \
         "$EA_BASE"/*/"EA Desktop"/EALauncher.exe \
         "$EA_BASE"/"EA Desktop"/EALauncher.exe; do
-        if [ -f "$candidate" ]; then
+        if [ -f "$candidate" ] && "$VERIFY_WINDOWS_BINARY" --pe-only "$candidate" >>"$LOG" 2>&1; then
             printf '%s\n' "$candidate"
             return 0
         fi
@@ -115,7 +121,7 @@ ea_installed() {
 
 # --- prebaked prefix check (mirrors battlenet-launch) -------------------------
 # If a build-time prebaked prefix is baked in the image (build-bootstrap-ea.sh
-# → /opt/dpadcloud/ea-prefix with a .dpad-prebaked marker: the winetricks-
+# → /opt/dpadcloud/ea-prefix with a .dpad-preinstalled marker: the winetricks-
 # initialized prefix + the downloaded EAappInstaller.exe + the Steam Linux
 # Runtime already downloaded to ~/.local/share/umu), copy it to the session
 # WINEPREFIX. This skips the ~2-min winetricks + ~657 MB SLR download + the
@@ -123,21 +129,36 @@ ea_installed() {
 # (which needs the user to click through it in the stream), or if the silent
 # install succeeded at build time, goes straight to login.
 PREBAKED_SRC="/opt/dpadcloud/ea-prefix"
-if [ ! -f "$PREFIX/.dpad-prebaked" ] && [ -f "$PREBAKED_SRC/.dpad-prebaked" ]; then
-    echo "[ea-launch] first launch — copying the prebaked prefix $PREBAKED_SRC -> $PREFIX (skips winetricks + SLR download + installer download; ~seconds)" | tee -a "$LOG" >&2
-    mkdir -p "$PREFIX" 2>/dev/null || true
-    if cp -a "$PREBAKED_SRC/." "$PREFIX/" 2>>"$LOG"; then
-        chown -R "${USER:-dpad}:${USER:-dpad}" "$PREFIX" 2>/dev/null || true
-        echo "[ea-launch] prebaked prefix copied (winetricks + installer present)" >> "$LOG"
+if ! ea_installed && [ -f "$PREBAKED_SRC/.dpad-preinstalled" ]; then
+    echo "[ea-launch] first launch — atomically cloning the preinstalled prefix" | tee -a "$LOG" >&2
+    if "$CLONE_PREFIX_TEMPLATE" "$PREBAKED_SRC" "$PREFIX" >>"$LOG" 2>&1; then
+        echo "[ea-launch] preinstalled prefix cloned with a per-user identity" >> "$LOG"
     else
-        echo "[ea-launch] prebaked prefix copy failed — falling back to the full winetricks" >> "$LOG"
+        clone_rc=$?
+        if [ "$clone_rc" -ne 3 ]; then
+            echo "[ea-launch] FATAL: atomic preinstalled-prefix clone failed" | tee -a "$LOG" >&2
+            exit 1
+        fi
+        echo "[ea-launch] preserving existing non-empty prefix; using runtime installer fallback" >> "$LOG"
     fi
+fi
+
+# Idempotent safety gate: retry placeholder replacement after an interrupted
+# copy, but preserve an already-generated per-user identity.
+if [ -f "$PREFIX/.dpad-preinstalled" ] && ea_installed && ! "$RANDOMIZE_PREFIX_ID" "$PREFIX" >>"$LOG" 2>&1; then
+    echo "[ea-launch] FATAL: per-user Wine MachineGuid is not ready" | tee -a "$LOG" >&2
+    exit 1
 fi
 
 # --- first-launch install (one-time per prefix) -------------------------------
 if ! ea_installed; then
+    # Preserve user state, but force verified installer recovery when a stale
+    # finalized marker no longer has a valid installed executable behind it.
+    if [ -e "$PREFIX/.dpad-preinstalled" ] || [ -L "$PREFIX/.dpad-preinstalled" ]; then
+        rm -f -- "$PREFIX/.dpad-preinstalled" || exit 1
+    fi
     # If the prefix isn't prebaked (no marker), run the full winetricks + download.
-    if [ ! -f "$PREFIX/.dpad-prebaked" ]; then
+    if [ ! -f "$PREFIX/.dpad-preinstalled" ]; then
         echo "[ea-launch] first launch — initializing the Wine prefix under umu/SLR, then downloading + installing EA App (the installer window will appear in the stream; ~5-10 min, one-time)" | tee -a "$LOG" >&2
 
         # Pre-config the prefix BEFORE the installer (mirrors the Lutris EA App
@@ -151,6 +172,11 @@ if ! ea_installed; then
         mkdir -p "$SETUP_DIR" 2>/dev/null || true
         if ! curl -fsSL -A "$UA" -o "$SETUP_EXE" "$SETUP_URL" >>"$LOG" 2>&1; then
             echo "[ea-launch] FATAL: EAappInstaller.exe download failed ($SETUP_URL)" | tee -a "$LOG" >&2
+            exit 1
+        fi
+        if ! "$VERIFY_WINDOWS_BINARY" \
+            --publisher 'Electronic Arts, Inc.' "$SETUP_EXE" >>"$LOG" 2>&1; then
+            echo "[ea-launch] FATAL: EA installer publisher verification failed" | tee -a "$LOG" >&2
             exit 1
         fi
         echo "[ea-launch] downloaded $(ls -l "$SETUP_EXE" 2>/dev/null | awk '{print $5}') bytes — running installer under umu/SLR" >> "$LOG"

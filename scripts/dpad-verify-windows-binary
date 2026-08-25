@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Validate PE structure and, for installers, Authenticode publisher trust."""
+import argparse
+import datetime as dt
+import email.utils
+import hashlib
+import re
+import shutil
+import ssl
+import struct
+import subprocess
+from pathlib import Path
+
+MIN_PE_SIZE = 65536
+
+
+def reject_symlink_path(path: Path, description: str) -> None:
+    absolute = path.absolute()
+    for candidate in (absolute, *absolute.parents):
+        if candidate.is_symlink():
+            raise SystemExit(f"{description} must not use symlinks: {candidate}")
+
+
+def validate_pe(path: Path) -> None:
+    if not path.is_file() or path.is_symlink():
+        raise SystemExit(f"regular Windows executable missing: {path}")
+    size = path.stat().st_size
+    if size < MIN_PE_SIZE:
+        raise SystemExit(f"Windows executable is truncated ({size} bytes): {path}")
+    with path.open("rb") as stream:
+        header = stream.read(64)
+        if len(header) != 64 or header[:2] != b"MZ":
+            raise SystemExit(f"DOS MZ header missing: {path}")
+        pe_offset = struct.unpack_from("<I", header, 0x3C)[0]
+        if pe_offset < 64 or pe_offset > size - 24:
+            raise SystemExit(f"invalid PE header offset: {path}")
+        stream.seek(pe_offset)
+        if stream.read(4) != b"PE\0\0":
+            raise SystemExit(f"PE signature missing: {path}")
+
+
+def ca_fingerprint(path: Path) -> str:
+    pem = path.read_text(encoding="ascii")
+    der = ssl.PEM_cert_to_DER_cert(pem)
+    return hashlib.sha256(der).hexdigest()
+
+
+def first_signer_matches_publisher(output: str, publisher: str) -> bool:
+    subject_match = re.search(r"^\s*Subject:\s*(.+)$", output, re.M)
+    if not subject_match:
+        return False
+    subject = subject_match.group(1).strip()
+    attributes = {}
+    for match in re.finditer(r"(?:^|/)([A-Za-z][A-Za-z0-9.]*)=((?:\\.|[^/])*)", subject):
+        key = match.group(1).upper()
+        value = re.sub(r"\\(.)", r"\1", match.group(2))
+        attributes.setdefault(key, []).append(value)
+    return any(value == publisher for key in ("O", "CN") for value in attributes.get(key, ()))
+
+
+def verify_signature(args: argparse.Namespace, path: Path) -> None:
+    tool = shutil.which("osslsigncode")
+    if not tool:
+        raise SystemExit("osslsigncode is required for installer verification")
+    command = [tool, "verify"]
+    if args.ca_file:
+        raw_ca_file = Path(args.ca_file)
+        reject_symlink_path(raw_ca_file, "Authenticode CA path")
+        ca_file = raw_ca_file.resolve(strict=True)
+        if not ca_file.is_file():
+            raise SystemExit("regular Authenticode CA file is required")
+        if args.ca_sha256 and ca_fingerprint(ca_file) != args.ca_sha256.lower():
+            raise SystemExit("Authenticode CA fingerprint mismatch")
+        command += ["-CAfile", str(ca_file)]
+    command += ["-in", str(path)]
+    result = subprocess.run(command, text=True, capture_output=True)
+    output = result.stdout + result.stderr
+    if result.returncode and args.trusted_signing_time:
+        matches = re.findall(r"^\s*Timestamp time:\s*(.+ GMT)\s*$", output, re.M)
+        if len(matches) != 1:
+            raise SystemExit("expected exactly one embedded Authenticode signing time")
+        signed_at = email.utils.parsedate_to_datetime(matches[0])
+        now = dt.datetime.now(dt.timezone.utc)
+        if signed_at > now + dt.timedelta(minutes=5):
+            raise SystemExit("embedded Authenticode signing time is in the future")
+        retry = command[:-2] + ["-time", str(int(signed_at.timestamp()))] + command[-2:]
+        result = subprocess.run(retry, text=True, capture_output=True)
+        output = result.stdout + result.stderr
+    if result.returncode or "Signature verification: ok" not in output:
+        raise SystemExit(f"Authenticode verification failed: {path}")
+    if not first_signer_matches_publisher(output, args.publisher):
+        raise SystemExit(f"unexpected Authenticode publisher for {path}")
+    print(f"WINDOWS_BINARY_READY mode=authenticode publisher={args.publisher}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pe-only", action="store_true")
+    parser.add_argument("--publisher")
+    parser.add_argument("--ca-file")
+    parser.add_argument("--ca-sha256")
+    parser.add_argument("--trusted-signing-time", action="store_true")
+    parser.add_argument("path")
+    args = parser.parse_args()
+    raw_path = Path(args.path)
+    reject_symlink_path(raw_path, "Windows executable path")
+    path = raw_path.resolve(strict=True)
+    validate_pe(path)
+    if args.pe_only:
+        print("WINDOWS_BINARY_READY mode=pe")
+        return
+    if not args.publisher:
+        raise SystemExit("--publisher is required for Authenticode verification")
+    verify_signature(args, path)
+
+
+if __name__ == "__main__":
+    main()

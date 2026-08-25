@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Atomically clone a finalized template and assign a per-user Wine identity."""
+import argparse
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path, PurePosixPath
+
+MARKER = ".dpad-preinstalled"
+
+
+def reject_symlink_path(path: Path, description: str) -> None:
+    absolute = path.absolute()
+    for candidate in (absolute, *absolute.parents):
+        if candidate.is_symlink():
+            raise SystemExit(f"{description} must not use symlinks: {candidate}")
+
+
+def safe_relative(value: str) -> Path:
+    candidate = PurePosixPath(value)
+    if candidate.is_absolute() or not candidate.parts or ".." in candidate.parts:
+        raise SystemExit(f"unsafe required executable path: {value}")
+    return Path(*candidate.parts)
+
+
+def fsync_tree(root: Path) -> None:
+    """Durably flush regular payload files and directory entries bottom-up."""
+    for current, directories, files in os.walk(root, topdown=False, followlinks=False):
+        current_path = Path(current)
+        for name in files:
+            candidate = current_path / name
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            fd = os.open(candidate, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        for name in directories:
+            candidate = current_path / name
+            if candidate.is_symlink():
+                continue
+            fd = os.open(candidate, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        fd = os.open(current_path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("template")
+    parser.add_argument("destination")
+    parser.add_argument("--required", action="append", default=[])
+    args = parser.parse_args()
+
+    raw_template = Path(args.template)
+    reject_symlink_path(raw_template, "template path")
+    template = raw_template.resolve(strict=True)
+    marker = template / MARKER
+    if not template.is_dir() or marker.is_symlink() or not marker.is_file():
+        raise SystemExit("finalized regular template directory required")
+    destination = Path(args.destination).absolute()
+    reject_symlink_path(destination, "destination path")
+    if destination == template or template in destination.parents:
+        raise SystemExit("template and destination must be separate")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() or destination.is_symlink():
+        if destination.is_dir() and not destination.is_symlink() and not any(destination.iterdir()):
+            destination.rmdir()
+        else:
+            raise SystemExit(3)
+
+    required = [safe_relative(value) for value in args.required]
+    for relative in required:
+        candidate = template
+        for part in relative.parts:
+            candidate /= part
+            if candidate.is_symlink():
+                raise SystemExit(f"required template executable must be regular: {relative}")
+        if not candidate.is_file():
+            raise SystemExit(f"required template executable must be regular: {relative}")
+    stage = Path(tempfile.mkdtemp(prefix=f".{destination.name}.dpad-stage-", dir=destination.parent))
+    helper_dir = Path(__file__).resolve().parent
+    try:
+        def ignore_marker(directory: str, names: list[str]) -> set[str]:
+            return {MARKER} if Path(directory).resolve() == template and MARKER in names else set()
+
+        shutil.copytree(template, stage, dirs_exist_ok=True, symlinks=True, ignore=ignore_marker)
+        if (stage / MARKER).exists() or (stage / MARKER).is_symlink():
+            raise RuntimeError("template marker was copied before finalization")
+        for relative in required:
+            subprocess.run(
+                [str(helper_dir / "dpad-verify-windows-binary"), "--pe-only", str(stage / relative)],
+                check=True,
+            )
+        subprocess.run([str(helper_dir / "dpad-randomize-prefix-id"), str(stage)], check=True)
+        marker = stage / MARKER
+        marker.touch(mode=0o600, exist_ok=False)
+        marker_fd = os.open(marker, os.O_RDONLY)
+        try:
+            os.fsync(marker_fd)
+        finally:
+            os.close(marker_fd)
+        fsync_tree(stage)
+        os.rename(stage, destination)
+        parent_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+        print("STORE_PREFIX_TEMPLATE_CLONED")
+    finally:
+        if stage.exists():
+            shutil.rmtree(stage)
+
+
+if __name__ == "__main__":
+    main()

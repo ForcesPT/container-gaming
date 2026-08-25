@@ -222,6 +222,8 @@ if "'[class=Battle.net.exe]') APP_ID=steam_app_battlenet" not in compat:
     raise SystemExit("Labwc compatibility wrapper cannot focus Battle.net's actual app ID")
 if "'[class=EADesktop.exe]') APP_ID=steam_app_eaapp" not in compat:
     raise SystemExit("Labwc compatibility wrapper cannot focus EA App's actual app ID")
+if "'[class=upc.exe]') APP_ID=steam_app_ubisoft" not in compat:
+    raise SystemExit("Labwc compatibility wrapper cannot focus Ubisoft Connect's actual app ID")
 for forbidden in (
     "let activeStoreChild = null",
     "let activeStoreId = null",

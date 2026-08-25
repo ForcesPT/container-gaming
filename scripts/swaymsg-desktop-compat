@@ -56,7 +56,7 @@ if [ "$#" -eq 2 ] && { [ "$2" = focus ] || [ "$2" = kill ]; }; then
         '[class=Battle.net.exe]') APP_ID=steam_app_battlenet ;;
         '[class=heroic]') APP_ID=heroic ;;
         '[class=EADesktop.exe]') APP_ID=steam_app_eaapp ;;
-        '[class=upc.exe]') APP_ID=upc.exe ;;
+        '[class=upc.exe]') APP_ID=steam_app_ubisoft ;;
         *) APP_ID= ;;
     esac
     if [ -n "$APP_ID" ]; then

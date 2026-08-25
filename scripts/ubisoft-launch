@@ -46,7 +46,10 @@ echo "[ubisoft-launch] $(date -Is) start (HOME=${HOME:-} DISPLAY=${DISPLAY:-})" 
 # volume; the capped rootfs on ephemeral). An explicit WINEPREFIX override is
 # respected (manual tests / probes).
 PREFIX="${WINEPREFIX:-${HOME}/Games/ubisoft}"
-mkdir -p "$PREFIX" 2>/dev/null || true
+if ! mkdir -p -- "$PREFIX" 2>/dev/null || ! PREFIX="$(realpath -e -- "$PREFIX")"; then
+    echo "[ubisoft-launch] FATAL: cannot create/canonicalize Wine prefix" | tee -a "$LOG" >&2
+    exit 1
+fi
 export WINEPREFIX="$PREFIX"
 
 # GE-Proton11-3 — same as battlenet-launch. Bundles the NVIDIA compat libs
@@ -69,6 +72,9 @@ export PROTON_VERB="${PROTON_VERB:-waitforexitandrun}"
 
 # Locate umu-run (the deb installs /usr/bin/umu-run; allow a PATH override).
 UMU_RUN="${UMU_RUN:-umu-run}"
+VERIFY_WINDOWS_BINARY="${DPAD_VERIFY_WINDOWS_BINARY:-/opt/dpadcloud/dpad-verify-windows-binary}"
+CLONE_PREFIX_TEMPLATE="${DPAD_CLONE_PREFIX_TEMPLATE:-/opt/dpadcloud/dpad-clone-prefix-template}"
+RANDOMIZE_PREFIX_ID="${DPAD_RANDOMIZE_PREFIX_ID:-/opt/dpadcloud/dpad-randomize-prefix-id}"
 if ! command -v "$UMU_RUN" >/dev/null 2>&1; then
     echo "[ubisoft-launch] FATAL: umu-run not found on PATH (install the umu-launcher deb)" | tee -a "$LOG" >&2
     exit 1
@@ -106,10 +112,44 @@ SETUP_DIR="$PREFIX/drive_c/ubisoft-setup"
 SETUP_EXE="$SETUP_DIR/UbisoftConnectInstaller.exe"
 
 # installed = either launcher exe present
-ubi_installed() { [ -f "$UBI_INST" ] || [ -f "$UBI_INST_ALT" ]; }
+ubi_installed() {
+    [ -f "$UBI_INST" ] && "$VERIFY_WINDOWS_BINARY" --pe-only "$UBI_INST" >>"$LOG" 2>&1 && return 0
+    [ -f "$UBI_INST_ALT" ] && "$VERIFY_WINDOWS_BINARY" --pe-only "$UBI_INST_ALT" >>"$LOG" 2>&1 && return 0
+    return 1
+}
 
-# --- first-launch install (one-time per prefix) -------------------------------
+# --- fully preinstalled image prefix -----------------------------------------
+# Published images carry a sanitized, logged-out Ubisoft prefix. Copy it into
+# the writable session/user volume once; later sessions reuse that user copy.
+PREBAKED_SRC="/opt/dpadcloud/ubisoft-prefix"
+if ! ubi_installed && [ -f "$PREBAKED_SRC/.dpad-preinstalled" ]; then
+    echo "[ubisoft-launch] first launch — atomically cloning the preinstalled prefix" | tee -a "$LOG" >&2
+    if "$CLONE_PREFIX_TEMPLATE" "$PREBAKED_SRC" "$PREFIX" >>"$LOG" 2>&1; then
+        echo "[ubisoft-launch] preinstalled prefix cloned with a per-user identity; opening login directly" >> "$LOG"
+    else
+        clone_rc=$?
+        if [ "$clone_rc" -ne 3 ]; then
+            echo "[ubisoft-launch] FATAL: atomic preinstalled-prefix clone failed" | tee -a "$LOG" >&2
+            exit 1
+        fi
+        echo "[ubisoft-launch] preserving existing non-empty prefix; using runtime installer fallback" >> "$LOG"
+    fi
+fi
+
+# Idempotent safety gate: retry placeholder replacement after an interrupted
+# copy, but preserve an already-generated per-user identity.
+if [ -f "$PREFIX/.dpad-preinstalled" ] && ubi_installed && ! "$RANDOMIZE_PREFIX_ID" "$PREFIX" >>"$LOG" 2>&1; then
+    echo "[ubisoft-launch] FATAL: per-user Wine MachineGuid is not ready" | tee -a "$LOG" >&2
+    exit 1
+fi
+
+# --- first-launch install (developer/base-image fallback only) ----------------
 if ! ubi_installed; then
+    # Preserve user state, but force verified installer recovery when a stale
+    # finalized marker no longer has a valid installed executable behind it.
+    if [ -e "$PREFIX/.dpad-preinstalled" ] || [ -L "$PREFIX/.dpad-preinstalled" ]; then
+        rm -f -- "$PREFIX/.dpad-preinstalled" || exit 1
+    fi
     echo "[ubisoft-launch] first launch — initializing the Wine prefix under umu/SLR, then downloading + installing Ubisoft Connect (the installer window will appear in the stream; ~5-10 min, one-time)" | tee -a "$LOG" >&2
 
     # Pre-config the prefix BEFORE the installer (mirrors the Lutris Ubisoft
@@ -130,6 +170,14 @@ if ! ubi_installed; then
     # -L to follow the ubi.li redirect to the actual CDN URL.
     if ! curl -fsSL -A "$UA" -o "$SETUP_EXE" "$SETUP_URL" >>"$LOG" 2>&1; then
         echo "[ubisoft-launch] FATAL: UbisoftConnectInstaller.exe download failed ($SETUP_URL)" | tee -a "$LOG" >&2
+        exit 1
+    fi
+    if ! "$VERIFY_WINDOWS_BINARY" \
+        --publisher 'UBISOFT ENTERTAINMENT INC.' \
+        --ca-file /opt/dpadcloud/microsoft-identity-root-2020.pem \
+        --ca-sha256 5367f20c7ade0e2bca790915056d086b720c33c1fa2a2661acf787e3292e1270 \
+        --trusted-signing-time "$SETUP_EXE" >>"$LOG" 2>&1; then
+        echo "[ubisoft-launch] FATAL: Ubisoft installer publisher verification failed" | tee -a "$LOG" >&2
         exit 1
     fi
     echo "[ubisoft-launch] downloaded $(ls -l "$SETUP_EXE" 2>/dev/null | awk '{print $5}') bytes — running installer under umu/SLR" >> "$LOG"

@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""Remove store account/browser state and fail closed on residue."""
+import os
+import shutil
+from pathlib import Path
+
+FORBIDDEN_DIRS = {
+    "cache",
+    "code cache",
+    "crashpad",
+    "gpucache",
+    "indexeddb",
+    "local storage",
+    "network",
+    "session storage",
+    "temp",
+    "webstorage",
+}
+FORBIDDEN_FILES = {
+    "cookies",
+    "cookies-journal",
+    "history",
+    "history-journal",
+    "local state",
+    "login data",
+    "login data-journal",
+    "preferences",
+    "secure preferences",
+    "web data",
+    "web data-journal",
+}
+FORBIDDEN_SUFFIXES = (".dmp", ".log", ".mdmp")
+STORE_STATE_RELATIVE = (
+    "AppData/Roaming/Battle.net",
+    "AppData/Local/Battle.net",
+    "AppData/Local/Electronic Arts/EA Desktop/CEF",
+    "AppData/Roaming/Electronic Arts",
+    "AppData/Roaming/EA Desktop",
+    "AppData/Local/Ubisoft Game Launcher",
+    "AppData/Roaming/Ubisoft",
+)
+SETUP_DIRS = ("battlenet-setup", "ea-setup", "ubisoft-setup")
+
+
+def reject_symlink_path(path: Path, description: str) -> None:
+    absolute = path.absolute()
+    for candidate in (absolute, *absolute.parents):
+        if candidate.is_symlink():
+            raise SystemExit(f"{description} must not use symlinks: {candidate}")
+
+
+def remove_path(path: Path, boundary: Path) -> None:
+    candidate = path.absolute()
+    boundary = boundary.absolute()
+    if candidate != boundary and boundary not in candidate.parents:
+        raise SystemExit(f"refusing store-state deletion outside boundary: {candidate}")
+    for ancestor in candidate.parents:
+        if ancestor == boundary:
+            break
+        if ancestor.is_symlink():
+            raise SystemExit(f"refusing store-state deletion through symlink ancestor: {ancestor}")
+    else:
+        raise SystemExit(f"store-state deletion boundary not found: {candidate}")
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
+def user_roots(prefix: Path) -> list[Path]:
+    users = prefix / "drive_c/users"
+    if users.is_symlink() or not users.is_dir():
+        raise SystemExit(f"regular drive_c/users directory required: {users}")
+    roots = []
+    for path in users.iterdir():
+        if path.is_symlink():
+            raise SystemExit(f"Wine user root must not be a symlink: {path}")
+        if path.is_dir():
+            roots.append(path)
+    return roots
+
+
+def sanitize(prefix: Path) -> None:
+    for setup in SETUP_DIRS:
+        remove_path(prefix / "drive_c" / setup, prefix)
+    for user in user_roots(prefix):
+        for relative in STORE_STATE_RELATIVE:
+            remove_path(user / relative, user)
+        for root, dirs, files in os.walk(user, topdown=True, followlinks=False):
+            root_path = Path(root)
+            for name in list(dirs):
+                candidate = root_path / name
+                if name.lower() in FORBIDDEN_DIRS or candidate.is_symlink():
+                    remove_path(candidate, user)
+                    dirs.remove(name)
+            for name in files:
+                candidate = root_path / name
+                lowered = name.lower()
+                if candidate.is_symlink() or lowered in FORBIDDEN_FILES or lowered.endswith(FORBIDDEN_SUFFIXES):
+                    remove_path(candidate, user)
+    for root, _dirs, files in os.walk(prefix, followlinks=False):
+        for name in files:
+            lowered = name.lower()
+            if lowered.endswith(FORBIDDEN_SUFFIXES):
+                remove_path(Path(root) / name, prefix)
+
+
+def verify_clean(prefix: Path) -> None:
+    residue = []
+    for setup in SETUP_DIRS:
+        candidate = prefix / "drive_c" / setup
+        if candidate.exists() or candidate.is_symlink():
+            residue.append(str(candidate))
+    for user in user_roots(prefix):
+        for relative in STORE_STATE_RELATIVE:
+            candidate = user / relative
+            if candidate.exists() or candidate.is_symlink():
+                residue.append(str(candidate))
+        for root, dirs, files in os.walk(user, followlinks=False):
+            for name in dirs:
+                candidate = Path(root) / name
+                if candidate.is_symlink() or name.lower() in FORBIDDEN_DIRS:
+                    residue.append(str(Path(root) / name))
+            for name in files:
+                candidate = Path(root) / name
+                lowered = name.lower()
+                if candidate.is_symlink() or lowered in FORBIDDEN_FILES or lowered.endswith(FORBIDDEN_SUFFIXES):
+                    residue.append(str(candidate))
+    for root, _dirs, files in os.walk(prefix, followlinks=False):
+        for name in files:
+            if name.lower().endswith(FORBIDDEN_SUFFIXES):
+                residue.append(str(Path(root) / name))
+    if residue:
+        raise SystemExit(f"store prefix sanitization residue: {residue[:5]}")
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("prefix")
+    args = parser.parse_args()
+    raw_prefix = Path(args.prefix)
+    reject_symlink_path(raw_prefix, "store prefix path")
+    prefix = raw_prefix.resolve(strict=True)
+    if not prefix.is_dir():
+        raise SystemExit(f"regular prefix directory required: {prefix}")
+    sanitize(prefix)
+    verify_clean(prefix)
+    print("STORE_PREFIX_SANITIZED")
+
+
+if __name__ == "__main__":
+    main()
