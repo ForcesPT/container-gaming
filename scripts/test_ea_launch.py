@@ -4,6 +4,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 script = (ROOT / "scripts" / "ea-launch").read_text()
+hint_helper_path = ROOT / "scripts" / "dpad-x11-input-hint"
+if not hint_helper_path.exists():
+    raise SystemExit("EA launch contract missing: scripts/dpad-x11-input-hint")
+hint_helper = hint_helper_path.read_text()
 
 required = (
     'resolve_ea_installed_exe()',
@@ -17,6 +21,8 @@ required = (
     'installer_wait_deadline=$((SECONDS + 30))',
     'kill "$installer_pid" 2>/dev/null || true',
     'wait "$installer_pid"',
+    'if [ "${DPAD_DESKTOP_CLIENT:-sway}" = labwc ]; then',
+    'exec /opt/dpadcloud/dpad-x11-input-hint --class steam_app_eaapp --wait-seconds 30 -- "$UMU_RUN" "$EA_EXE" $EA_CEF_ARGS',
     'exec "$UMU_RUN" "$EA_EXE" $EA_CEF_ARGS',
 )
 for item in required:
@@ -34,5 +40,17 @@ if order != sorted(order):
 
 if '--disable-gpu --in-process-gpu' not in script:
     raise SystemExit("EA controlled launch lost software-rendering flags")
+
+for item in (
+    "subprocess.Popen(command)",
+    "0 < args.wait_seconds <= 120",
+    "hints.contents.flags |= INPUT_HINT",
+    "hints.contents.input = 1",
+    "Client accepts input or input focus",
+):
+    if item not in hint_helper:
+        raise SystemExit(f"EA input-hint helper contract missing: {item}")
+if "shell=True" in hint_helper:
+    raise SystemExit("EA input-hint helper must not invoke a shell")
 
 print("EA App launch contract: PASS")

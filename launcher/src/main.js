@@ -29,6 +29,7 @@ const {
   nextLauncherHiddenAfterHide,
   launcherWindowPolicy,
   launcherFocusBeforeHide,
+  launcherShouldHideBehindStore,
   shouldMonitorAdoptedStore,
   createLauncherVisibilityGeneration,
   resumeActiveStore,
@@ -37,6 +38,7 @@ const {
 
 const launcherPolicy = launcherWindowPolicy(process.env.DPAD_DESKTOP_CLIENT || 'sway');
 const focusLauncherBeforeHide = launcherFocusBeforeHide(process.env.DPAD_DESKTOP_CLIENT || 'sway');
+const hideLauncherBehindStore = launcherShouldHideBehindStore(process.env.DPAD_DESKTOP_CLIENT || 'sway');
 const externalUrl = validatedExternalUrl(process.env.ELECTRON_OVERRIDE_URL);
 if (externalUrl) {
   // Keep external pages isolated from the store launcher's profile and preload
@@ -175,6 +177,15 @@ const storeVisibleTimers = new Map();  // store id -> visibility poll timer
 // Move the launcher window to the sway scratchpad (hide it) so the store
 // client can take over the full output without side-by-side tiling.
 function hideLauncherToScratchpad() {
+  // Labwc store windows can be smaller than the output (EA is 520x844). Keep
+  // the maximized launcher mapped behind them so the compositor root is never
+  // exposed and NextWindow/PreviousWindow can still cycle back to DpadPlay.
+  // Native Sway retains its validated scratchpad behavior.
+  if (!hideLauncherBehindStore) {
+    launcherHidden = false;
+    log('launcher retained behind store for Labwc window cycling');
+    return;
+  }
   // Any hide attempt supersedes a delayed restore callback, even if the
   // compositor command itself fails and the previous hidden state is retained.
   launcherVisibilityGeneration.invalidate();

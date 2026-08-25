@@ -220,4 +220,12 @@ EA_EXE="C:\\${EA_REL//\//\\}"
 # GE-Proton11-2 wine-wayland fix path instead).
 EA_CEF_ARGS="${DPAD_EA_CEF_ARGS:---disable-gpu --in-process-gpu}"
 echo "[ea-launch] launching $EA_EXE under umu/SLR (cef_args=$EA_CEF_ARGS)" >> "$LOG"
+# EA's Wine/CEF toplevel implements WM_TAKE_FOCUS and accepts keyboard input,
+# but advertises WM_HINTS input=False. Labwc 0.7.1 therefore omits it from
+# NextWindow/PreviousWindow even though explicit Waybar focus works. Correct
+# only that hint while launching the controlled client. Native Sway keeps its
+# historical direct launch path unchanged.
+if [ "${DPAD_DESKTOP_CLIENT:-sway}" = labwc ]; then
+    exec /opt/dpadcloud/dpad-x11-input-hint --class steam_app_eaapp --wait-seconds 30 -- "$UMU_RUN" "$EA_EXE" $EA_CEF_ARGS
+fi
 exec "$UMU_RUN" "$EA_EXE" $EA_CEF_ARGS

@@ -709,7 +709,7 @@ RUN mkdir -p "${HOME}/.config/heroic/store" && \
 #        the SDL3 gamepad poll. The Electron runtime libs (libnss/libgtk/
 #        libasound/libxss/...) are already present; libSDL3.so.0 below supplies
 #        the launcher's koffi input path. See launcher/README.
-COPY --from=forcespt/dpadcloud-launcher:0.1.6 /opt/dpadcloud/launcher /opt/dpadcloud/launcher
+COPY --from=forcespt/dpadcloud-launcher:0.1.7 /opt/dpadcloud/launcher /opt/dpadcloud/launcher
 RUN chmod +x /opt/dpadcloud/launcher/dpad-launcher
 
 #    (a) GE-Proton11-3 into compatibilitytools.d. The Battle.net white-screen
@@ -858,6 +858,7 @@ COPY scripts/dpad-waybar-state-check /opt/dpadcloud/dpad-waybar-state-check
 COPY scripts/swaymsg-desktop-compat /usr/local/bin/swaymsg
 COPY scripts/battlenet-launch /opt/dpadcloud/battlenet-launch
 COPY scripts/ea-launch /opt/dpadcloud/ea-launch
+COPY scripts/dpad-x11-input-hint /opt/dpadcloud/dpad-x11-input-hint
 COPY scripts/ubisoft-launch /opt/dpadcloud/ubisoft-launch
 COPY scripts/dpad-open-url /opt/dpadcloud/dpad-open-url
 COPY scripts/epic-launch /opt/dpadcloud/epic-launch

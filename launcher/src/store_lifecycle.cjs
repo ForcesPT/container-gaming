@@ -82,6 +82,10 @@ function launcherFocusBeforeHide(desktopClient) {
   return desktopClient !== 'labwc';
 }
 
+function launcherShouldHideBehindStore(desktopClient) {
+  return desktopClient !== 'labwc';
+}
+
 function shouldMonitorAdoptedStore(resumeSucceeded, hasManagedChild) {
   return resumeSucceeded && !hasManagedChild;
 }
@@ -197,6 +201,7 @@ module.exports = {
   nextLauncherHiddenAfterHide,
   launcherWindowPolicy,
   launcherFocusBeforeHide,
+  launcherShouldHideBehindStore,
   shouldMonitorAdoptedStore,
   createLauncherVisibilityGeneration,
   resumeActiveStore,

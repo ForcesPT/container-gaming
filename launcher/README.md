@@ -30,7 +30,7 @@ of spawning a duplicate.
 - `scripts/gen-logos.js` — regenerate `src/logos/*.svg` from simple-icons.
 - `Dockerfile` — package the AppDir into `forcespt/dpadcloud-launcher`
   (FROM scratch, COPY the AppDir to `/opt/dpadcloud/launcher`); the
-  container-gaming Dockerfile `COPY --from=forcespt/dpadcloud-launcher:0.1.6`
+  container-gaming Dockerfile `COPY --from=forcespt/dpadcloud-launcher:0.1.7`
   bakes it into the `:dpad-SteamOS` image.
 - `../scripts/launcher-shell` — the wrapper the entrypoint execs as sway's
   startup app (`DPAD_STORE_SHELL=picker`).
@@ -40,8 +40,8 @@ of spawning a duplicate.
 npm install                       # local deps (for `npm start` preview)
 npm start                         # local preview (DPAD_LAUNCHER_DEV=1 mocks Steam available)
 ./scripts/build.sh                # cross-build the Linux AppDir -> dist/linux-unpacked/
-docker build -t forcespt/dpadcloud-launcher:0.1.6 -t forcespt/dpadcloud-launcher:latest .
-docker push forcespt/dpadcloud-launcher:0.1.6
+docker build -t forcespt/dpadcloud-launcher:0.1.7 -t forcespt/dpadcloud-launcher:latest .
+docker push forcespt/dpadcloud-launcher:0.1.7
 docker push forcespt/dpadcloud-launcher:latest
 ```
 

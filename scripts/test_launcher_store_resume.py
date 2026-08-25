@@ -19,6 +19,7 @@ const {
   nextLauncherHiddenAfterHide,
   launcherWindowPolicy,
   launcherFocusBeforeHide,
+  launcherShouldHideBehindStore,
   shouldMonitorAdoptedStore,
   createLauncherVisibilityGeneration,
   resumeActiveStore,
@@ -73,6 +74,11 @@ assert.deepStrictEqual(launcherWindowPolicy('sway'), {
 });
 assert.strictEqual(launcherFocusBeforeHide('labwc'), false);
 assert.strictEqual(launcherFocusBeforeHide('sway'), true);
+// Labwc must retain the maximized launcher behind floating store windows. If it
+// is minimized, small clients such as EA expose the compositor root and Labwc's
+// window cycler can no longer reach DpadPlay. Native Sway keeps its scratchpad.
+assert.strictEqual(launcherShouldHideBehindStore('labwc'), false);
+assert.strictEqual(launcherShouldHideBehindStore('sway'), true);
 assert.strictEqual(shouldMonitorAdoptedStore(true, false), true);
 assert.strictEqual(shouldMonitorAdoptedStore(true, true), false);
 assert.strictEqual(shouldMonitorAdoptedStore(false, false), false);
@@ -243,10 +249,10 @@ if "if (!launcherVisibilityGeneration.isCurrent(restoreGeneration))" not in main
 package = json.loads((ROOT / "launcher" / "package.json").read_text())
 launcher_dockerfile = (ROOT / "launcher" / "Dockerfile").read_text()
 parent_dockerfile = (ROOT / "Dockerfile").read_text()
-if package["version"] != "0.1.6":
-    raise SystemExit("launcher package version must match release 0.1.6")
-if launcher_dockerfile.count("0.1.6") < 2:
-    raise SystemExit("launcher Dockerfile example and label must both use 0.1.6")
-if "dpadcloud-launcher:0.1.6" not in parent_dockerfile:
-    raise SystemExit("parent image must pin launcher 0.1.6")
+if package["version"] != "0.1.7":
+    raise SystemExit("launcher package version must match release 0.1.7")
+if launcher_dockerfile.count("0.1.7") < 2:
+    raise SystemExit("launcher Dockerfile example and label must both use 0.1.7")
+if "dpadcloud-launcher:0.1.7" not in parent_dockerfile:
+    raise SystemExit("parent image must pin launcher 0.1.7")
 print("Launcher active-store resume: PASS")

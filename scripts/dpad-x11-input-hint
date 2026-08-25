@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""Run a client and correct its owned X11 WM_HINTS input bit.
+
+Some Wine/CEF clients accept keyboard input and implement WM_TAKE_FOCUS but
+publish WM_HINTS input=False. Labwc 0.7.1 consequently excludes them from its
+NextWindow/PreviousWindow switcher. This wrapper changes only InputHint/input
+for newly mapped windows owned by the wrapped process tree, then remains the
+client's lifecycle owner.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ctypes
+import ctypes.util
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from collections.abc import Callable, Iterable
+
+
+FORWARDED_SIGNALS = {signal.SIGTERM, signal.SIGINT}
+MAX_PROBE_SECONDS = 0.25
+
+
+class XWMHints(ctypes.Structure):
+    _fields_ = [
+        ("flags", ctypes.c_long),
+        ("input", ctypes.c_int),
+        ("initial_state", ctypes.c_int),
+        ("icon_pixmap", ctypes.c_ulong),
+        ("icon_window", ctypes.c_ulong),
+        ("icon_x", ctypes.c_int),
+        ("icon_y", ctypes.c_int),
+        ("icon_mask", ctypes.c_ulong),
+        ("window_group", ctypes.c_ulong),
+    ]
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--class", dest="wm_class", required=True)
+    parser.add_argument("--wait-seconds", type=int, default=30)
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", args.wm_class):
+        parser.error("invalid WM_CLASS")
+    if not 0 < args.wait_seconds <= 120:
+        parser.error("wait-seconds must be between 1 and 120")
+    if args.command[:1] == ["--"]:
+        args.command = args.command[1:]
+    if not args.command:
+        parser.error("missing wrapped command after --")
+    return args
+
+
+def probe_timeout(deadline: float, monotonic: Callable[[], float] = time.monotonic) -> float | None:
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        return None
+    return min(MAX_PROBE_SECONDS, remaining)
+
+
+def client_windows(timeout: float) -> list[str]:
+    try:
+        output = subprocess.run(
+            ["xprop", "-root", "_NET_CLIENT_LIST"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return re.findall(r"0x[0-9a-fA-F]+", output)
+
+
+def window_details(window: str, timeout: float) -> tuple[tuple[str, ...], int] | None:
+    try:
+        output = subprocess.run(
+            ["xprop", "-id", window, "WM_CLASS", "_NET_WM_PID"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    classes = tuple(re.findall(r'"([^"]*)"', output.partition("_NET_WM_PID")[0]))
+    pid_match = re.search(r"_NET_WM_PID\([^)]*\)\s*=\s*([0-9]+)", output)
+    if not classes or not pid_match:
+        return None
+    return classes, int(pid_match.group(1))
+
+
+def process_descends_from(pid: int, ancestor_pid: int) -> bool:
+    current = pid
+    visited: set[int] = set()
+    for _ in range(128):
+        if current == ancestor_pid:
+            return True
+        if current <= 1 or current in visited:
+            return False
+        visited.add(current)
+        try:
+            stat = open(f"/proc/{current}/stat", encoding="utf-8").read()
+            right_paren = stat.rfind(")")
+            if right_paren < 0:
+                return False
+            fields = stat[right_paren + 2 :].split()
+            current = int(fields[1])  # state is fields[0], parent PID is fields[1]
+        except (OSError, ValueError, IndexError):
+            return False
+    return False
+
+
+def select_owned_windows(
+    *,
+    windows: Iterable[str],
+    known_windows: set[str],
+    wm_class: str,
+    child_pid: int,
+    deadline: float,
+    monotonic: Callable[[], float] = time.monotonic,
+    details: Callable[[str, float], tuple[tuple[str, ...], int] | None] = window_details,
+    descends: Callable[[int, int], bool] = process_descends_from,
+) -> list[str]:
+    selected: list[str] = []
+    for window in windows:
+        if window in known_windows:
+            continue
+        timeout = probe_timeout(deadline, monotonic)
+        if timeout is None:
+            break
+        info = details(window, timeout)
+        if info is None:
+            continue
+        classes, pid = info
+        if wm_class in classes and descends(pid, child_pid):
+            selected.append(window)
+    return selected
+
+
+def set_input_hint(window: str) -> bool:
+    library = ctypes.util.find_library("X11")
+    if not library:
+        return False
+    x11 = ctypes.CDLL(library)
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XGetWMHints.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    x11.XGetWMHints.restype = ctypes.POINTER(XWMHints)
+    x11.XSetWMHints.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(XWMHints)]
+    x11.XSetWMHints.restype = ctypes.c_int
+    x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    x11.XSync.restype = ctypes.c_int
+    x11.XFree.argtypes = [ctypes.c_void_p]
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    x11.XSetErrorHandler.argtypes = [ctypes.c_void_p]
+    x11.XSetErrorHandler.restype = ctypes.c_void_p
+
+    display_name = os.environ.get("DISPLAY", ":0").encode()
+    display = x11.XOpenDisplay(display_name)
+    if not display:
+        return False
+
+    error_seen = False
+    ERROR_HANDLER = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+
+    @ERROR_HANDLER
+    def handle_x_error(_display: int, _event: int) -> int:
+        nonlocal error_seen
+        error_seen = True
+        return 0
+
+    old_handler = x11.XSetErrorHandler(ctypes.cast(handle_x_error, ctypes.c_void_p))
+    hints = None
+    try:
+        window_id = int(window, 16)
+        hints = x11.XGetWMHints(display, window_id)
+        x11.XSync(display, 0)
+        if error_seen or not hints:
+            return False
+        INPUT_HINT = 1 << 0
+        hints.contents.flags |= INPUT_HINT
+        hints.contents.input = 1
+        changed = bool(x11.XSetWMHints(display, window_id, hints))
+        x11.XSync(display, 0)
+        return changed and not error_seen
+    finally:
+        if hints:
+            x11.XFree(hints)
+        x11.XSetErrorHandler(old_handler)
+        x11.XCloseDisplay(display)
+
+
+def main() -> int:
+    args = parse_args()
+    command = args.command
+
+    child_ref: list[subprocess.Popen[bytes] | subprocess.Popen[str] | None] = [None]
+    pending_signals: list[int] = []
+
+    def forward(signum: int, _frame: object) -> None:
+        child = child_ref[0]
+        if child is None:
+            pending_signals.append(signum)
+            return
+        try:
+            child.send_signal(signum)
+        except ProcessLookupError:
+            pass
+
+    # Install forwarding before Popen. Python may run this handler while Popen
+    # is returning but before child_ref is assigned; queue that narrow race and
+    # forward it immediately after assignment without blocking signals in the
+    # child process.
+    for signum in FORWARDED_SIGNALS:
+        signal.signal(signum, forward)
+    known_deadline = time.monotonic() + 1.0
+    timeout = probe_timeout(known_deadline)
+    known_windows = set(client_windows(timeout)) if timeout is not None else set()
+    child = subprocess.Popen(command)
+    child_ref[0] = child
+    for signum in pending_signals:
+        try:
+            child.send_signal(signum)
+        except ProcessLookupError:
+            break
+    pending_signals.clear()
+
+    deadline = time.monotonic() + args.wait_seconds
+    corrected_windows: set[str] = set()
+    while child.poll() is None:
+        timeout = probe_timeout(deadline)
+        if timeout is None:
+            break
+        windows = client_windows(timeout)
+        for window in select_owned_windows(
+            windows=windows,
+            known_windows=known_windows | corrected_windows,
+            wm_class=args.wm_class,
+            child_pid=child.pid,
+            deadline=deadline,
+        ):
+            if set_input_hint(window):
+                corrected_windows.add(window)
+                # xprop reports this as: Client accepts input or input focus: True
+                print(
+                    f"[dpad-x11-input-hint] corrected WM_HINTS input for {args.wm_class} window {window}",
+                    flush=True,
+                )
+        if corrected_windows:
+            break
+        time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
+
+    if not corrected_windows:
+        print(
+            f"[dpad-x11-input-hint] no new owned {args.wm_class} window within {args.wait_seconds}s",
+            file=sys.stderr,
+            flush=True,
+        )
+    status = child.wait()
+    if status < 0:
+        signum = -status
+        if signum not in (signal.SIGKILL, signal.SIGSTOP):
+            signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+        return 128 + signum  # defensive fallback; os.kill should not return
+    return status
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
