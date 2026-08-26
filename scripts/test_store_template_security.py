@@ -186,10 +186,21 @@ with tempfile.TemporaryDirectory() as temporary:
     symlink_user_prefix = root / "symlink-user-prefix"
     users_root = symlink_user_prefix / "drive_c/users"
     users_root.mkdir(parents=True)
-    (users_root / "dpad").symlink_to(user, target_is_directory=True)
+    real_user = users_root / "steamuser"
+    real_user.mkdir()
+    external_user = root / "external-wine-user"
+    external_user.mkdir()
+    external_user_token = external_user / "must-survive"
+    external_user_token.write_text("preserve", encoding="utf-8")
+    wine_user_alias = users_root / "dpad"
+    wine_user_alias.symlink_to(external_user, target_is_directory=True)
     result = run(str(SANITIZER), str(symlink_user_prefix), check=False)
-    if result.returncode == 0:
-        raise SystemExit("sanitizer accepted a symlinked Wine user root")
+    if result.returncode != 0:
+        raise SystemExit("sanitizer rejected a removable Wine user alias")
+    if wine_user_alias.exists() or wine_user_alias.is_symlink():
+        raise SystemExit("sanitizer retained a Wine user alias")
+    if external_user_token.read_text(encoding="utf-8") != "preserve":
+        raise SystemExit("sanitizer followed a Wine user alias outside the prefix")
 
     ancestor_prefix = root / "symlink-ancestor-prefix"
     ancestor_user = ancestor_prefix / "drive_c/users/dpad"
@@ -204,6 +215,244 @@ with tempfile.TemporaryDirectory() as temporary:
         raise SystemExit("sanitizer followed a symlink ancestor outside the prefix")
 
     sanitizer_module = load_script("dpad_sanitize_store_prefix", SANITIZER)
+
+    prefix_parent = root / "prefix-parent-race"
+    prefix_race = prefix_parent / "prefix"
+    (prefix_race / "drive_c/users/steamuser").mkdir(parents=True)
+    moved_prefix_parent = root / "prefix-parent-original"
+    external_prefix_parent = root / "external-prefix-parent"
+    external_prefix = external_prefix_parent / "prefix"
+    external_prefix_user = external_prefix / "drive_c/users/steamuser"
+    external_prefix_user.mkdir(parents=True)
+    external_prefix_token = external_prefix_user / "external.log"
+    external_prefix_token.write_text("preserve", encoding="utf-8")
+    original_open = sanitizer_module.os.open
+    prefix_parent_swapped = [False]
+
+    def substitute_prefix_parent_before_open(path, flags, *args, **kwargs):
+        if Path(path) == prefix_race and not prefix_parent_swapped[0]:
+            prefix_parent_swapped[0] = True
+            prefix_parent.rename(moved_prefix_parent)
+            prefix_parent.symlink_to(external_prefix_parent, target_is_directory=True)
+        elif path == prefix_parent.name and kwargs.get("dir_fd") is not None and not prefix_parent_swapped[0]:
+            prefix_parent_swapped[0] = True
+            prefix_parent.rename(moved_prefix_parent)
+            prefix_parent.symlink_to(external_prefix_parent, target_is_directory=True)
+        return original_open(path, flags, *args, **kwargs)
+
+    sanitizer_module.os.open = substitute_prefix_parent_before_open
+    try:
+        try:
+            sanitizer_module.sanitize(prefix_race)
+        except (OSError, SystemExit):
+            pass
+    finally:
+        sanitizer_module.os.open = original_open
+    if not prefix_parent_swapped[0]:
+        raise SystemExit("prefix-parent substitution fixture did not execute before open")
+    if external_prefix_token.read_text(encoding="utf-8") != "preserve":
+        raise SystemExit("sanitizer followed a substituted prefix ancestor")
+
+    late_prefix = root / "late-user-prefix"
+    (late_prefix / "drive_c/users/steamuser").mkdir(parents=True)
+    late_opened = sanitizer_module.open_prefix(late_prefix)
+    try:
+        sanitizer_module.sanitize_open(late_opened)
+        os.mkdir("lateuser", dir_fd=late_opened.users_fd)
+        late_user_fd = os.open("lateuser", os.O_RDONLY | os.O_DIRECTORY, dir_fd=late_opened.users_fd)
+        try:
+            token_fd = os.open("Cookies", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=late_user_fd)
+            os.close(token_fd)
+        finally:
+            os.close(late_user_fd)
+        os.symlink("steamuser", "latealias", dir_fd=late_opened.users_fd)
+        try:
+            sanitizer_module.verify_open(late_opened)
+        except SystemExit:
+            pass
+        else:
+            raise SystemExit("sanitizer accepted a late Wine user and alias after its pinned snapshot")
+    finally:
+        late_opened.close()
+
+    collision_users = root / "quarantine-collision-users"
+    collision_users.mkdir()
+    collision_target = root / "quarantine-collision-target"
+    collision_target.write_text("preserve", encoding="utf-8")
+    collision_alias = collision_users / "dpad"
+    collision_alias.symlink_to(collision_target)
+    collision_fd = os.open(collision_users, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    collision_expected = os.stat("dpad", dir_fd=collision_fd, follow_symlinks=False)
+    fixed_token = "fixed-collision"
+    quarantine_name = f".dpad-sanitize-alias-{os.getpid()}-{fixed_token}"
+    quarantine_path = collision_users / quarantine_name
+    quarantine_path.write_text("pre-existing", encoding="utf-8")
+    original_token_hex = sanitizer_module.secrets.token_hex
+    sanitizer_module.secrets.token_hex = lambda _size: fixed_token
+    try:
+        try:
+            sanitizer_module.unlink_user_alias(collision_fd, "dpad", collision_expected)
+        except SystemExit:
+            pass
+        else:
+            raise SystemExit("sanitizer overwrote a colliding quarantine entry")
+    finally:
+        sanitizer_module.secrets.token_hex = original_token_hex
+        os.close(collision_fd)
+    if not collision_alias.is_symlink():
+        raise SystemExit("quarantine collision destroyed the original Wine alias")
+    if quarantine_path.read_text(encoding="utf-8") != "pre-existing":
+        raise SystemExit("quarantine collision destroyed the pre-existing entry")
+
+    drive_race_prefix = root / "drive-substitution-prefix"
+    drive_race_drive = drive_race_prefix / "drive_c"
+    (drive_race_drive / "users/steamuser").mkdir(parents=True)
+    moved_drive = drive_race_prefix / "drive_c-original"
+    external_drive = root / "external-race-drive"
+    external_drive_user = external_drive / "users/steamuser"
+    external_drive_user.mkdir(parents=True)
+    external_drive_token = external_drive_user / "account.log"
+    external_drive_token.write_text("preserve", encoding="utf-8")
+    original_open = sanitizer_module.os.open
+    drive_swapped = [False]
+
+    def substitute_drive_before_open(path, flags, *args, **kwargs):
+        if path == "drive_c" and kwargs.get("dir_fd") is not None and not drive_swapped[0]:
+            drive_swapped[0] = True
+            drive_race_drive.rename(moved_drive)
+            drive_race_drive.symlink_to(external_drive, target_is_directory=True)
+        return original_open(path, flags, *args, **kwargs)
+
+    sanitizer_module.os.open = substitute_drive_before_open
+    try:
+        try:
+            sanitizer_module.sanitize(drive_race_prefix)
+        except (OSError, SystemExit):
+            pass
+    finally:
+        sanitizer_module.os.open = original_open
+    if not drive_swapped[0]:
+        raise SystemExit("drive_c substitution fixture did not execute immediately before open")
+    if external_drive_token.read_text(encoding="utf-8") != "preserve":
+        raise SystemExit("sanitizer followed a substituted drive_c directory")
+
+    users_race_prefix = root / "users-after-check-prefix"
+    users_race_users = users_race_prefix / "drive_c/users"
+    original_race_user = users_race_users / "steamuser"
+    original_race_user.mkdir(parents=True)
+    (original_race_user / "original.log").write_text("remove", encoding="utf-8")
+    moved_race_users = users_race_prefix / "drive_c/users-original"
+    external_checked_users = root / "external-checked-users"
+    external_checked_user = external_checked_users / "steamuser"
+    external_checked_user.mkdir(parents=True)
+    external_checked_token = external_checked_user / "external.log"
+    external_checked_token.write_text("preserve", encoding="utf-8")
+    users_swapped = [False]
+
+    def substitute_users_before_user_open(path, flags, *args, **kwargs):
+        if path == "steamuser" and kwargs.get("dir_fd") is not None and not users_swapped[0]:
+            users_swapped[0] = True
+            users_race_users.rename(moved_race_users)
+            users_race_users.symlink_to(external_checked_users, target_is_directory=True)
+        return original_open(path, flags, *args, **kwargs)
+
+    sanitizer_module.os.open = substitute_users_before_user_open
+    try:
+        try:
+            sanitizer_module.sanitize(users_race_prefix)
+        except (OSError, SystemExit):
+            pass
+    finally:
+        sanitizer_module.os.open = original_open
+    if not users_swapped[0]:
+        raise SystemExit("users substitution fixture did not execute before regular-user open")
+    if external_checked_token.read_text(encoding="utf-8") != "preserve":
+        raise SystemExit("sanitizer followed users substituted after its identity check")
+
+    occupied_users = root / "occupied-restore-users"
+    occupied_users.mkdir()
+    original_alias_target = root / "original-alias-target"
+    original_alias_target.write_text("preserve", encoding="utf-8")
+    occupied_alias = occupied_users / "dpad"
+    occupied_alias.symlink_to(original_alias_target)
+    occupied_fd = os.open(occupied_users, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    occupied_expected = os.stat("dpad", dir_fd=occupied_fd, follow_symlinks=False)
+    replacement_alias_target = root / "replacement-alias-target"
+    replacement_alias_target.write_text("preserve", encoding="utf-8")
+    original_rename_noreplace = sanitizer_module.rename_noreplace
+    original_stat = sanitizer_module.os.stat
+    occupied_restore_attempted = [False]
+
+    def substitute_alias_before_quarantine(directory_fd, src, dst):
+        if src == "dpad":
+            os.unlink("dpad", dir_fd=occupied_fd)
+            os.symlink(replacement_alias_target, "dpad", dir_fd=occupied_fd)
+        return original_rename_noreplace(directory_fd, src, dst)
+
+    def occupy_name_after_quarantine_check(path, *args, **kwargs):
+        captured = original_stat(path, *args, **kwargs)
+        if str(path).startswith(".dpad-sanitize-alias-") and not occupied_restore_attempted[0]:
+            occupied_restore_attempted[0] = True
+            Path(occupied_users / "dpad").write_text("new occupant", encoding="utf-8")
+        return captured
+
+    sanitizer_module.rename_noreplace = substitute_alias_before_quarantine
+    sanitizer_module.os.stat = occupy_name_after_quarantine_check
+    try:
+        try:
+            sanitizer_module.unlink_user_alias(occupied_fd, "dpad", occupied_expected)
+        except SystemExit:
+            pass
+        else:
+            raise SystemExit("sanitizer accepted a mismatched quarantined Wine user alias")
+    finally:
+        sanitizer_module.rename_noreplace = original_rename_noreplace
+        sanitizer_module.os.stat = original_stat
+        os.close(occupied_fd)
+    quarantines = list(occupied_users.glob(".dpad-sanitize-alias-*"))
+    if not occupied_restore_attempted[0]:
+        raise SystemExit("occupied quarantine restore fixture did not execute")
+    if not occupied_alias.is_file() or occupied_alias.read_text(encoding="utf-8") != "new occupant":
+        raise SystemExit("mismatched quarantine restore overwrote the occupied original name")
+    if len(quarantines) != 1 or not quarantines[0].is_symlink():
+        raise SystemExit("mismatched quarantine was not preserved when restore destination was occupied")
+
+    entry_race_users = root / "entry-substitution-users"
+    entry_race_users.mkdir()
+    entry_alias = entry_race_users / "dpad"
+    entry_alias.symlink_to(original_alias_target)
+    replacement = root / "replacement-user-directory"
+    replacement.mkdir()
+    replacement_token = replacement / "must-survive"
+    replacement_token.write_text("preserve", encoding="utf-8")
+    entry_fd = os.open(entry_race_users, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    expected_alias = os.stat("dpad", dir_fd=entry_fd, follow_symlinks=False)
+    original_rename_noreplace = sanitizer_module.rename_noreplace
+    entry_swapped = [False]
+
+    def substitute_alias(directory_fd, src, dst):
+        if src == "dpad" and not entry_swapped[0]:
+            entry_swapped[0] = True
+            os.unlink("dpad", dir_fd=entry_fd)
+            os.rename(replacement, entry_alias)
+        return original_rename_noreplace(directory_fd, src, dst)
+
+    sanitizer_module.rename_noreplace = substitute_alias
+    try:
+        try:
+            sanitizer_module.unlink_user_alias(entry_fd, "dpad", expected_alias)
+        except SystemExit:
+            pass
+        else:
+            raise SystemExit("sanitizer accepted a substituted regular Wine user directory")
+    finally:
+        sanitizer_module.rename_noreplace = original_rename_noreplace
+        os.close(entry_fd)
+    if not entry_swapped[0] or not entry_alias.is_dir() or entry_alias.is_symlink():
+        raise SystemExit("Wine user directory substitution fixture was not restored")
+    if (entry_alias / "must-survive").read_text(encoding="utf-8") != "preserve":
+        raise SystemExit("sanitizer deleted a substituted regular Wine user directory")
+
     for relative in (
         "drive_c/users/dpad/AppData/Roaming/Battle.net/account-token",
         "drive_c/ea-setup/EAappInstaller.exe",

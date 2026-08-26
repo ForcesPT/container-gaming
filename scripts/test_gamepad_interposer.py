@@ -13,6 +13,7 @@ import os
 import sys
 import struct
 import socket
+import stat
 import threading
 import time
 import ctypes
@@ -35,6 +36,7 @@ BTN_MAP = [BTN_A, BTN_B, BTN_X, BTN_Y, BTN_TL, BTN_TR, BTN_SELECT,
 AXES_MAP = [ABS_X, ABS_Y, ABS_Z, ABS_RX, ABS_RY, ABS_RZ, ABS_HAT0X, ABS_HAT0Y]
 NUM_BTNS = len(BTN_MAP)
 NUM_AXES = len(AXES_MAP)
+EVDEV_CONFIG = os.environ.get("DPAD_GAMEPAD_INTERPOSER") == "evdev"
 
 SOCK = "/tmp/selkies_js0.sock"
 JS_EVENT_FMT = "IhBB"  # time(u32) value(s16) type(u8) number(u8) = js_event
@@ -42,11 +44,26 @@ JS_EVENT_SIZE = struct.calcsize(JS_EVENT_FMT)
 
 
 def make_config():
-    # "255sHH%dH%dB" % (MAX_BTNS, MAX_AXES) — name[255] + num_btns + num_axes
-    # + btn_map[MAX_BTNS] (u16) + axes_map[MAX_AXES] (u8)
-    fmt = "255sHH%dH%dB" % (MAX_BTNS, MAX_AXES)
     btn = list(BTN_MAP) + [0] * (MAX_BTNS - NUM_BTNS)
     axes = list(AXES_MAP) + [0] * (MAX_AXES - NUM_AXES)
+    if EVDEV_CONFIG:
+        # MAIN-branch evdev js_config_t: aligned name, USB identity, counts,
+        # maps, and final structure padding = exactly 1360 bytes.
+        fmt = "255sxHHHHH%dH%dB6s" % (MAX_BTNS, MAX_AXES)
+        return struct.pack(
+            fmt,
+            b"Selkies Controller",
+            0x045E,
+            0x028E,
+            0x0114,
+            NUM_BTNS,
+            NUM_AXES,
+            *btn,
+            *axes,
+            b"\0" * 6,
+        )
+    # v1.6.2 classic js_config_t = 1348 bytes with native uint16 alignment.
+    fmt = "255sHH%dH%dB" % (MAX_BTNS, MAX_AXES)
     return struct.pack(fmt, b"Selkies Controller", NUM_BTNS, NUM_AXES, *btn, *axes)
 
 
@@ -55,7 +72,7 @@ def js_event(typ, number, value):
     return struct.pack(JS_EVENT_FMT, ts, value, typ, number)
 
 
-def socket_server(ready):
+def socket_server(ready, accepted):
     try:
         os.unlink(SOCK)
     except OSError:
@@ -71,6 +88,7 @@ def socket_server(ready):
     except socket.timeout:
         print("[server] TIMEOUT — interposer never connected (open /dev/input/js0 failed?)", flush=True)
         return
+    accepted.set()
     print("[server] interposer connected — sending config + events", flush=True)
     conn.sendall(make_config())
     time.sleep(0.3)
@@ -93,27 +111,48 @@ def socket_server(ready):
 def main():
     os.makedirs("/dev/input", exist_ok=True)
     for i in range(4):
+        placeholder = "/dev/input/js%d" % i
         try:
-            open("/dev/input/js%d" % i, "a").close()
+            current = os.lstat(placeholder)
+            if not stat.S_ISREG(current.st_mode):
+                raise SystemExit(f"refusing non-regular joystick placeholder: {placeholder}")
+            os.truncate(placeholder, 0)
+        except FileNotFoundError:
+            os.mknod(placeholder, stat.S_IFREG | 0o600)
         except OSError:
             pass
     ready = threading.Event()
-    t = threading.Thread(target=socket_server, args=(ready,), daemon=True)
+    accepted = threading.Event()
+    t = threading.Thread(target=socket_server, args=(ready, accepted), daemon=True)
     t.start()
     ready.wait(2)
     time.sleep(0.3)  # let the socket server bind
 
-    interposer = os.environ.get("SELKIES_INTERPOSER",
-                                "/usr/lib/x86_64-linux-gnu/selkies_joystick_interposer.so")
+    default_interposer = (
+        "/usr/lib/x86_64-linux-gnu/selkies_joystick_interposer_evdev.so"
+        if EVDEV_CONFIG
+        else "/usr/lib/x86_64-linux-gnu/selkies_joystick_interposer.so"
+    )
+    interposer = os.environ.get("SELKIES_INTERPOSER", default_interposer)
     print("[client] opening /dev/input/js0 (interposer=%s, LD_PRELOAD present=%s)"
           % (interposer, "LD_PRELOAD" in os.environ), flush=True)
     # The interposer intercepts this open() and connects to /tmp/selkies_js0.sock.
-    fd = os.open("/dev/input/js0", os.O_RDONLY | os.O_NONBLOCK)
+    # Call the process-global C open() symbol directly. CPython's os.open()
+    # uses openat64 on current glibc and bypasses this interposer, which hooks
+    # open() exactly like SDL/Wine clients do.
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.open.argtypes = (ctypes.c_char_p, ctypes.c_int)
+    libc.open.restype = ctypes.c_int
+    fd = libc.open(b"/dev/input/js0", os.O_RDONLY | os.O_NONBLOCK)
+    if fd < 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), "/dev/input/js0")
     print("[client] open() returned fd=%d (interposer redirected to socket)" % fd, flush=True)
 
     # Drain js_event structs as they arrive.
     deadline = time.time() + 8
     got = 0
+    decoded = []
     buf = b""
     while time.time() < deadline:
         try:
@@ -131,10 +170,18 @@ def main():
             ts, val, typ, num = struct.unpack(JS_EVENT_FMT, ev)
             tname = {JS_EVENT_BUTTON: "BTN", JS_EVENT_AXIS: "AXIS"}.get(typ, "0x%02x" % typ)
             print("[client] js_event  %s num=%d value=%d  (raw ts=%d typ=%d)" % (tname, num, val, ts, typ), flush=True)
+            decoded.append((typ, num, val))
             got += 1
-    print("[client] decoded %d events — %s" % (got, "OK: plumbing works" if got else "FAIL: no events"), flush=True)
+    expected = [
+        (JS_EVENT_BUTTON, 0, 1),
+        (JS_EVENT_BUTTON, 0, 0),
+        (JS_EVENT_AXIS, 0, 10000),
+        (JS_EVENT_AXIS, 0, 0),
+    ]
+    ok = accepted.is_set() and decoded == expected
+    print("[client] decoded %d events — %s" % (got, "OK: plumbing works" if ok else "FAIL: wrong events"), flush=True)
     os.close(fd)
-    sys.exit(0 if got else 1)
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":

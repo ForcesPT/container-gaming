@@ -1,33 +1,20 @@
 #!/usr/bin/env python3
-"""Remove store account/browser state and fail closed on residue."""
+"""Remove store account/browser state without following mutable paths."""
+import ctypes
+import errno
 import os
-import shutil
+import secrets
+import stat
 from pathlib import Path
 
 FORBIDDEN_DIRS = {
-    "cache",
-    "code cache",
-    "crashpad",
-    "gpucache",
-    "indexeddb",
-    "local storage",
-    "network",
-    "session storage",
-    "temp",
-    "webstorage",
+    "cache", "code cache", "crashpad", "gpucache", "indexeddb",
+    "local storage", "network", "session storage", "temp", "webstorage",
 }
 FORBIDDEN_FILES = {
-    "cookies",
-    "cookies-journal",
-    "history",
-    "history-journal",
-    "local state",
-    "login data",
-    "login data-journal",
-    "preferences",
-    "secure preferences",
-    "web data",
-    "web data-journal",
+    "cookies", "cookies-journal", "history", "history-journal", "local state",
+    "login data", "login data-journal", "preferences", "secure preferences",
+    "web data", "web data-journal",
 }
 FORBIDDEN_SUFFIXES = (".dmp", ".log", ".mdmp")
 STORE_STATE_RELATIVE = (
@@ -40,6 +27,8 @@ STORE_STATE_RELATIVE = (
     "AppData/Roaming/Ubisoft",
 )
 SETUP_DIRS = ("battlenet-setup", "ea-setup", "ubisoft-setup")
+DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+RENAME_NOREPLACE = 1
 
 
 def reject_symlink_path(path: Path, description: str) -> None:
@@ -49,89 +38,341 @@ def reject_symlink_path(path: Path, description: str) -> None:
             raise SystemExit(f"{description} must not use symlinks: {candidate}")
 
 
-def remove_path(path: Path, boundary: Path) -> None:
-    candidate = path.absolute()
-    boundary = boundary.absolute()
-    if candidate != boundary and boundary not in candidate.parents:
-        raise SystemExit(f"refusing store-state deletion outside boundary: {candidate}")
-    for ancestor in candidate.parents:
-        if ancestor == boundary:
-            break
-        if ancestor.is_symlink():
-            raise SystemExit(f"refusing store-state deletion through symlink ancestor: {ancestor}")
-    else:
-        raise SystemExit(f"store-state deletion boundary not found: {candidate}")
-    if path.is_symlink() or path.is_file():
-        path.unlink()
-    elif path.is_dir():
-        shutil.rmtree(path)
+def identity(value: os.stat_result) -> tuple[int, int, int]:
+    return value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode)
+
+
+def same_identity(left: os.stat_result, right: os.stat_result) -> bool:
+    return identity(left) == identity(right)
+
+
+def lstat_at(directory_fd: int, name: str) -> os.stat_result:
+    return os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+
+
+def open_verified_dir(directory_fd: int, name: str, expected: os.stat_result) -> int:
+    try:
+        child_fd = os.open(name, DIR_FLAGS, dir_fd=directory_fd)
+    except OSError as exc:
+        raise SystemExit(f"could not pin directory {name}: {exc}") from exc
+    actual = os.fstat(child_fd)
+    if not stat.S_ISDIR(expected.st_mode) or not same_identity(expected, actual):
+        os.close(child_fd)
+        raise SystemExit(f"directory changed before open: {name}")
+    return child_fd
+
+
+def open_absolute_dir(path: Path) -> int:
+    absolute = path.absolute()
+    current_fd = os.open("/", DIR_FLAGS)
+    try:
+        for component in absolute.parts[1:]:
+            entry = lstat_at(current_fd, component)
+            child_fd = open_verified_dir(current_fd, component, entry)
+            os.close(current_fd)
+            current_fd = child_fd
+        return current_fd
+    except BaseException:
+        os.close(current_fd)
+        raise
+
+
+def rename_noreplace(directory_fd: int, source: str, destination: str) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    operation = getattr(libc, "renameat2", None)
+    if operation is None:
+        raise OSError(errno.ENOSYS, "renameat2 is unavailable")
+    operation.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    operation.restype = ctypes.c_int
+    result = operation(
+        directory_fd, os.fsencode(source), directory_fd, os.fsencode(destination), RENAME_NOREPLACE
+    )
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), destination)
+
+
+def unlink_user_alias(directory_fd: int, name: str, expected: os.stat_result) -> None:
+    quarantine = f".dpad-sanitize-alias-{os.getpid()}-{secrets.token_hex(8)}"
+    try:
+        rename_noreplace(directory_fd, name, quarantine)
+    except OSError as exc:
+        raise SystemExit(f"failed to quarantine Wine user alias {name}: {exc}") from exc
+    try:
+        captured = lstat_at(directory_fd, quarantine)
+    except OSError as exc:
+        raise SystemExit(f"could not inspect quarantined Wine user alias {name}: {exc}") from exc
+    if not same_identity(expected, captured) or not stat.S_ISLNK(captured.st_mode):
+        try:
+            rename_noreplace(directory_fd, quarantine, name)
+        except OSError as exc:
+            raise SystemExit(
+                f"Wine user alias changed; quarantine preserved as {quarantine}; "
+                f"original name not restored: {name}: {exc}"
+            ) from exc
+        raise SystemExit(f"Wine user alias changed before removal: {name}")
+    try:
+        os.unlink(quarantine, dir_fd=directory_fd)
+    except OSError as exc:
+        raise SystemExit(f"failed to unlink quarantined Wine user alias {name}: {exc}") from exc
+
+
+class OpenPrefix:
+    def __init__(self, prefix: Path):
+        self.prefix = prefix
+        self.prefix_fd = -1
+        self.drive_fd = -1
+        self.users_fd = -1
+        self.prefix_stat = None
+        self.drive_stat = None
+        self.users_stat = None
+        self.users: list[tuple[str, int, os.stat_result]] = []
+
+    def close(self) -> None:
+        for _name, descriptor, _pinned in reversed(self.users):
+            os.close(descriptor)
+        self.users.clear()
+        for descriptor_name in ("users_fd", "drive_fd", "prefix_fd"):
+            descriptor = getattr(self, descriptor_name)
+            if descriptor >= 0:
+                os.close(descriptor)
+                setattr(self, descriptor_name, -1)
+
+
+def open_prefix(prefix: Path) -> OpenPrefix:
+    opened = OpenPrefix(prefix.absolute())
+    try:
+        opened.prefix_fd = open_absolute_dir(opened.prefix)
+        opened.prefix_stat = os.fstat(opened.prefix_fd)
+        drive_entry = lstat_at(opened.prefix_fd, "drive_c")
+        opened.drive_fd = open_verified_dir(opened.prefix_fd, "drive_c", drive_entry)
+        opened.drive_stat = os.fstat(opened.drive_fd)
+        users_entry = lstat_at(opened.drive_fd, "users")
+        opened.users_fd = open_verified_dir(opened.drive_fd, "users", users_entry)
+        opened.users_stat = os.fstat(opened.users_fd)
+        for name in os.listdir(opened.users_fd):
+            entry = lstat_at(opened.users_fd, name)
+            if stat.S_ISLNK(entry.st_mode):
+                unlink_user_alias(opened.users_fd, name, entry)
+            elif stat.S_ISDIR(entry.st_mode):
+                descriptor = open_verified_dir(opened.users_fd, name, entry)
+                opened.users.append((name, descriptor, os.fstat(descriptor)))
+        return opened
+    except (OSError, SystemExit) as exc:
+        opened.close()
+        if isinstance(exc, SystemExit):
+            raise
+        raise SystemExit(f"could not open prefix without symlinks: {prefix}: {exc}") from exc
+
+
+def remove_entry(directory_fd: int, name: str) -> None:
+    try:
+        entry = lstat_at(directory_fd, name)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(entry.st_mode) or stat.S_ISLNK(entry.st_mode):
+        os.unlink(name, dir_fd=directory_fd)
+        return
+    child_fd = open_verified_dir(directory_fd, name, entry)
+    pinned = os.fstat(child_fd)
+    try:
+        for child in os.listdir(child_fd):
+            remove_entry(child_fd, child)
+        current = lstat_at(directory_fd, name)
+        if not same_identity(pinned, current):
+            raise SystemExit(f"directory changed before removal: {name}")
+    finally:
+        os.close(child_fd)
+    os.rmdir(name, dir_fd=directory_fd)
+
+
+def remove_relative(directory_fd: int, relative: str) -> None:
+    parts = relative.split("/")
+    descriptors: list[int] = []
+    current_fd = directory_fd
+    try:
+        for component in parts[:-1]:
+            try:
+                entry = lstat_at(current_fd, component)
+            except FileNotFoundError:
+                return
+            if not stat.S_ISDIR(entry.st_mode) or stat.S_ISLNK(entry.st_mode):
+                raise SystemExit(f"refusing store-state deletion through non-directory: {relative}")
+            current_fd = open_verified_dir(current_fd, component, entry)
+            descriptors.append(current_fd)
+        remove_entry(current_fd, parts[-1])
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def sanitize_user_tree(directory_fd: int) -> None:
+    for name in os.listdir(directory_fd):
+        entry = lstat_at(directory_fd, name)
+        lowered = name.lower()
+        if stat.S_ISLNK(entry.st_mode):
+            os.unlink(name, dir_fd=directory_fd)
+        elif stat.S_ISDIR(entry.st_mode):
+            if lowered in FORBIDDEN_DIRS:
+                remove_entry(directory_fd, name)
+            else:
+                child_fd = open_verified_dir(directory_fd, name, entry)
+                try:
+                    sanitize_user_tree(child_fd)
+                finally:
+                    os.close(child_fd)
+        elif lowered in FORBIDDEN_FILES or lowered.endswith(FORBIDDEN_SUFFIXES):
+            os.unlink(name, dir_fd=directory_fd)
+
+
+def sanitize_suffixes(directory_fd: int) -> None:
+    for name in os.listdir(directory_fd):
+        entry = lstat_at(directory_fd, name)
+        lowered = name.lower()
+        if stat.S_ISDIR(entry.st_mode) and not stat.S_ISLNK(entry.st_mode):
+            child_fd = open_verified_dir(directory_fd, name, entry)
+            try:
+                sanitize_suffixes(child_fd)
+            finally:
+                os.close(child_fd)
+        elif lowered.endswith(FORBIDDEN_SUFFIXES):
+            os.unlink(name, dir_fd=directory_fd)
+
+
+def sanitize_open(opened: OpenPrefix) -> None:
+    for setup in SETUP_DIRS:
+        remove_entry(opened.drive_fd, setup)
+    for _name, user_fd, _pinned in opened.users:
+        for relative in STORE_STATE_RELATIVE:
+            remove_relative(user_fd, relative)
+        sanitize_user_tree(user_fd)
+    sanitize_suffixes(opened.prefix_fd)
+
+
+def collect_user_residue(directory_fd: int, display: str, residue: list[str]) -> None:
+    for name in os.listdir(directory_fd):
+        entry = lstat_at(directory_fd, name)
+        lowered = name.lower()
+        child_display = f"{display}/{name}"
+        if stat.S_ISLNK(entry.st_mode):
+            residue.append(child_display)
+        elif stat.S_ISDIR(entry.st_mode):
+            if lowered in FORBIDDEN_DIRS:
+                residue.append(child_display)
+            child_fd = open_verified_dir(directory_fd, name, entry)
+            try:
+                collect_user_residue(child_fd, child_display, residue)
+            finally:
+                os.close(child_fd)
+        elif lowered in FORBIDDEN_FILES or lowered.endswith(FORBIDDEN_SUFFIXES):
+            residue.append(child_display)
+
+
+def collect_suffix_residue(directory_fd: int, display: str, residue: list[str]) -> None:
+    for name in os.listdir(directory_fd):
+        entry = lstat_at(directory_fd, name)
+        child_display = f"{display}/{name}"
+        if stat.S_ISDIR(entry.st_mode) and not stat.S_ISLNK(entry.st_mode):
+            child_fd = open_verified_dir(directory_fd, name, entry)
+            try:
+                collect_suffix_residue(child_fd, child_display, residue)
+            finally:
+                os.close(child_fd)
+        elif name.lower().endswith(FORBIDDEN_SUFFIXES):
+            residue.append(child_display)
+
+
+def require_pinned_parents(opened: OpenPrefix) -> None:
+    try:
+        current_prefix = os.stat(opened.prefix, follow_symlinks=False)
+        current_drive = lstat_at(opened.prefix_fd, "drive_c")
+        current_users = lstat_at(opened.drive_fd, "users")
+    except OSError as exc:
+        raise SystemExit(f"prefix hierarchy changed during sanitization: {exc}") from exc
+    if not same_identity(opened.prefix_stat, current_prefix):
+        raise SystemExit("prefix directory changed during sanitization")
+    if not same_identity(opened.drive_stat, current_drive):
+        raise SystemExit("drive_c changed during sanitization")
+    if not same_identity(opened.users_stat, current_users):
+        raise SystemExit("drive_c/users changed during sanitization")
+    expected_user_names = {name for name, _descriptor, _pinned in opened.users}
+    current_user_names = set(os.listdir(opened.users_fd))
+    if current_user_names != expected_user_names:
+        raise SystemExit(
+            "drive_c/users entries changed during sanitization: "
+            f"expected={sorted(expected_user_names)} current={sorted(current_user_names)}"
+        )
+    for name, _descriptor, pinned in opened.users:
+        try:
+            current = lstat_at(opened.users_fd, name)
+        except OSError as exc:
+            raise SystemExit(f"Wine user directory changed during sanitization: {name}: {exc}") from exc
+        if not same_identity(pinned, current):
+            raise SystemExit(f"Wine user directory changed during sanitization: {name}")
+
+
+def verify_open(opened: OpenPrefix) -> None:
+    residue: list[str] = []
+    for setup in SETUP_DIRS:
+        try:
+            lstat_at(opened.drive_fd, setup)
+        except FileNotFoundError:
+            pass
+        else:
+            residue.append(f"{opened.prefix}/drive_c/{setup}")
+    for name, user_fd, _pinned in opened.users:
+        display = f"{opened.prefix}/drive_c/users/{name}"
+        for relative in STORE_STATE_RELATIVE:
+            current_fd = user_fd
+            descriptors: list[int] = []
+            found = True
+            try:
+                for component in relative.split("/"):
+                    try:
+                        entry = lstat_at(current_fd, component)
+                    except FileNotFoundError:
+                        found = False
+                        break
+                    if not stat.S_ISDIR(entry.st_mode) or stat.S_ISLNK(entry.st_mode):
+                        found = True
+                        break
+                    current_fd = open_verified_dir(current_fd, component, entry)
+                    descriptors.append(current_fd)
+                if found:
+                    residue.append(f"{display}/{relative}")
+            finally:
+                for descriptor in reversed(descriptors):
+                    os.close(descriptor)
+        collect_user_residue(user_fd, display, residue)
+    collect_suffix_residue(opened.prefix_fd, str(opened.prefix), residue)
+    require_pinned_parents(opened)
+    if residue:
+        raise SystemExit(f"store prefix sanitization residue: {residue[:5]}")
 
 
 def user_roots(prefix: Path) -> list[Path]:
-    users = prefix / "drive_c/users"
-    if users.is_symlink() or not users.is_dir():
-        raise SystemExit(f"regular drive_c/users directory required: {users}")
-    roots = []
-    for path in users.iterdir():
-        if path.is_symlink():
-            raise SystemExit(f"Wine user root must not be a symlink: {path}")
-        if path.is_dir():
-            roots.append(path)
-    return roots
+    opened = open_prefix(prefix)
+    try:
+        return [prefix / "drive_c/users" / name for name, _fd, _pinned in opened.users]
+    finally:
+        opened.close()
 
 
 def sanitize(prefix: Path) -> None:
-    for setup in SETUP_DIRS:
-        remove_path(prefix / "drive_c" / setup, prefix)
-    for user in user_roots(prefix):
-        for relative in STORE_STATE_RELATIVE:
-            remove_path(user / relative, user)
-        for root, dirs, files in os.walk(user, topdown=True, followlinks=False):
-            root_path = Path(root)
-            for name in list(dirs):
-                candidate = root_path / name
-                if name.lower() in FORBIDDEN_DIRS or candidate.is_symlink():
-                    remove_path(candidate, user)
-                    dirs.remove(name)
-            for name in files:
-                candidate = root_path / name
-                lowered = name.lower()
-                if candidate.is_symlink() or lowered in FORBIDDEN_FILES or lowered.endswith(FORBIDDEN_SUFFIXES):
-                    remove_path(candidate, user)
-    for root, _dirs, files in os.walk(prefix, followlinks=False):
-        for name in files:
-            lowered = name.lower()
-            if lowered.endswith(FORBIDDEN_SUFFIXES):
-                remove_path(Path(root) / name, prefix)
+    opened = open_prefix(prefix)
+    try:
+        sanitize_open(opened)
+        verify_open(opened)
+    finally:
+        opened.close()
 
 
 def verify_clean(prefix: Path) -> None:
-    residue = []
-    for setup in SETUP_DIRS:
-        candidate = prefix / "drive_c" / setup
-        if candidate.exists() or candidate.is_symlink():
-            residue.append(str(candidate))
-    for user in user_roots(prefix):
-        for relative in STORE_STATE_RELATIVE:
-            candidate = user / relative
-            if candidate.exists() or candidate.is_symlink():
-                residue.append(str(candidate))
-        for root, dirs, files in os.walk(user, followlinks=False):
-            for name in dirs:
-                candidate = Path(root) / name
-                if candidate.is_symlink() or name.lower() in FORBIDDEN_DIRS:
-                    residue.append(str(Path(root) / name))
-            for name in files:
-                candidate = Path(root) / name
-                lowered = name.lower()
-                if candidate.is_symlink() or lowered in FORBIDDEN_FILES or lowered.endswith(FORBIDDEN_SUFFIXES):
-                    residue.append(str(candidate))
-    for root, _dirs, files in os.walk(prefix, followlinks=False):
-        for name in files:
-            if name.lower().endswith(FORBIDDEN_SUFFIXES):
-                residue.append(str(Path(root) / name))
-    if residue:
-        raise SystemExit(f"store prefix sanitization residue: {residue[:5]}")
+    opened = open_prefix(prefix)
+    try:
+        verify_open(opened)
+    finally:
+        opened.close()
 
 
 def main() -> None:
@@ -142,11 +383,13 @@ def main() -> None:
     args = parser.parse_args()
     raw_prefix = Path(args.prefix)
     reject_symlink_path(raw_prefix, "store prefix path")
-    prefix = raw_prefix.resolve(strict=True)
-    if not prefix.is_dir():
-        raise SystemExit(f"regular prefix directory required: {prefix}")
-    sanitize(prefix)
-    verify_clean(prefix)
+    prefix = raw_prefix.absolute()
+    opened = open_prefix(prefix)
+    try:
+        sanitize_open(opened)
+        verify_open(opened)
+    finally:
+        opened.close()
     print("STORE_PREFIX_SANITIZED")
 
 

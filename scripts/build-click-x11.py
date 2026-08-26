@@ -40,8 +40,6 @@ def main():
                 root_geometry = root.get_geometry()
                 if not (0 <= x < root_geometry.width and 0 <= y < root_geometry.height):
                     raise SystemExit(f"refusing out-of-bounds click {x},{y}")
-                window.raise_window()
-                window.set_input_focus(X.RevertToParent, X.CurrentTime)
                 root.warp_pointer(x, y)
                 dpy.sync()
                 pointer = root.query_pointer()
