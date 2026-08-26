@@ -27,6 +27,10 @@ STORE_STATE_RELATIVE = (
     "AppData/Roaming/Ubisoft",
 )
 SETUP_DIRS = ("battlenet-setup", "ea-setup", "ubisoft-setup")
+PREFIX_STATE_RELATIVE = (
+    "drive_c/ProgramData/Battle.net/Agent/data/cache",
+    "drive_c/windows/temp",
+)
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 RENAME_NOREPLACE = 1
 
@@ -246,6 +250,8 @@ def sanitize_open(opened: OpenPrefix) -> None:
         for relative in STORE_STATE_RELATIVE:
             remove_relative(user_fd, relative)
         sanitize_user_tree(user_fd)
+    for relative in PREFIX_STATE_RELATIVE:
+        remove_relative(opened.prefix_fd, relative)
     sanitize_suffixes(opened.prefix_fd)
 
 
@@ -320,6 +326,28 @@ def verify_open(opened: OpenPrefix) -> None:
             pass
         else:
             residue.append(f"{opened.prefix}/drive_c/{setup}")
+    for relative in PREFIX_STATE_RELATIVE:
+        current_fd = opened.prefix_fd
+        descriptors: list[int] = []
+        found = True
+        try:
+            for index, component in enumerate(relative.split("/")):
+                try:
+                    entry = lstat_at(current_fd, component)
+                except FileNotFoundError:
+                    found = False
+                    break
+                if index == len(relative.split("/")) - 1:
+                    break
+                if not stat.S_ISDIR(entry.st_mode) or stat.S_ISLNK(entry.st_mode):
+                    break
+                current_fd = open_verified_dir(current_fd, component, entry)
+                descriptors.append(current_fd)
+            if found:
+                residue.append(f"{opened.prefix}/{relative}")
+        finally:
+            for descriptor in reversed(descriptors):
+                os.close(descriptor)
     for name, user_fd, _pinned in opened.users:
         display = f"{opened.prefix}/drive_c/users/{name}"
         for relative in STORE_STATE_RELATIVE:

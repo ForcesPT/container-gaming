@@ -138,6 +138,8 @@ with tempfile.TemporaryDirectory() as temporary:
         user / "AppData/Roaming/Battle.net/saved-account.config",
         user / "AppData/Local/Electronic Arts/EA Desktop/CEF/account.bin",
         user / "AppData/Local/Ubisoft Game Launcher/account.dat",
+        prefix / "drive_c/ProgramData/Battle.net/Agent/data/cache/agent-state.bin",
+        prefix / "drive_c/windows/temp/installer-residue.tmp",
         prefix / "client.log",
         prefix / "crash.dmp",
     )
@@ -456,6 +458,8 @@ with tempfile.TemporaryDirectory() as temporary:
     for relative in (
         "drive_c/users/dpad/AppData/Roaming/Battle.net/account-token",
         "drive_c/ea-setup/EAappInstaller.exe",
+        "drive_c/ProgramData/Battle.net/Agent/data/cache/agent-state.bin",
+        "drive_c/windows/temp/installer-residue.tmp",
     ):
         residue_prefix = root / f"residue-{relative.split('/')[1]}-{len(relative)}"
         residue = residue_prefix / relative

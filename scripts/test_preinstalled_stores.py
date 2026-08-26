@@ -61,4 +61,9 @@ for name in ("battlenet", "ea", "ubisoft"):
     if 'rm -rf "$PREFIX"' in launch:
         raise SystemExit(f"{name} launcher can recursively delete an overridable WINEPREFIX")
 
+last_sanitize = unified.rfind('sanitize_prefix "$PREFIX_UBISOFT"')
+post_sanitize_checks = unified.find("verify_installed_clients", last_sanitize)
+if last_sanitize < 0 or post_sanitize_checks < 0:
+    raise SystemExit("unified store build does not revalidate installed launchers after sanitization")
+
 print("Single-image preinstalled stores contract: PASS")

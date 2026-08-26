@@ -39,9 +39,13 @@ ubisoft_exe() {
     valid_pe "$PREFIX_UBISOFT/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
 }
 
-bnet_exe || { echo "valid Battle.net launcher missing after preinstall" >&2; exit 1; }
-ea_exe || { echo "valid EA Desktop launcher missing after preinstall" >&2; exit 1; }
-ubisoft_exe || { echo "valid Ubisoft Connect launcher missing after preinstall" >&2; exit 1; }
+verify_installed_clients() {
+  bnet_exe || { echo "valid Battle.net launcher missing" >&2; return 1; }
+  ea_exe || { echo "valid EA Desktop launcher missing" >&2; return 1; }
+  ubisoft_exe || { echo "valid Ubisoft Connect launcher missing" >&2; return 1; }
+}
+
+verify_installed_clients
 
 sanitize_prefix() {
   local prefix="$1"
@@ -55,6 +59,7 @@ sanitize_prefix() {
 sanitize_prefix "$PREFIX_BNET"
 sanitize_prefix "$PREFIX_EA"
 sanitize_prefix "$PREFIX_UBISOFT"
+verify_installed_clients
 
 # The shared UMU/SLR runtime is retained once in this committed container.
 chown -R dpad:dpad /home/dpad/.local/share/umu 2>/dev/null || true
