@@ -78,7 +78,7 @@ class PersistentWaylandDisplayPatchTests(unittest.TestCase):
         helper = "_dpad_clean_wayland_sockets()"
         initial_cleanup_call = "\n    _dpad_clean_wayland_sockets\n"
         relaunch_cleanup_call = "\n            _dpad_clean_wayland_sockets\n"
-        first_launch = 'as_user "$(build_selkies_cmd)" >>/tmp/selkies.log 2>&1 &'
+        first_launch = 'as_user "$selkies_cmd" >>/tmp/selkies.log 2>&1 &'
         relaunch_warning = "selkies-gstreamer died — restarting compositor and desktop"
 
         self.assertIn(helper, entrypoint)

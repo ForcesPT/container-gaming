@@ -1,5 +1,29 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-08-29 adaptive H.264/Opus quality — SOURCE COMPLETE, GPU ACCEPTANCE
+> PENDING.** Selkies no longer falls back to its low 8 Mbps video / 128 kbps
+> audio defaults. `dpad-resolve-stream-quality` derives a validated H.264 CBR
+> budget from the actual resolution and FPS (1080p60 = 20 Mbps, 1080p120 =
+> 30 Mbps, 1080p144 = 35 Mbps, 1440p60 = 32 Mbps, 4K60 = 60 Mbps) and defaults
+> stereo Opus to 192 kbps. Optional `DPAD_VIDEO_BITRATE_KBPS` and
+> `DPAD_AUDIO_BITRATE_BPS` overrides fail closed outside bounded ranges. The
+> resolver is baked into new images. Existing images receive the entrypoint,
+> resolver, and browser patch as one validated bundle; a single atomic symlink
+> swap publishes it, while any partial download/validation failure retains the
+> last-known-good bundle or falls back to the baked image. The Selkies web
+> overlay now treats the server's
+> launch profile as authoritative on every connection, preventing a browser's
+> persisted old 8 Mbps value from silently undoing the improvement; deliberate
+> live drawer changes still work after connection. The bundled entrypoint fails
+> closed before Selkies if that required browser transform cannot be verified.
+> Every remotely fetched executable/artifact is checked against a SHA-256 digest
+> pinned in `vm-bootstrap.sh`, and the launcher resolves the current symlink once
+> to one immutable hash directory before constructing all three bind mounts.
+> Source tests and shell syntax
+> pass. An NVIDIA VM must still verify the exact encoder properties, measured
+> bitrate, decode stability, audio, latency, packet loss, and reconnect before
+> image promotion.
+>
 > **2026-08-23 Waybar taskbar + native Wayland input — SOURCE COMPLETE, VM
 > ACCEPTANCE PENDING.** The Labwc canary now uses the maintained Waybar
 > `wlr/taskbar` module as its only panel; the experimental Electron/Xlib,

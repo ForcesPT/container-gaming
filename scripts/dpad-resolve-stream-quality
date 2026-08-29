@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Resolve safe H.264/Opus stream bitrate defaults from the actual stream profile.
+# Usage: dpad-resolve-stream-quality <width> <height> <fps> [video-kbps] [audio-bps]
+set -u
+
+width="${1:-}"
+height="${2:-}"
+fps="${3:-}"
+video_override="${4:-}"
+audio_override="${5:-}"
+
+fail() {
+    printf 'dpad-resolve-stream-quality: %s\n' "$*" >&2
+    exit 1
+}
+
+[[ "$width" =~ ^[1-9][0-9]{2,4}$ ]] || fail "invalid width"
+[[ "$height" =~ ^[1-9][0-9]{2,4}$ ]] || fail "invalid height"
+(( width >= 320 && width <= 16384 )) || fail "width out of range"
+(( height >= 200 && height <= 16384 )) || fail "height out of range"
+
+case "$fps" in
+    30|60|120|144|240) ;;
+    *) fail "unsupported frame rate" ;;
+esac
+
+pixels=$(( width * height ))
+if (( pixels <= 1280 * 720 )); then
+    base_video_kbps=12000
+elif (( pixels <= 1920 * 1080 )); then
+    base_video_kbps=20000
+elif (( pixels <= 2560 * 1440 )); then
+    base_video_kbps=32000
+else
+    base_video_kbps=60000
+fi
+
+# More frames need more bitrate, but inter-frame compression prevents linear
+# scaling. These multipliers preserve motion detail without creating needlessly
+# large CBR bursts on high-refresh profiles.
+case "$fps" in
+    30)  video_kbps=$(( base_video_kbps * 3 / 4 )) ;;
+    60)  video_kbps=$base_video_kbps ;;
+    120) video_kbps=$(( base_video_kbps * 3 / 2 )) ;;
+    144) video_kbps=$(( base_video_kbps * 7 / 4 )) ;;
+    240) video_kbps=$(( base_video_kbps * 5 / 2 )) ;;
+esac
+
+audio_bps=192000
+
+if [ -n "$video_override" ]; then
+    [[ "$video_override" =~ ^[1-9][0-9]{3,5}$|^[12][0-9]{5}$ ]] \
+        || fail "invalid video bitrate override"
+    (( video_override >= 1000 && video_override <= 200000 )) \
+        || fail "video bitrate override out of range"
+    video_kbps="$video_override"
+fi
+
+if [ -n "$audio_override" ]; then
+    [[ "$audio_override" =~ ^[1-9][0-9]{4,5}$|^[1-5][0-9]{5}$ ]] \
+        || fail "invalid audio bitrate override"
+    (( audio_override >= 32000 && audio_override <= 510000 )) \
+        || fail "audio bitrate override out of range"
+    audio_bps="$audio_override"
+fi
+
+printf '%s %s\n' "$video_kbps" "$audio_bps"

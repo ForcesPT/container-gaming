@@ -26,16 +26,18 @@ def rooted(path: str) -> str:
     return PATCH_ROOT + path if PATCH_ROOT else path
 
 
-def patch_file(path: str, guard, transform) -> None:
+def patch_file(path: str, guard, transform, *, required: bool = True) -> bool:
     actual = rooted(path)
     try:
         source = Path(actual).read_text(encoding="utf-8")
     except FileNotFoundError:
+        if required:
+            raise RuntimeError(f"FAIL {path} (required target not found)")
         print(f"SKIP {path} (not found)")
-        return
+        return False
     if guard(source):
         print(f"SKIP {path} (already patched)")
-        return
+        return True
     updated = transform(source)
     if updated is None:
         raise RuntimeError(f"FAIL {path} (anchor not found)")
@@ -62,6 +64,7 @@ def patch_file(path: str, guard, transform) -> None:
         if temporary is not None:
             Path(temporary).unlink(missing_ok=True)
     print(f"OK {path} patched")
+    return True
 
 
 def default_resolution() -> str:
@@ -497,6 +500,43 @@ def patch_appjs(source: str) -> str | None:
     updated = updated.replace('document.title = "Selkies - " + app.appName;', 'document.title = "DpadPlay Stream";')
     if 'document.title = "DpadPlay Stream";' not in updated:
         updated = 'document.title = "DpadPlay Stream";\n' + updated
+
+    # A stock Selkies client prefers its localStorage bitrate over the value the
+    # server announces. That makes every browser which previously stored the old
+    # 8 Mbps default silently undo a higher launch profile. The launch profile
+    # must own the initial value on every connection; the drawer may still send
+    # a deliberate live override after connection.
+    legacy_video_bitrate = '''        // Server received video bitrate setting.
+        const videoBitrateSetting = app.getIntParam("videoBitRate", null);
+        if (videoBitrateSetting !== null) {
+            // Prefer the user saved value.
+            app.videoBitRate = videoBitrateSetting;
+        } else {
+            // Use the server setting.
+            app.videoBitRate = parseInt(action.split(",")[1]);
+        }'''
+    server_video_bitrate = '''        // DPAD: server launch profile owns initial video bitrate.
+        app.videoBitRate = parseInt(action.split(",")[1]);'''
+    if "// DPAD: server launch profile owns initial video bitrate." not in updated:
+        if legacy_video_bitrate not in updated:
+            return None
+        updated = updated.replace(legacy_video_bitrate, server_video_bitrate, 1)
+
+    legacy_audio_bitrate = '''        // Server received audio bitrate setting.
+        const audioBitrateSetting = app.getIntParam("audioBitRate", null);
+        if (audioBitrateSetting !== null) {
+            // Prefer the user saved value.
+            app.audioBitRate = audioBitrateSetting
+        } else {
+            // Use the server setting.
+            app.audioBitRate = parseInt(action.split(",")[1]);
+        }'''
+    server_audio_bitrate = '''        // DPAD: server launch profile owns initial audio bitrate.
+        app.audioBitRate = parseInt(action.split(",")[1]);'''
+    if "// DPAD: server launch profile owns initial audio bitrate." not in updated:
+        if legacy_audio_bitrate not in updated:
+            return None
+        updated = updated.replace(legacy_audio_bitrate, server_audio_bitrate, 1)
     desired_resolution = (
         "            videoResolution: window.localStorage.getItem("
         "((window.location.pathname.endsWith(\"/\") && window.location.pathname.split(\"/\")[1]) || \"webrtc\") "
@@ -555,6 +595,10 @@ patch_file(
         and "// DPAD: manual refresh required after selection." in source
         and "window.setTimeout(() => window.location.reload(), 750);" not in source
         and 'document.title = "DpadPlay Stream";' in source
+        and "// DPAD: server launch profile owns initial video bitrate." in source
+        and "// DPAD: server launch profile owns initial audio bitrate." in source
+        and "const videoBitrateSetting = app.getIntParam" not in source
+        and "const audioBitrateSetting = app.getIntParam" not in source
     ),
     patch_appjs,
 )
@@ -613,8 +657,9 @@ pattern = rooted("/usr/local/lib/python*/dist-packages/selkies_gstreamer/webrtc_
 for actual in glob.glob(pattern):
     candidate = actual[len(PATCH_ROOT):] if PATCH_ROOT else actual
     candidate_paths.append(candidate)
+input_target_found = False
 for candidate in dict.fromkeys(candidate_paths):
-    patch_file(
+    input_target_found = patch_file(
         candidate,
         lambda source: (
             'toks[0] == "_arg_res"' in source
@@ -623,6 +668,10 @@ for candidate in dict.fromkeys(candidate_paths):
             and 'restart cancelled' in source
         ),
         patch_webrtc_input,
-    )
+        required=False,
+    ) or input_target_found
+
+if not input_target_found:
+    raise RuntimeError("FAIL selkies_gstreamer/webrtc_input.py (required target not found)")
 
 print("patch_live_resolution done")

@@ -92,6 +92,30 @@ APP_FIXTURE = '''var app = new Vue({
         },
     }
 });
+
+webrtc.onsystemaction = (action) => {
+    if (action.startsWith('video_bitrate')) {
+        // Server received video bitrate setting.
+        const videoBitrateSetting = app.getIntParam("videoBitRate", null);
+        if (videoBitrateSetting !== null) {
+            // Prefer the user saved value.
+            app.videoBitRate = videoBitrateSetting;
+        } else {
+            // Use the server setting.
+            app.videoBitRate = parseInt(action.split(",")[1]);
+        }
+    } else if (action.startsWith('audio_bitrate')) {
+        // Server received audio bitrate setting.
+        const audioBitrateSetting = app.getIntParam("audioBitRate", null);
+        if (audioBitrateSetting !== null) {
+            // Prefer the user saved value.
+            app.audioBitRate = audioBitrateSetting
+        } else {
+            // Use the server setting.
+            app.audioBitRate = parseInt(action.split(",")[1]);
+        }
+    }
+};
 '''
 
 INPUT_FIXTURE = '''class WebRTCInput:
@@ -198,6 +222,10 @@ def test_brands_selkies_and_places_manual_refresh_notice_by_resolution() -> None
         assert "|| '2560x1440'" in app
         assert "window.setTimeout(() => window.location.reload()" not in app
         assert 'document.title = "DpadPlay Stream"' in app
+        assert "// DPAD: server launch profile owns initial video bitrate." in app
+        assert "// DPAD: server launch profile owns initial audio bitrate." in app
+        assert "const videoBitrateSetting = app.getIntParam" not in app
+        assert "const audioBitrateSetting = app.getIntParam" not in app
 
         patched_input = (pkg / "webrtc_input.py").read_text(encoding="utf-8")
         assert 'if len(toks) != 2 or toks[1] not in {' in patched_input
@@ -323,13 +351,67 @@ def test_brands_selkies_and_places_manual_refresh_notice_by_resolution() -> None
         assert "parts[0].isdigit()" not in migrated
 
 
+def test_server_bitrate_wins_over_stale_storage_and_live_changes_still_send() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        web = root / "opt/gst-web"
+        pkg = root / "usr/local/lib/python3.12/dist-packages/selkies_gstreamer"
+        web.mkdir(parents=True)
+        pkg.mkdir(parents=True)
+        (web / "index.html").write_text(INDEX_FIXTURE, encoding="utf-8")
+        (web / "app.js").write_text(APP_FIXTURE, encoding="utf-8")
+        (pkg / "webrtc_input.py").write_text(INPUT_FIXTURE, encoding="utf-8")
+        env = os.environ | {"DPAD_PATCH_ROOT": str(root)}
+        result = subprocess.run(
+            [sys.executable, str(PATCHER)], env=env, text=True,
+            capture_output=True, check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        app_source = (web / "app.js").read_text(encoding="utf-8")
+        handler_start = app_source.index("webrtc.onsystemaction =")
+        handler_end = app_source.index("\n};", handler_start) + len("\n};")
+        handler = app_source[handler_start:handler_end]
+
+        node_program = f'''const sent = [];
+const state = {{videoBitRate: 8000, audioBitRate: 128000}};
+const app = new Proxy(state, {{
+  get(target, prop) {{
+    if (prop === "getIntParam") return () => {{ throw new Error("stale storage consulted"); }};
+    return target[prop];
+  }},
+  set(target, prop, value) {{
+    target[prop] = value;
+    if (prop === "videoBitRate") sent.push("vb," + value);
+    if (prop === "audioBitRate") sent.push("ab," + value);
+    return true;
+  }}
+}});
+const webrtc = {{sendDataChannelMessage: message => sent.push(message)}};
+{handler}
+webrtc.onsystemaction("video_bitrate,20000");
+webrtc.onsystemaction("audio_bitrate,192000");
+if (state.videoBitRate !== 20000 || state.audioBitRate !== 192000) process.exit(2);
+sent.length = 0;
+app.videoBitRate = 28000;
+app.audioBitRate = 256000;
+if (sent.join("|") !== "vb,28000|ab,256000") process.exit(3);
+'''
+        behavior = subprocess.run(
+            ["node", "-e", node_program], text=True, capture_output=True, check=False,
+        )
+        assert behavior.returncode == 0, behavior.stdout + behavior.stderr
+
+
 def test_migrates_v1_drawer_to_v2_without_losing_actions() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         web = root / "opt/gst-web"
+        pkg = root / "usr/local/lib/python3.12/dist-packages/selkies_gstreamer"
         web.mkdir(parents=True)
+        pkg.mkdir(parents=True)
         (web / "index.html").write_text(INDEX_FIXTURE, encoding="utf-8")
         (web / "app.js").write_text(APP_FIXTURE, encoding="utf-8")
+        (pkg / "webrtc_input.py").write_text(INPUT_FIXTURE, encoding="utf-8")
         env = os.environ | {"DPAD_PATCH_ROOT": str(root)}
 
         first = subprocess.run(
@@ -414,9 +496,12 @@ def test_migrates_v3_logo_loading_badge_to_v4_atmosphere() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         web = root / "opt/gst-web"
+        pkg = root / "usr/local/lib/python3.12/dist-packages/selkies_gstreamer"
         web.mkdir(parents=True)
+        pkg.mkdir(parents=True)
         (web / "index.html").write_text(INDEX_FIXTURE, encoding="utf-8")
         (web / "app.js").write_text(APP_FIXTURE, encoding="utf-8")
+        (pkg / "webrtc_input.py").write_text(INPUT_FIXTURE, encoding="utf-8")
         env = os.environ | {"DPAD_PATCH_ROOT": str(root)}
 
         first = subprocess.run(
@@ -477,9 +562,22 @@ def test_fails_closed_and_preserves_html_when_required_anchor_moves() -> None:
         assert (web / "index.html").read_text(encoding="utf-8") == malformed
 
 
+def test_missing_required_targets_fail_closed() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        env = os.environ | {"DPAD_PATCH_ROOT": td}
+        result = subprocess.run(
+            [sys.executable, str(PATCHER)], env=env, text=True,
+            capture_output=True, check=False,
+        )
+        assert result.returncode != 0
+        assert "required target not found" in result.stderr
+
+
 if __name__ == "__main__":
     test_brands_selkies_and_places_manual_refresh_notice_by_resolution()
+    test_server_bitrate_wins_over_stale_storage_and_live_changes_still_send()
     test_migrates_v1_drawer_to_v2_without_losing_actions()
     test_migrates_v3_logo_loading_badge_to_v4_atmosphere()
     test_fails_closed_and_preserves_html_when_required_anchor_moves()
+    test_missing_required_targets_fail_closed()
     print("Selkies DpadPlay UI patch: PASS")

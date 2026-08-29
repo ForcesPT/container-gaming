@@ -133,6 +133,8 @@ Expected flow:
 | `DPAD_STREAM_WIDTH` / `DPAD_STREAM_HEIGHT` | `1920` / `1080` | Values forwarded by the session launcher; normally match the compositor size. |
 | `DPAD_ALLOW_LIVE_RESOLUTION` | `0` | Browser `_arg_res` commands are ignored by default so persisted client settings cannot override control-plane dimensions. Set exactly `1` only when per-session live resizing is intentionally enabled. |
 | `DPAD_STREAM_FPS` | `60` | Initial Selkies/compositor capture frame rate. Supported presets are 30, 60, 120, 144, and 240; unsupported or malformed values fail closed before constructing the Selkies command. The worker passes the user's selected launch profile per session; live Selkies FPS changes continue to use the patched `set_framerate` path. |
+| `DPAD_VIDEO_BITRATE_KBPS` | derived | Optional H.264 CBR override in kbps, validated from 1,000 through 200,000. When unset, `dpad-resolve-stream-quality` derives a budget from the actual resolution and FPS. |
+| `DPAD_AUDIO_BITRATE_BPS` | `192000` | Optional stereo Opus override in bps, validated from 32,000 through 510,000. The higher default replaces Selkies' stock 128 kbps audio default. |
 | `DPAD_SELKIES_BIND` | `127.0.0.1` | Production session launcher sets `0.0.0.0` for stream-bridge access. |
 | `DPAD_COTURN_PORT` | `3478` | Coturn listening port inside the container. |
 | `DPAD_TURN_RELAY_MIN_PORT` / `DPAD_TURN_RELAY_MAX_PORT` | unset | Optional bounded coturn UDP allocation range. Production host-network sessions receive a required per-slot 64-port range from `dpad-launch-session`; both values must be present, four or five decimal digits, unprivileged, ordered, and no greater than 65535 or startup fails closed. |
@@ -144,6 +146,25 @@ Expected flow:
 | `DPAD_AUDIO_PACKETLOSS` | `0` | Opus packet-loss/FEC percentage passed to Selkies. |
 | `DPAD_VIDEO_PACKETLOSS` | `0` | Video FEC percentage passed to Selkies. |
 | `DPAD_NVENC_FIX` | `auto` | Multi-GPU NVENC visibility interposer: `auto`, `1`, or `0`. |
+
+The automatic H.264 quality budgets at 60 FPS are 12 Mbps through 720p,
+20 Mbps through 1080p, 32 Mbps through 1440p, and 60 Mbps above 1440p through
+the supported 4K preset. Frame-rate multipliers are 0.75x at 30 FPS, 1.5x at
+120 FPS, 1.75x at 144 FPS, and 2.5x at 240 FPS. These are encoder targets, not
+guaranteed network throughput. The Selkies drawer applies the server profile on
+every new connection so an old browser-local 8 Mbps value cannot override it;
+an intentional live bitrate change remains possible after connection.
+
+On existing images, `vm-bootstrap.sh` uses `dpad-update-stream-hotfix` to stage
+and validate `entrypoint.sh`, `dpad-resolve-stream-quality`, and
+`patch_live_resolution.py` together. Only a complete compatible bundle is made
+current via an atomic symlink replacement. Failed refreshes retain the previous
+known-good bundle; when none exists, the launcher mounts nothing and uses the
+baked image. The entrypoint refuses startup if the browser transform fails, so
+server-side bitrate tuning cannot run with stale localStorage-first client code.
+All four downloaded artifacts (updater plus bundle members) are SHA-256 pinned
+in `vm-bootstrap.sh`. The launcher resolves `stream-hotfix-current` once and
+mounts every member from that immutable hash-directory snapshot.
 
 The old compositor/shell selection variables are intentionally unsupported and
 are not forwarded by `dpad-launch-session` or `vm-bootstrap.sh`.
@@ -220,10 +241,14 @@ python3 scripts/test_selkies_wayland_input_behavior.py
 python3 scripts/test_turn_relay_plumbing.py
 python3 scripts/test_obsolete_components_removed.py
 python3 scripts/test_stream_fps_plumbing.py
+python3 scripts/test_stream_quality_plumbing.py
+python3 scripts/test_stream_hotfix_bundle.py
+python3 scripts/test_selkies_dpad_ui.py
 python3 scripts/test_dockerfile_pins.py
 python3 scripts/test_dockerfile_pins_mutations.py
 bash -n entrypoint.sh healthcheck.sh scripts/dpad-launch-session scripts/vm-bootstrap.sh \
-  scripts/launcher-toggle scripts/dpad-publish-desktop-config scripts/swaymsg-desktop-compat
+  scripts/launcher-toggle scripts/dpad-publish-desktop-config scripts/swaymsg-desktop-compat \
+  scripts/dpad-resolve-stream-quality scripts/dpad-update-stream-hotfix
 ```
 
 A source-only pass is not a production release. A new image must still be built,

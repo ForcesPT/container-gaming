@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Download, validate, and atomically publish the stream-quality hotfix bundle.
+# Usage: dpad-update-stream-hotfix <host-root> <base-url> <entry-sha> <resolver-sha> <patch-sha>
+set -eu
+
+root="${1:-/opt/dpadcloud}"
+base_url="${2:-https://raw.githubusercontent.com/ForcesPT/container-gaming/main}"
+entrypoint_sha="${3:-}"
+resolver_sha="${4:-}"
+patch_sha="${5:-}"
+current="${root}/stream-hotfix-current"
+stage=""
+link_tmp=""
+
+cleanup() {
+    [ -z "$stage" ] || rm -rf -- "$stage"
+    [ -z "$link_tmp" ] || rm -f -- "$link_tmp"
+}
+trap cleanup EXIT HUP INT TERM
+
+fail() {
+    printf 'dpad-update-stream-hotfix: %s\n' "$*" >&2
+    exit 1
+}
+
+mkdir -p "$root"
+for expected_sha in "$entrypoint_sha" "$resolver_sha" "$patch_sha"; do
+    [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]] || fail "three pinned SHA-256 digests are required"
+done
+stage="$(mktemp -d "${root}/.stream-hotfix.XXXXXX")" || fail "cannot create staging directory"
+
+fetch() {
+    relative="$1"
+    output="$2"
+    curl -fsSL --retry 3 --retry-all-errors --retry-delay 1 \
+        "${base_url}/${relative}" -o "$output"
+}
+
+fetch "entrypoint.sh" "$stage/entrypoint.sh" || fail "entrypoint download failed; retaining last known good bundle"
+fetch "scripts/dpad-resolve-stream-quality" "$stage/dpad-resolve-stream-quality" \
+    || fail "resolver download failed; retaining last known good bundle"
+fetch "scripts/patch_live_resolution.py" "$stage/patch_live_resolution.py" \
+    || fail "browser patch download failed; retaining last known good bundle"
+
+verify_digest() {
+    expected="$1"
+    artifact="$2"
+    printf '%s  %s\n' "$expected" "$artifact" | sha256sum -c - >/dev/null
+}
+verify_digest "$entrypoint_sha" "$stage/entrypoint.sh" \
+    || fail "entrypoint authenticity check failed; retaining last known good bundle"
+verify_digest "$resolver_sha" "$stage/dpad-resolve-stream-quality" \
+    || fail "resolver authenticity check failed; retaining last known good bundle"
+verify_digest "$patch_sha" "$stage/patch_live_resolution.py" \
+    || fail "browser patch authenticity check failed; retaining last known good bundle"
+
+chmod 0755 "$stage/entrypoint.sh" "$stage/dpad-resolve-stream-quality"
+chmod 0644 "$stage/patch_live_resolution.py"
+bash -n "$stage/entrypoint.sh" || fail "entrypoint syntax validation failed"
+bash -n "$stage/dpad-resolve-stream-quality" || fail "resolver syntax validation failed"
+python3 -m py_compile "$stage/patch_live_resolution.py" \
+    || fail "browser patch syntax validation failed"
+
+grep -Fq '/opt/dpadcloud/dpad-resolve-stream-quality' "$stage/entrypoint.sh" \
+    || fail "incompatible entrypoint: resolver contract missing"
+grep -Fq 'python3 /opt/dpadcloud/patch_live_resolution.py' "$stage/entrypoint.sh" \
+    || fail "incompatible entrypoint: browser patch contract missing"
+grep -Fq 'DPAD: server launch profile owns initial video bitrate.' "$stage/patch_live_resolution.py" \
+    || fail "incompatible browser patch: video profile contract missing"
+grep -Fq 'DPAD: server launch profile owns initial audio bitrate.' "$stage/patch_live_resolution.py" \
+    || fail "incompatible browser patch: audio profile contract missing"
+
+bundle_hash="$(cd "$stage" && sha256sum \
+    entrypoint.sh \
+    dpad-resolve-stream-quality \
+    patch_live_resolution.py | sha256sum | cut -d' ' -f1)"
+destination="${root}/stream-hotfix-${bundle_hash}"
+if [ -d "$destination" ]; then
+    rm -rf -- "$stage"
+else
+    mv -- "$stage" "$destination"
+fi
+stage=""
+
+# A single atomic pointer swap makes all three compatible artifacts current at
+# once. A failed refresh never removes or mutates the previous current bundle.
+link_tmp="${root}/.stream-hotfix-current.$$"
+ln -s "$(basename "$destination")" "$link_tmp"
+mv -Tf -- "$link_tmp" "$current"
+link_tmp=""
+printf 'STREAM_HOTFIX_READY hash=%s path=%s\n' "$bundle_hash" "$destination"

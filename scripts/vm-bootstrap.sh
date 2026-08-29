@@ -76,6 +76,10 @@ fi
 REPO_URL="${DPAD_REPO_URL:-https://github.com/ForcesPT/container-gaming.git}"
 REPO_DIR="${DPAD_REPO_DIR:-/opt/dpadcloud/container-gaming}"
 SCRIPT_PATH="/opt/dpadcloud/vm-bootstrap.sh"
+DPAD_STREAM_HOTFIX_UPDATER_SHA256="14875689d6a9c50ac4d535e79f20ac68f9e0ad6a890c159837b0e6bc876d9043"
+DPAD_STREAM_HOTFIX_ENTRYPOINT_SHA256="354e0de5b129679a5527bb07f5bb3330294903541973a8e0d94b5cec01daa6fa"
+DPAD_STREAM_HOTFIX_RESOLVER_SHA256="ba6738a8a0817c469a54e251a758440883ff18e3e2bbecc472b260ac8d4c31f9"
+DPAD_STREAM_HOTFIX_BROWSER_PATCH_SHA256="4cbe62015084171a5b948096b403fbf090bbec8b42074766978de48490844f03"
 # Image tag is selected dynamically by image_tag_for_gpu() in Phase 3:
 # Blackwell (compute_cap >= 12 / sm_120+) -> :dpad-SteamOS-rtx50 (CUDA 12.8.1);
 # else -> :dpad-SteamOS (CUDA 12.5.1). DPAD_IMAGE_TAG overrides both.
@@ -689,19 +693,28 @@ ensure_image() {
     echo "${img_tag}" > "$TAG_FILE"
     log "image ready: ${img_tag}"
 
-    # Fetch the repo entrypoint.sh to the host so dpad-launch-session can
-    # bind-mount it over the image's baked entrypoint — lets entrypoint hotfixes
-    # go live WITHOUT an image rebuild + Docker Hub push (an owner step that's
-    # currently blocked). Best-effort: if the fetch fails, launches fall back to
-    # the image's baked entrypoint.
+    # Atomically refresh the compatible stream-quality hotfix bundle. The updater
+    # stages and validates entrypoint.sh, the bitrate resolver, and the browser
+    # patch before swapping one current-version symlink. Any failure retains the
+    # last-known-good bundle; with no bundle, launches use the baked image.
     mkdir -p /opt/dpadcloud
-    if curl -fsSL https://raw.githubusercontent.com/ForcesPT/container-gaming/main/entrypoint.sh \
-        -o /opt/dpadcloud/entrypoint.sh 2>/dev/null; then
-        chmod +x /opt/dpadcloud/entrypoint.sh 2>/dev/null || true
-        log "entrypoint.sh fetched to /opt/dpadcloud (bind-mountable hotfix path)"
+    local hotfix_updater_tmp=/opt/dpadcloud/.dpad-update-stream-hotfix.tmp
+    if curl -fsSL https://raw.githubusercontent.com/ForcesPT/container-gaming/main/scripts/dpad-update-stream-hotfix \
+        -o "$hotfix_updater_tmp" 2>/dev/null \
+        && printf '%s  %s\n' "$DPAD_STREAM_HOTFIX_UPDATER_SHA256" "$hotfix_updater_tmp" | sha256sum -c - >/dev/null \
+        && bash -n "$hotfix_updater_tmp" \
+        && chmod 0755 "$hotfix_updater_tmp" \
+        && "$hotfix_updater_tmp" \
+            /opt/dpadcloud \
+            https://raw.githubusercontent.com/ForcesPT/container-gaming/main \
+            "$DPAD_STREAM_HOTFIX_ENTRYPOINT_SHA256" \
+            "$DPAD_STREAM_HOTFIX_RESOLVER_SHA256" \
+            "$DPAD_STREAM_HOTFIX_BROWSER_PATCH_SHA256"; then
+        mv -f "$hotfix_updater_tmp" /opt/dpadcloud/dpad-update-stream-hotfix
+        log "stream-quality hotfix bundle refreshed atomically"
     else
-        rm -f /opt/dpadcloud/entrypoint.sh 2>/dev/null || true
-        log "entrypoint.sh fetch failed — launches will use the image's baked entrypoint"
+        rm -f "$hotfix_updater_tmp" 2>/dev/null || true
+        log "stream-quality hotfix refresh failed — retaining last-known-good bundle or baked image"
     fi
     # Same hotfix path for evdev_bridge.py (the js_event→input_event translator,
     # started by the entrypoint ONLY in evdev mode). Lets bridge hotfixes ship
@@ -730,6 +743,7 @@ ensure_image() {
         rm -f /opt/dpadcloud/extract-nvrtc.sh 2>/dev/null || true
         log "extract-nvrtc.sh fetch failed — entrypoint will use the image's baked script"
     fi
+
     # Same hotfix path for dpad_input_patch.py (auto-loaded at Python startup via
     # dpad_input_patch.pth in site-packages; the §17.2 lazy-XTest input open +
     # the start_cursor_monitor guard live here). Lets the cursor-monitor + lazy-

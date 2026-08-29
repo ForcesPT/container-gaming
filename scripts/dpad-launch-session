@@ -49,6 +49,11 @@
 #   DPAD_STREAM_FPS                   Initial Selkies capture frame rate for this
 #                                    session (default 60; the worker supplies the
 #                                    user's selected launch profile).
+#   DPAD_VIDEO_BITRATE_KBPS           Optional validated H.264 CBR override.
+#                                    Unset derives a quality budget from the
+#                                    selected resolution and frame rate.
+#   DPAD_AUDIO_BITRATE_BPS            Optional validated Opus bitrate override.
+#                                    Unset defaults to high-quality 192 kbps.
 #   DPAD_ALLOW_LIVE_RESOLUTION        Set exactly 1 to let browser resolution
 #                                    commands override configured dimensions;
 #                                    default 0 ignores browser-persisted state.
@@ -276,13 +281,24 @@ launch() {
         vol_args+=( -v "${mnt}:/mnt/dpad-library" -e DPAD_VOLUME_MOUNT=/mnt/dpad-library )
     fi
 
-    # Bind-mount the host's fetched entrypoint.sh over the image's baked one
-    # (vm-bootstrap fetches it to /opt/dpadcloud/entrypoint.sh). Lets entrypoint
-    # hotfixes go live WITHOUT an image rebuild + Docker Hub push. Falls back to
-    # the image's baked entrypoint if the host file isn't present.
+    # Mount stream-quality hotfixes only from the atomically published bundle.
+    # vm-bootstrap validates all three compatible artifacts before swapping the
+    # stream-hotfix-current pointer. An incomplete/failed refresh therefore
+    # leaves the last-known-good bundle active, or uses the baked image when no
+    # bundle has ever been published.
     local entry_mount=()
-    [ -f /opt/dpadcloud/entrypoint.sh ] \
-        && entry_mount+=( -v /opt/dpadcloud/entrypoint.sh:/opt/dpadcloud/entrypoint.sh:ro )
+    local stream_hotfix=/opt/dpadcloud/stream-hotfix-current stream_hotfix_resolved
+    stream_hotfix_resolved="$(readlink -f -- "$stream_hotfix" 2>/dev/null || true)"
+    if [[ "$stream_hotfix_resolved" =~ ^/opt/dpadcloud/stream-hotfix-[0-9a-f]{64}$ ]] \
+        && [ -x "${stream_hotfix_resolved}/entrypoint.sh" ] \
+        && [ -x "${stream_hotfix_resolved}/dpad-resolve-stream-quality" ] \
+        && [ -f "${stream_hotfix_resolved}/patch_live_resolution.py" ]; then
+        entry_mount+=(
+            -v "${stream_hotfix_resolved}/entrypoint.sh:/opt/dpadcloud/entrypoint.sh:ro"
+            -v "${stream_hotfix_resolved}/dpad-resolve-stream-quality:/opt/dpadcloud/dpad-resolve-stream-quality:ro"
+            -v "${stream_hotfix_resolved}/patch_live_resolution.py:/opt/dpadcloud/patch_live_resolution.py:ro"
+        )
+    fi
     # Same hotfix path for evdev_bridge.py (started by the entrypoint in evdev
     # mode; vm-bootstrap fetches it to /opt/dpadcloud/evdev_bridge.py). Lets
     # bridge hotfixes ship without an image rebuild.
@@ -296,6 +312,7 @@ launch() {
     # (the MARK check short-circuits).
     [ -f /opt/dpadcloud/extract-nvrtc.sh ] \
         && entry_mount+=( -v /opt/dpadcloud/extract-nvrtc.sh:/opt/dpadcloud/extract-nvrtc.sh:ro )
+
     # Same hotfix path for dpad_input_patch.py (auto-loaded at Python startup via
     # dpad_input_patch.pth in site-packages; vm-bootstrap fetches it to
     # /opt/dpadcloud/dpad_input_patch.py). Lets the §17.2 lazy-XTest input open
@@ -347,6 +364,8 @@ launch() {
         -e DPAD_STREAM_WIDTH="${DPAD_STREAM_WIDTH:-1920}" \
         -e DPAD_STREAM_HEIGHT="${DPAD_STREAM_HEIGHT:-1080}" \
         -e DPAD_STREAM_FPS="${DPAD_STREAM_FPS:-60}" \
+        -e DPAD_VIDEO_BITRATE_KBPS="${DPAD_VIDEO_BITRATE_KBPS:-}" \
+        -e DPAD_AUDIO_BITRATE_BPS="${DPAD_AUDIO_BITRATE_BPS:-}" \
         -e DPAD_ALLOW_LIVE_RESOLUTION="${DPAD_ALLOW_LIVE_RESOLUTION:-0}" \
         -e DPAD_WD_WIDTH="${DPAD_WD_WIDTH:-${DPAD_STREAM_WIDTH:-1920}}" \
         -e DPAD_WD_HEIGHT="${DPAD_WD_HEIGHT:-${DPAD_STREAM_HEIGHT:-1080}}" \

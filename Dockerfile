@@ -316,9 +316,9 @@ RUN chmod +x /opt/dpadcloud/patch_gst_web_cursors.sh \
 
 # --- 4b. Live-resolution dropdown (§18.7) — bake the in-stream Resolution ---
 # selector + the _arg_res data-channel handler into the web client + the
-# selkies pip package at build time. The idempotent patcher also runs at boot
-# (entrypoint fetch-from-main overlay) so future fixes ship without a rebuild;
-# baked here so a brand-new container has the dropdown with NO network fetch.
+# selkies pip package at build time. The same idempotent patcher runs at boot;
+# existing images receive it only inside the SHA-pinned atomic hotfix bundle.
+# It is baked here so a brand-new container needs no network fetch.
 COPY scripts/patch_live_resolution.py /opt/dpadcloud/patch_live_resolution.py
 RUN chmod +x /opt/dpadcloud/patch_live_resolution.py \
     && /opt/dpadcloud/patch_live_resolution.py
@@ -367,8 +367,8 @@ RUN mkdir -p /etc/X11 && \
 # --- 11. COPY configs + entrypoint + common launcher scripts + display-driver installer ---
 COPY configs/ ${HOME}/.config/
 COPY configs/xorg/xorg.conf.template /opt/dpadcloud/xorg.conf.template
-COPY entrypoint.sh healthcheck.sh scripts/evdev_bridge.py scripts/extract-nvrtc.sh scripts/dpad-validate-stream-fps /opt/dpadcloud/
-RUN chmod +x /opt/dpadcloud/dpad-validate-stream-fps
+COPY entrypoint.sh healthcheck.sh scripts/evdev_bridge.py scripts/extract-nvrtc.sh scripts/dpad-validate-stream-fps scripts/dpad-resolve-stream-quality scripts/dpad-update-stream-hotfix /opt/dpadcloud/
+RUN chmod +x /opt/dpadcloud/dpad-validate-stream-fps /opt/dpadcloud/dpad-resolve-stream-quality /opt/dpadcloud/dpad-update-stream-hotfix
 # vgl-steam / proton-wined3d / vgl-test = the Xvfb+VGL debug launchers (kept as
 # manual debug fallbacks). dpad-launch (the deprecated Vast steamcmd headless
 # launcher, no Steam UI — docs/PROJECT_STATE.md §7) is NO LONGER baked in.

@@ -582,24 +582,18 @@ start_launcher_session() {
     fi
     bash /opt/dpadcloud/patch_gst_web_cursors.sh "${SELKIES_WEB_ROOT}/input.js" "${DPAD_DEFAULT_GAMING_MODE:-0}" 2>/dev/null || true
 
-    # --- live-resolution overlay (§18.7) ---
-    # The in-stream Resolution dropdown (web client) + the _arg_res data-channel
-    # handler (selkies) are NOT baked in the image (the rebuild + Docker Hub push
-    # is the blocked owner step). Fetch the idempotent patcher from repo main to
-    # /opt/dpadcloud (bind-mountable hotfix path) + run it so a fresh `docker
-    # run` / new VM bootstrap gets the live-resolution feature with NO image
-    # rebuild. Best-effort (network failure falls back to the image's baked web
-    # client + pip package — no dropdown, but the stream still works at the
-    # DPAD_WD_* default). Only on the wayland-display path (the compositor caps
-    # + sway output mode are what the dropdown drives).
-    local _hb_res="https://raw.githubusercontent.com/ForcesPT/container-gaming/main/scripts"
-    if curl -fsSL "${_hb_res}/patch_live_resolution.py" -o /opt/dpadcloud/patch_live_resolution.py 2>/dev/null; then
-        chmod +x /opt/dpadcloud/patch_live_resolution.py 2>/dev/null || true
-        python3 /opt/dpadcloud/patch_live_resolution.py >/tmp/patch_live_resolution.log 2>&1 || true
-        echo "    live-resolution overlay applied (see /tmp/patch_live_resolution.log)"
-    else
-        echo "    live-resolution overlay: fetch failed — using the image's baked web client (no dropdown)"
+    # --- live-resolution + authoritative-quality overlay (§18.7) ---
+    # The image bakes this idempotent patcher. Existing images receive it only as
+    # part of vm-bootstrap's validated, atomic stream-hotfix bundle. Never fetch
+    # it independently here: entrypoint, bitrate resolver, and browser behavior
+    # must be one compatible release. A failed transform would let stale browser
+    # localStorage undo the launch profile, so refuse the session before Selkies.
+    if ! python3 /opt/dpadcloud/patch_live_resolution.py >/tmp/patch_live_resolution.log 2>&1; then
+        echo "[!] Required Selkies browser overlay failed; refusing inconsistent stream profile" >&2
+        tail -20 /tmp/patch_live_resolution.log 2>/dev/null | sed 's/^/      /' >&2
+        return 1
     fi
+    echo "    live-resolution and stream-quality overlay verified"
 
     # --- fixed session shell ---
     local SHELL_APP="/opt/dpadcloud/launcher-shell"
@@ -735,12 +729,34 @@ start_launcher_session() {
     }
     _dpad_w() { _dpad_res | cut -dx -f1; }
     _dpad_h() { _dpad_res | cut -dx -f2; }
+    _dpad_quality() {
+        /opt/dpadcloud/dpad-resolve-stream-quality \
+            "$1" "$2" "$stream_fps" \
+            "${DPAD_VIDEO_BITRATE_KBPS:-}" "${DPAD_AUDIO_BITRATE_BPS:-}"
+    }
     # Build the selkies-gstreamer launch command. A function (not a captured
     # string) so an explicitly enabled live change is re-read after Selkies is
-    # restarted by the health loop.
+    # restarted by the health loop. Quality is also recalculated when an opted-in
+    # live resolution changes, while explicit operator overrides remain fixed.
     build_selkies_cmd() {
-      echo "export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_DESKTOP_CLIENT=${DPAD_DESKTOP_CLIENT} DPAD_STREAM_WIDTH=$(_dpad_w) DPAD_STREAM_HEIGHT=$(_dpad_h) XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=${selkies_port} --enable_https=false --encoder=${enc} --framerate=${stream_fps} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
+      local resolution stream_width stream_height quality video_bitrate audio_bitrate
+      resolution="$(_dpad_res)"
+      stream_width="${resolution%x*}"
+      stream_height="${resolution#*x}"
+      quality="$(_dpad_quality "$stream_width" "$stream_height")" || return 1
+      read -r video_bitrate audio_bitrate <<<"$quality"
+      echo "export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_DESKTOP_CLIENT=${DPAD_DESKTOP_CLIENT} DPAD_STREAM_WIDTH=${stream_width} DPAD_STREAM_HEIGHT=${stream_height} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=${selkies_port} --enable_https=false --encoder=${enc} --framerate=${stream_fps} --video_bitrate=${video_bitrate} --audio_bitrate=${audio_bitrate} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
     }
+    local initial_resolution initial_width initial_height initial_quality video_bitrate audio_bitrate selkies_cmd
+    initial_resolution="$(_dpad_res)"
+    initial_width="${initial_resolution%x*}"
+    initial_height="${initial_resolution#*x}"
+    initial_quality="$(_dpad_quality "$initial_width" "$initial_height")" || {
+        echo "    ERROR: refusing invalid stream bitrate profile" >&2
+        return 1
+    }
+    read -r video_bitrate audio_bitrate <<<"$initial_quality"
+    selkies_cmd="$(build_selkies_cmd)" || return 1
     # Unix socket pathnames survive an abrupt Selkies/container process exit.
     # They cannot represent a live compositor once that process is gone and can
     # make the desktop attach to a stale wayland-N after a Docker restart or a
@@ -752,15 +768,15 @@ start_launcher_session() {
             2>/dev/null || true
     }
     _dpad_clean_wayland_sockets
-    echo "[*] Launching selkies (wayland-display compositor; video_src=${video_src}, encoder=${enc})..."
-    as_user "$(build_selkies_cmd)" >>/tmp/selkies.log 2>&1 &
+    echo "[*] Launching selkies (wayland-display compositor; video_src=${video_src}, encoder=${enc}, video=${video_bitrate}kbps, audio=${audio_bitrate}bps)..."
+    as_user "$selkies_cmd" >>/tmp/selkies.log 2>&1 &
     sleep 6
     if ! pgrep -f selkies-gstreamer >/dev/null; then
         echo "    WARNING: selkies failed to start (see /tmp/selkies.log)"; tail -20 /tmp/selkies.log 2>/dev/null | sed 's/^/      /'
         return 1
     fi
-    echo "    Selkies listening on ${DPAD_SELKIES_BIND:-127.0.0.1}:${selkies_port} (wayland-display compositor; encoder=${enc}, audio_fec=${DPAD_AUDIO_PACKETLOSS:-0}%, video_fec=${DPAD_VIDEO_PACKETLOSS:-0}%)"
-    echo "DPAD_READY slot=${DPAD_SLOT:-0} bind=${DPAD_SELKIES_BIND:-127.0.0.1}:${selkies_port} encoder=${enc}"
+    echo "    Selkies listening on ${DPAD_SELKIES_BIND:-127.0.0.1}:${selkies_port} (wayland-display compositor; encoder=${enc}, video=${video_bitrate}kbps, audio=${audio_bitrate}bps, audio_fec=${DPAD_AUDIO_PACKETLOSS:-0}%, video_fec=${DPAD_VIDEO_PACKETLOSS:-0}%)"
+    echo "DPAD_READY slot=${DPAD_SLOT:-0} bind=${DPAD_SELKIES_BIND:-127.0.0.1}:${selkies_port} encoder=${enc} video_kbps=${video_bitrate} audio_bps=${audio_bitrate}"
     echo "    NOTE: video appears after a peer connects and the ${DPAD_DESKTOP_CLIENT} launcher desktop starts"
 
     # The selected nested desktop provides XWayland for Steam and Windows store
@@ -835,7 +851,11 @@ start_launcher_session() {
             pkill -9 -x "$DPAD_DESKTOP_CLIENT" 2>/dev/null || true
             sleep 2
             _dpad_clean_wayland_sockets
-            as_user "$(build_selkies_cmd)" >>/tmp/selkies.log 2>&1 &
+            if ! selkies_cmd="$(build_selkies_cmd)"; then
+                echo "[!] Refusing to restart Selkies with an invalid stream bitrate profile" >&2
+                return 1
+            fi
+            as_user "$selkies_cmd" >>/tmp/selkies.log 2>&1 &
             desktop_launched=0
         fi
         if [ "${DPAD_GAMEPAD_INTERPOSER:-}" = "evdev" ] && ! pgrep -f evdev_bridge.py >/dev/null; then
