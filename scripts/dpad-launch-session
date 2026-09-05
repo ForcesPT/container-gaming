@@ -92,6 +92,30 @@ CONTAINER_PREFIX="dpad-slot"
 log() { echo "[dpad-launch] $*" >&2; }
 err() { echo "[dpad-launch] ERROR: $*" >&2; }
 
+# Stock profile artifacts are co-located in /opt/dpadcloud, root-owned and
+# SHA256/immutable-commit verified by the worker before bootstrap install.
+# stock595-profile.json persists the exact image and all reproduction selectors.
+release_profile() {
+    case "${DPAD_RELEASE_PROFILE-default}" in
+        default|upcloud-stock595) ;;
+        *) err "invalid DPAD_RELEASE_PROFILE (default|upcloud-stock595)"; return 1 ;;
+    esac
+    if [ "${DPAD_RELEASE_PROFILE-default}" = upcloud-stock595 ] \
+        || [ -e /opt/dpadcloud/stock595-profile.json ] || [ -L /opt/dpadcloud/stock595-profile.json ]; then
+        local path owner mode exports
+        [ -f /opt/dpadcloud/dpad-stock595-codecs.py ] && [ -f /opt/dpadcloud/dpad-stock595-apt-hook.py ] \
+            || { err "missing stock595 codec artifacts"; return 1; }
+        for path in /opt /opt/dpadcloud /opt/dpadcloud/dpad-stock595-codecs.py /opt/dpadcloud/dpad-stock595-apt-hook.py; do
+            [ ! -L "$path" ] && [ -e "$path" ] || { err "unsafe stock595 artifact: $path"; return 1; }
+            read -r owner mode < <(stat -c '%u %a' -- "$path")
+            [ "$owner" = 0 ] && (( (8#$mode & 022) == 0 )) || { err "unprotected stock595 artifact: $path"; return 1; }
+        done
+        exports="$(/usr/bin/python3 /opt/dpadcloud/dpad-stock595-codecs.py profile "$1")" || return 1
+        eval "$exports"
+    fi
+}
+
+
 # Map an UpCloud virtio device address (virtio:N) -> /dev/vd<letter> (virtio:0=vda).
 # UpCloud attaches the OS disk first (vda); user volumes attach as vdb, vdc, ...
 # in attach order, so the mapping is deterministic.
@@ -220,6 +244,7 @@ is_ephemeral() {
 
 launch() {
     local slot="$1" volumeId="$2" device="$3" pass="$4" image="${5:-$IMAGE_DEFAULT}"
+    release_profile "$image" || return 1
     # Bound both syntax and length before Bash arithmetic. Digit-only input is
     # insufficient: oversized integers wrap in Bash and can collide with slot 0.
     [[ "$slot" =~ ^(0|[1-9][0-9]?)$ ]] \
@@ -287,6 +312,7 @@ launch() {
     # leaves the last-known-good bundle active, or uses the baked image when no
     # bundle has ever been published.
     local entry_mount=()
+    if [ "${DPAD_RELEASE_PROFILE-default}" != upcloud-stock595 ]; then
     local stream_hotfix=/opt/dpadcloud/stream-hotfix-current stream_hotfix_resolved
     stream_hotfix_resolved="$(readlink -f -- "$stream_hotfix" 2>/dev/null || true)"
     if [[ "$stream_hotfix_resolved" =~ ^/opt/dpadcloud/stream-hotfix-[0-9a-f]{64}$ ]] \
@@ -323,6 +349,8 @@ launch() {
     [ -f /opt/dpadcloud/dpad_input_patch.py ] \
         && entry_mount+=( -v /opt/dpadcloud/dpad_input_patch.py:/usr/local/lib/python3.12/dist-packages/dpad_input_patch.py:ro )
 
+    fi
+
     # gst-wayland-display always opens the assigned DRM render node directly.
     local dev_args=( --device /dev/dri )
     # systempaths=unconfined: the 4th bwrap-nest flag — umu's pressure-vessel
@@ -335,7 +363,13 @@ launch() {
     # NOTE: keep these comments OUT of the `\`-continuation block below — an
     # inline `#` inside a continued command terminates it (bash pitfall; it broke
     # the docker run with "-e: command not found" + "requires at least 1 argument").
+    local profile_args=()
+    if [ "${DPAD_RELEASE_PROFILE-default}" = upcloud-stock595 ]; then
+        profile_args+=( -e DPAD_RELEASE_PROFILE="$DPAD_RELEASE_PROFILE" -e DPAD_DRIVER_POLICY="$DPAD_DRIVER_POLICY"
+            -e DPAD_PROVIDER="$DPAD_PROVIDER" -e DPAD_IMAGE_TAG="$DPAD_IMAGE_TAG" -e DPAD_INPUT_HOTFIX=0 )
+    fi
     docker run -d --name "$name" \
+        "${profile_args[@]}" \
         --network host \
         --runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=0 \
         --cap-add SYS_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined \

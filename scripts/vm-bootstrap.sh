@@ -98,6 +98,30 @@ ISOLATION="${DPAD_ISOLATION:-cdi}"
 
 log()  { echo "[dpadcloud-bootstrap] $*"; }
 err()  { echo "[dpadcloud-bootstrap][ERROR] $*" >&2; }
+
+# Stock profile artifacts are co-located in /opt/dpadcloud, root-owned and
+# SHA256/immutable-commit verified by the worker before bootstrap install.
+# stock595-profile.json persists the exact image and all reproduction selectors.
+release_profile() {
+    case "${DPAD_RELEASE_PROFILE-default}" in
+        default|upcloud-stock595) ;;
+        *) err "invalid DPAD_RELEASE_PROFILE (default|upcloud-stock595)"; return 1 ;;
+    esac
+    if [ "${DPAD_RELEASE_PROFILE-default}" = upcloud-stock595 ] \
+        || [ -e /opt/dpadcloud/stock595-profile.json ] || [ -L /opt/dpadcloud/stock595-profile.json ]; then
+        local path owner mode exports
+        [ -f /opt/dpadcloud/dpad-stock595-codecs.py ] && [ -f /opt/dpadcloud/dpad-stock595-apt-hook.py ] \
+            || { err "missing stock595 codec artifacts"; return 1; }
+        for path in /opt /opt/dpadcloud /opt/dpadcloud/dpad-stock595-codecs.py /opt/dpadcloud/dpad-stock595-apt-hook.py; do
+            [ ! -L "$path" ] && [ -e "$path" ] || { err "unsafe stock595 artifact: $path"; return 1; }
+            read -r owner mode < <(stat -c '%u %a' -- "$path")
+            [ "$owner" = 0 ] && (( (8#$mode & 022) == 0 )) || { err "unprotected stock595 artifact: $path"; return 1; }
+        done
+        exports="$(/usr/bin/python3 /opt/dpadcloud/dpad-stock595-codecs.py profile "$1")" || return 1
+        eval "$exports"
+    fi
+}
+
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # -----------------------------------------------------------------------------
@@ -375,7 +399,35 @@ EOF
 # on NVIDIA — without it vkCreateDevice fails (-7) / 'Failed to create backend' —
 # AND for the DFP Xorg / DRM-master path. Steam UI needs KMS either way.)
 # -----------------------------------------------------------------------------
+require_stock595_modeset() {
+    [ "$(cat /sys/module/nvidia_drm/parameters/modeset 2>/dev/null)" = Y ] \
+        || { err "stock595 requires nvidia_drm.modeset already Y; refusing repair/reboot"; return 1; }
+}
+
+# Read afresh at each boundary; the baseline lives only in bootstrap's locals,
+# so a later legitimate boot starts a new invocation with a new identity.
+stock595_host_identity() {
+    local driver boot
+    driver="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null)" || return 1
+    boot="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" || return 1
+    [[ "$driver" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] \
+        && [[ "$boot" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+        || { err "invalid stock595 host driver/boot identity"; return 1; }
+    printf '%s\n%s\n' "$driver" "$boot"
+}
+
+verify_stock595_host_identity() {
+    [ "${DPAD_RELEASE_PROFILE-default}" = upcloud-stock595 ] || return 0
+    local current
+    current="$(stock595_host_identity)" || { err "cannot read stock595 host identity before readiness"; return 1; }
+    [ "$current" = "$1" ] || { err "stock595 driver/boot identity changed during bootstrap; refusing readiness"; return 1; }
+}
+
 ensure_modeset() {
+    if [ "${DPAD_RELEASE_PROFILE-default}" = upcloud-stock595 ]; then
+        require_stock595_modeset
+        return $?
+    fi
     # PROBE knob (default off → no regression): skip the modeset=Y enforce so
     # the SHIPPED modeset setting stays. Paired with DPAD_SKIP_DRIVER_SWAP for
     # driver probes where you want zero reboots (the modeset reboot is the one
@@ -428,7 +480,15 @@ ensure_modeset() {
 # -----------------------------------------------------------------------------
 # Phase 2: nvidia-container-toolkit
 # -----------------------------------------------------------------------------
+ensure_stock595_codecs() {
+    [ "${DPAD_RELEASE_PROFILE-default}" = upcloud-stock595 ] || return 0
+    /usr/bin/python3 /opt/dpadcloud/dpad-stock595-codecs.py || return 1
+}
+
 ensure_nct() {
+    if [ "${DPAD_RELEASE_PROFILE-default}" = upcloud-stock595 ] && ! have nvidia-ctk; then
+        err "stock595 requires preinstalled NVIDIA container toolkit"; return 1
+    fi
     if have nvidia-ctk; then
         log "nvidia-container-toolkit already installed"
     else
@@ -441,8 +501,13 @@ ensure_nct() {
         apt-get update
         DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-container-toolkit
     fi
-    nvidia-ctk runtime configure --runtime=docker
-    systemctl restart docker
+    if [ "${DPAD_RELEASE_PROFILE-default}" = upcloud-stock595 ]; then
+        nvidia-ctk runtime configure --runtime=docker || return 1
+        systemctl restart docker || return 1
+    else
+        nvidia-ctk runtime configure --runtime=docker
+        systemctl restart docker
+    fi
     # Regenerate the CDI spec BEFORE the GPU-visibility check. After a driver
     # swap (e.g. the proprietary -> open R580 swap on Scaleway, ensure_driver_580),
     # the OLD CDI spec still references the previous driver's
@@ -459,6 +524,7 @@ ensure_nct() {
     if nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml >/tmp/cdi-gen.log 2>&1; then
         log "CDI spec generated ($(nvidia-ctk cdi list 2>/dev/null | grep -c 'nvidia.com/gpu=') devices)"
     else
+        [ "${DPAD_RELEASE_PROFILE-default}" != upcloud-stock595 ] || return 1
         err "CDI spec generation failed (see /tmp/cdi-gen.log) — CDI launch will not work"
     fi
     if ! docker run --rm --gpus all nvidia/cuda:12.8.1-runtime-ubuntu24.04 nvidia-smi >/dev/null 2>&1; then
@@ -710,6 +776,8 @@ ensure_image() {
     fi
     echo "${img_tag}" > "$TAG_FILE"
     log "image ready: ${img_tag}"
+
+    [ "${DPAD_RELEASE_PROFILE-default}" != upcloud-stock595 ] || return 0
 
     # Atomically refresh the compatible stream-quality hotfix bundle. The updater
     # stages and validates entrypoint.sh, the bitrate resolver, and the browser
@@ -1081,11 +1149,22 @@ report_all_urls() {
 # The full bootstrap (phases 1-5), with the one reboot in phase 1
 # -----------------------------------------------------------------------------
 bootstrap() {
+    release_profile "${DPAD_IMAGE_TAG:-}" || return 1
+    local stock595_initial_identity=""
+    if [ "${DPAD_RELEASE_PROFILE-default}" = upcloud-stock595 ]; then
+        require_stock595_modeset || return 1
+        stock595_initial_identity="$(stock595_host_identity)" || return 1
+        local active_containers
+        active_containers="$(docker ps -q)" || return 1
+        [ -z "$active_containers" ] || { err "stock595 bootstrap requires an idle host"; return 1; }
+        have nvidia-ctk || { err "stock595 requires preinstalled NVIDIA container toolkit"; return 1; }
+    fi
     log "=== DpadCloud VM bootstrap starting (warm-VM mode=${DPAD_WARM_VM}) ==="
     ensure_no_auto_updates   # FIRST: stop apt from killing the session mid-boot
     systemctl start docker 2>/dev/null || true
     ensure_driver_580  || return 1   # may reboot once (595->580 OR proprietary->open); resumes here after
-    ensure_modeset            # may reboot once; resumes here after
+    ensure_modeset            || return 1 # default profile may reboot once
+    ensure_stock595_codecs    || return 1
     ensure_nct                || return 1
     ensure_docker_xfs_quota   || return 1
     ensure_userns
@@ -1095,6 +1174,7 @@ bootstrap() {
         # STOP — no pre-launched session containers (a session = a fresh
         # container with the user's volume, launched by dpad-launch-session).
         ensure_mps
+        verify_stock595_host_identity "$stock595_initial_identity" || return 1
         mkdir -p /opt/dpadcloud
         echo "ready $(date -Is)" > "$VM_READY_FILE"
         log "DPAD_VM_READY — warm pool VM ready (Docker + image + MPS); 0 session containers"
@@ -1104,6 +1184,7 @@ bootstrap() {
     fi
     # v1 back-compat: run one container per GPU + report Selkies URLs.
     run_all_containers        || return 1
+    verify_stock595_host_identity "$stock595_initial_identity" || return 1
     report_all_urls           || return 1
     log "=== DpadCloud VM bootstrap complete ==="
 }
@@ -1113,6 +1194,11 @@ bootstrap() {
 # survives the phase-1 reboot. Used by the Vast on-start payload.
 # -----------------------------------------------------------------------------
 install_self() {
+    release_profile "${DPAD_IMAGE_TAG:-}" || return 1
+    if [ "${DPAD_RELEASE_PROFILE-default}" = upcloud-stock595 ]; then
+        [ "$(readlink -f "$0")" = "$SCRIPT_PATH" ] || { err "worker must install pinned bootstrap at $SCRIPT_PATH"; return 1; }
+        /usr/bin/python3 /opt/dpadcloud/dpad-stock595-codecs.py persist "$DPAD_IMAGE_TAG" || return 1
+    fi
     log "installing systemd service ($SERVICE_NAME)"
     mkdir -p /opt/dpadcloud
     if [ ! -f "$SCRIPT_PATH" ] || [ "$(readlink -f "$0" 2>/dev/null)" != "$SCRIPT_PATH" ]; then
