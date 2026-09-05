@@ -178,9 +178,10 @@ def prepare():
     RUNTIME.mkdir(mode=0o755, exist_ok=True)
 
 
-def library(bits, version, root=GRAPHICS):
+def library(bits, version, root=GRAPHICS, stem="libEGL_nvidia"):
+    """Validate the ELF image before exposing it to either ABI loader."""
     directory = root / f'lib{bits}'
-    exact = directory / f'libEGL_nvidia.so.{version}'
+    exact = directory / f'{stem}.so.{version}'
     protected(exact, public=True)
     with exact.open('rb') as file:
         header = file.read(64 if bits == 64 else 52)
@@ -208,6 +209,8 @@ def library(bits, version, root=GRAPHICS):
             kinds.add(segment[0])
     if not {1, 2} <= kinds:  # PT_LOAD and PT_DYNAMIC
         raise ValueError(f'ELF{bits} has no loadable dynamic image: {exact}')
+    if stem != 'libEGL_nvidia':
+        return exact
     alias = directory / 'libEGL_nvidia.so.0'
     # ldconfig creates this alias from the SONAME for both architectures.
     if alias.resolve(strict=True) != exact:
@@ -215,6 +218,43 @@ def library(bits, version, root=GRAPHICS):
     if not alias.is_symlink():
         protected(alias)
     return exact
+
+
+def gbm_alias(bits):
+    directory = Path("/usr/lib/x86_64-linux-gnu/gbm") if bits == 64 else Path("/usr/lib/i386-linux-gnu/gbm")
+    return directory / 'nvidia-drm_gbm.so'
+
+
+def gbm_registration(version, publish=False):
+    # Conventional multiarch directories select the correct ABI even in 32-bit
+    # descendants. A single inherited private lib64 GBM_BACKENDS_PATH does not.
+    # Never write through the old allocator alias or a toolkit bind mount.
+    pairs = []
+    for bits in (64, 32):
+        exact = library(bits, version, stem='libnvidia-allocator')
+        alias = gbm_alias(bits)
+        protected(alias.parent, directory=True, missing=publish, public=True)
+        no_mounts(alias)
+        if alias.is_symlink():
+            if alias.lstat().st_uid != OWNER:
+                raise ValueError(f'unsafe GBM alias owner: {alias}')
+            old = alias.resolve(strict=False)
+            if (old.parent not in (alias.parent.parent, exact.parent)
+                    or not re.fullmatch(r'libnvidia-allocator\.so\.[0-9.]+', old.name)):
+                raise ValueError(f'escaping GBM alias: {alias}')
+            protected(old, public=True, missing=publish)
+        else:
+            protected(alias, missing=publish, public=True)
+        if not publish and (not alias.is_symlink() or alias.resolve(strict=True) != exact):
+            raise ValueError(f'stale GBM registration: {alias}')
+        pairs.append((alias, exact))
+    if publish:
+        for alias, exact in pairs:
+            alias.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix='.dpad-gbm-', dir=alias.parent) as staging:
+                temp = Path(staging) / alias.name
+                temp.symlink_to(exact)
+                os.replace(temp, alias)
 
 
 def validate():
@@ -236,6 +276,8 @@ paths = {line.split()[-1] for line in pathlib.Path('/proc/self/maps').read_text(
 if paths != {sys.argv[1]}:
     raise RuntimeError('unexpected effective NVIDIA EGL library: ' + repr(paths))
 version = pathlib.Path(sys.argv[1]).name.removeprefix('libEGL_nvidia.so.')
+allocator = pathlib.Path(sys.argv[1]).parent / ('libnvidia-allocator.so.' + version)
+getattr(ctypes.CDLL(str(allocator)), 'gbmint_get_backend')
 for line in pathlib.Path('/proc/self/maps').read_text().splitlines():
     path = line.split()[-1]
     if any(name in path for name in ('libnvidia-glsi.so.', 'libnvidia-eglcore.so.', 'libnvidia-glcore.so.', 'libnvidia-glvkspirv.so.')):
@@ -318,6 +360,7 @@ def main():
         secure_tree(LIBROOT)
         publish_graphics(host_version())
     version = validate()
+    gbm_registration(version, publish=sys.argv[1] == 'publish')
     secure_tree(RUNTIME)
     if sys.argv[1] == 'publish':
         RUNTIME.mkdir(mode=0o755, exist_ok=True)

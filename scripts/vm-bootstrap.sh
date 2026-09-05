@@ -80,7 +80,7 @@ SCRIPT_PATH="/opt/dpadcloud/vm-bootstrap.sh"
 DPAD_STREAM_HOTFIX_UPDATER_SHA256="14875689d6a9c50ac4d535e79f20ac68f9e0ad6a890c159837b0e6bc876d9043"
 # This source candidate requires an image with dpad-nvidia-egl + the updated
 # installer. Do not roll out this bootstrap/entrypoint to old production images.
-DPAD_STREAM_HOTFIX_ENTRYPOINT_SHA256="1ca4fbef99804a52d8bc27b84274d23053193ceb0bba7081a537f2f21fadbb05"
+DPAD_STREAM_HOTFIX_ENTRYPOINT_SHA256="419bda1ffc5e6d35d96d762cc4978b2a40680433a5c5b514c66ac06981d359d1"
 DPAD_STREAM_HOTFIX_RESOLVER_SHA256="ba6738a8a0817c469a54e251a758440883ff18e3e2bbecc472b260ac8d4c31f9"
 DPAD_STREAM_HOTFIX_BROWSER_PATCH_SHA256="4cbe62015084171a5b948096b403fbf090bbec8b42074766978de48490844f03"
 # Image tag is selected dynamically by image_tag_for_gpu() in Phase 3:

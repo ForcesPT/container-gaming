@@ -34,13 +34,14 @@ class NvidiaRuntimeTests(unittest.TestCase):
             ''.join(str(self.fs / f'opt/nvidia-drivers/lib{bits}') + '\n' for bits in (64, 32)))
         for bits, machine in ((64, 'elf_x86_64'), (32, 'elf_i386')):
             source = self.base / f'fixture{bits}.s'
-            source.write_text('.text\n.global __egl_Main\n.global vk_icdGetInstanceProcAddr\n.global fixture_version\n__egl_Main:\nvk_icdGetInstanceProcAddr:\nfixture_version:\n mov $595, %eax\n ret\n.section .note.GNU-stack,"",@progbits\n')
+            source.write_text('.text\n.global __egl_Main\n.global vk_icdGetInstanceProcAddr\n.global fixture_version\n.global gbmint_get_backend\n__egl_Main:\nvk_icdGetInstanceProcAddr:\nfixture_version:\ngbmint_get_backend:\n mov $595, %eax\n ret\n.section .note.GNU-stack,"",@progbits\n')
             obj = source.with_suffix('.o')
             subprocess.run(['as', f'--{bits}', '-o', str(obj), str(source)], check=True)
             libdir = self.fs / f'opt/nvidia-drivers/lib{bits}'
             library = libdir / f'libEGL_nvidia.so.{self.version}'
             subprocess.run(['ld', '-m', machine, '-shared', '-soname', 'libEGL_nvidia.so.0', '-o', str(library), str(obj)], check=True)
             (libdir / 'libEGL_nvidia.so.0').symlink_to(library.name)
+            subprocess.run(['ld', '-m', machine, '-shared', '-soname', 'libnvidia-allocator.so.1', '-o', str(libdir / f'libnvidia-allocator.so.{self.version}'), str(obj)], check=True)
         (self.fs / 'opt/nvidia-drivers/lib64/nvidia_icd.json').write_text(json.dumps({'file_format_version': '1.0.0', 'ICD': {'library_path': 'libGLX_nvidia.so.0', 'api_version': '1.4.303'}}))
         self.bin = self.base / 'bin'
         self.bin.mkdir()
@@ -67,6 +68,53 @@ class NvidiaRuntimeTests(unittest.TestCase):
         self.installer = self.base / 'installer'
         self.installer.write_text(code)
         self.manifest = self.fs / 'run/dpad-nvidia/egl.json'
+
+    def gbm_alias(self, bits):
+        arch = 'x86_64' if bits == 64 else 'i386'
+        return self.fs / f'usr/lib/{arch}-linux-gnu/gbm/nvidia-drm_gbm.so'
+
+    def test_gbm_repairs_empty_old_allocator_for_both_abis(self):
+        for bits in (64, 32):
+            alias = self.gbm_alias(bits)
+            alias.parent.mkdir(parents=True)
+            old = alias.parent.parent / 'libnvidia-allocator.so.580.1'
+            old.touch()
+            alias.symlink_to(old)
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for bits in (64, 32):
+            alias = self.gbm_alias(bits)
+            self.assertEqual(alias.resolve(), self.fs / f'opt/nvidia-drivers/graphics/lib{bits}/libnvidia-allocator.so.{self.version}')
+            self.assertEqual(alias.lstat().st_uid, os.getuid())
+            self.assertEqual(alias.read_bytes()[4], 2 if bits == 64 else 1)
+            self.assertEqual((alias.parent.parent / 'libnvidia-allocator.so.580.1').read_bytes(), b'')
+        probe = subprocess.run(['python3', '-c', 'import ctypes,sys; print(ctypes.CDLL(sys.argv[1]).gbmint_get_backend())', str(self.gbm_alias(64))], text=True, capture_output=True)
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+        self.assertEqual(probe.stdout.strip(), '595')
+        self.assertEqual(self.helper('check').returncode, 0)
+        self.gbm_alias(32).unlink()
+        self.assertNotEqual(self.helper('check').returncode, 0)
+
+    def test_gbm_rejects_invalid_allocator_both_abis(self):
+        for bits in (64, 32):
+            exact = self.fs / f'opt/nvidia-drivers/lib{bits}/libnvidia-allocator.so.{self.version}'
+            good = exact.read_bytes()
+            for bad in (b'', good[:20], good[:4] + bytes([1 if bits == 64 else 2]) + good[5:]):
+                exact.write_bytes(bad)
+                self.assertNotEqual(self.run_installer().returncode, 0)
+            exact.write_bytes(good)
+
+    def test_gbm_rejects_writable_or_escaping_alias_paths(self):
+        alias = self.gbm_alias(64)
+        alias.parent.mkdir(parents=True)
+        alias.parent.chmod(0o777)
+        self.assertNotEqual(self.run_installer().returncode, 0)
+        alias.parent.chmod(0o755)
+        victim = self.base / 'victim'
+        victim.write_text('untouched')
+        alias.symlink_to(victim)
+        self.assertNotEqual(self.run_installer().returncode, 0)
+        self.assertEqual(victim.read_text(), 'untouched')
 
     def run_installer(self):
         return subprocess.run(['bash', str(self.installer)], env=self.env, text=True, capture_output=True)
@@ -451,7 +499,7 @@ class NvidiaRuntimeTests(unittest.TestCase):
         (self.fs / 'run/dpadcloud').mkdir()
         for program in ('selkies-gstreamer', 'sway', 'labwc'):
             fake = self.bin / program
-            fake.write_text('#!/bin/bash\nprintf "%s\\n" "$__EGL_VENDOR_LIBRARY_FILENAMES" "$VK_ICD_FILENAMES" "$LD_LIBRARY_PATH" > "$PROCESS_ENV"\n')
+            fake.write_text('#!/bin/bash\nprintf "%s\\n" "$__EGL_VENDOR_LIBRARY_FILENAMES" "$VK_ICD_FILENAMES" "$LD_LIBRARY_PATH" "${GBM_BACKENDS_PATH-unset}" "${GBM_BACKEND-unset}" > "$PROCESS_ENV"\n')
             fake.chmod(0o755)
             name = 'build_selkies_cmd' if program == 'selkies-gstreamer' else '_launch_' + program
             start = entry.index('    ' + name + '() {')
@@ -463,9 +511,10 @@ class NvidiaRuntimeTests(unittest.TestCase):
             script = 'compositor_egl=nvidia; enc=nvh264enc; stream_fps=60; as_user() { bash -c "$1"; }; _dpad_res() { echo 1920x1080; }; _dpad_quality() { echo "20000 192000"; }; _dpad_w() { echo 1920; }; _dpad_h() { echo 1080; }; USER_HOME="' + str(self.base) + '"\n'
             script += function + '\n'
             script += 'cmd=$(build_selkies_cmd) && as_user "$cmd"' if program == 'selkies-gstreamer' else name + ' wayland-1; wait'
-            result = subprocess.run(['bash', '-c', script], env={**self.env, 'PROCESS_ENV': str(output)}, text=True, capture_output=True)
+            result = subprocess.run(['bash', '-c', script], env={**self.env, 'PROCESS_ENV': str(output), 'GBM_BACKENDS_PATH': '/unsafe', 'GBM_BACKEND': 'drm'}, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             values = output.read_text().splitlines()
+            self.assertEqual(values[3:], ['unset', 'unset'])
             self.assertEqual(values[0], str(self.manifest))
             self.assertEqual(values[1], str(self.manifest.parent / 'nvidia_icd.json'))
             self.assertTrue(values[2].startswith(f'{self.fs}/opt/nvidia-drivers/graphics/lib64:{self.fs}/opt/nvidia-drivers/graphics/lib32'))
@@ -490,6 +539,7 @@ class NvidiaRuntimeTests(unittest.TestCase):
             with self.subTest(version=version):
                 for bits in (32, 64):
                     directory = self.fs / f'opt/nvidia-drivers/lib{bits}'
+                    (directory / ('libnvidia-allocator.so.' + previous)).rename(directory / ('libnvidia-allocator.so.' + version))
                     (directory / ('libEGL_nvidia.so.' + previous)).rename(directory / ('libEGL_nvidia.so.' + version))
                     alias = directory / 'libEGL_nvidia.so.0'
                     alias.unlink()
@@ -517,7 +567,7 @@ class NvidiaRuntimeTests(unittest.TestCase):
         entry = (ROOT / 'entrypoint.sh').read_text()
         self.assertNotIn('/usr/share/glvnd/egl_vendor.d/10_nvidia.json', entry)
         self.assertEqual(entry.count('local egl_set="__EGL_VENDOR_LIBRARY_FILENAMES=/run/dpad-nvidia/egl.json LD_LIBRARY_PATH=/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32"'), 2)
-        self.assertIn('. /opt/gstreamer/gst-env; export __EGL_VENDOR_LIBRARY_FILENAMES=/run/dpad-nvidia/egl.json VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json LD_LIBRARY_PATH=/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32:', entry)
+        self.assertIn('. /opt/gstreamer/gst-env; unset GBM_BACKENDS_PATH GBM_BACKEND; export __EGL_VENDOR_LIBRARY_FILENAMES=/run/dpad-nvidia/egl.json VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json LD_LIBRARY_PATH=/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32:', entry)
         self.assertIn('scripts/dpad-nvidia-egl /opt/dpadcloud/', (ROOT / 'Dockerfile').read_text())
 
 

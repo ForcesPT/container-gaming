@@ -761,8 +761,8 @@ start_launcher_session() {
       read -r video_bitrate audio_bitrate <<<"$quality"
       # Same user, Gst environment, interposer and graphics-only loader order as
       # Selkies. Every initial/restart command is gated; stdout remains command-only.
-      as_user "export DISPLAY=:99 XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}'; . /opt/gstreamer/gst-env; export LD_LIBRARY_PATH=/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32:\${LD_LIBRARY_PATH:-}; timeout --kill-after=5s 45s python3 /opt/dpadcloud/dpad_nvenc.py check ${compositor_egl} ${enc} ${stream_width} ${stream_height} ${stream_fps} ${video_bitrate} '${DPAD_VIDEO_PACKETLOSS:-0}'" >&2 || return 1
-      echo "export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_DESKTOP_CLIENT=${DPAD_DESKTOP_CLIENT} DPAD_STREAM_WIDTH=${stream_width} DPAD_STREAM_HEIGHT=${stream_height} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; export __EGL_VENDOR_LIBRARY_FILENAMES=/run/dpad-nvidia/egl.json VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json LD_LIBRARY_PATH=/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32:\${LD_LIBRARY_PATH:-}; python3 /opt/dpadcloud/dpad_nvenc.py exec ${compositor_egl} selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=${selkies_port} --enable_https=false --encoder=${enc} ${modern_encoder_args} --framerate=${stream_fps} --video_bitrate=${video_bitrate} --audio_bitrate=${audio_bitrate} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
+      as_user "export DISPLAY=:99 XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}'; . /opt/gstreamer/gst-env; unset GBM_BACKENDS_PATH GBM_BACKEND; export LD_LIBRARY_PATH=/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32:\${LD_LIBRARY_PATH:-}; timeout --kill-after=5s 45s python3 /opt/dpadcloud/dpad_nvenc.py check ${compositor_egl} ${enc} ${stream_width} ${stream_height} ${stream_fps} ${video_bitrate} '${DPAD_VIDEO_PACKETLOSS:-0}'" >&2 || return 1
+      echo "export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_DESKTOP_CLIENT=${DPAD_DESKTOP_CLIENT} DPAD_STREAM_WIDTH=${stream_width} DPAD_STREAM_HEIGHT=${stream_height} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; unset GBM_BACKENDS_PATH GBM_BACKEND; export __EGL_VENDOR_LIBRARY_FILENAMES=/run/dpad-nvidia/egl.json VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json LD_LIBRARY_PATH=/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32:\${LD_LIBRARY_PATH:-}; python3 /opt/dpadcloud/dpad_nvenc.py exec ${compositor_egl} selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=${selkies_port} --enable_https=false --encoder=${enc} ${modern_encoder_args} --framerate=${stream_fps} --video_bitrate=${video_bitrate} --audio_bitrate=${audio_bitrate} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
     }
     local initial_resolution initial_width initial_height initial_quality video_bitrate audio_bitrate selkies_cmd
     initial_resolution="$(_dpad_res)"
@@ -800,7 +800,7 @@ start_launcher_session() {
     # launchers while remaining a render-node client of gst-wayland-display.
     _launch_sway() {
         local wl_name="$1"
-        local egl_unset="unset DISPLAY __EGL_VENDOR_LIBRARY_FILENAMES"
+        local egl_unset="unset DISPLAY __EGL_VENDOR_LIBRARY_FILENAMES GBM_BACKENDS_PATH GBM_BACKEND"
         local egl_set="__EGL_VENDOR_LIBRARY_FILENAMES=/run/dpad-nvidia/egl.json LD_LIBRARY_PATH=/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32"
         local shared_env="WAYLAND_DISPLAY=${wl_name} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_DRIVER_FILES=/run/dpad-nvidia/nvidia_icd.json VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'"
         if ! /opt/dpadcloud/dpad-publish-desktop-config sway "$SHELL_APP" "$(_dpad_w)" "$(_dpad_h)"; then
@@ -812,7 +812,7 @@ start_launcher_session() {
 
     _launch_labwc() {
         local wl_name="$1"
-        local egl_unset="unset DISPLAY __EGL_VENDOR_LIBRARY_FILENAMES"
+        local egl_unset="unset DISPLAY __EGL_VENDOR_LIBRARY_FILENAMES GBM_BACKENDS_PATH GBM_BACKEND"
         local egl_set="__EGL_VENDOR_LIBRARY_FILENAMES=/run/dpad-nvidia/egl.json LD_LIBRARY_PATH=/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32"
         local shared_env="WAYLAND_DISPLAY=${wl_name} SWAYSOCK=${XDG_RUNTIME_DIR}/sway-ipc.labwc-compat.sock XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_DRIVER_FILES=/run/dpad-nvidia/nvidia_icd.json VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'"
         if ! /opt/dpadcloud/dpad-publish-desktop-config labwc "$SHELL_APP" "$(_dpad_w)" "$(_dpad_h)"; then
@@ -924,6 +924,8 @@ if ! /opt/dpadcloud/dpad-nvidia-egl check; then
 fi
 # Fixed, root-owned metadata; never inherit a user-supplied Mesa/vendor override.
 # The SONAME is shared by ELF64 and ELF32 for Steam/Proton children.
+# Use the validated ABI-specific conventional GBM registrations.
+unset GBM_BACKENDS_PATH GBM_BACKEND
 export __EGL_VENDOR_LIBRARY_FILENAMES=/run/dpad-nvidia/egl.json
 export VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json
 export VK_DRIVER_FILES=/run/dpad-nvidia/nvidia_icd.json
