@@ -1,5 +1,12 @@
 # DpadPlay Gaming Image Runbook
 
+> **2026-09-05 source candidate — not deployed:** protected private NVIDIA EGL
+> registration now validates exact host userspace before readiness. A rebuilt
+> image containing `dpad-nvidia-egl` and the updated installer is required;
+> an entrypoint-only hotfix on an old image deliberately fails. See
+> [packaging requirements, local results, and pending GPU checklist](NVIDIA-HOST-DRIVER-ACCEPTANCE.md).
+
+
 > **Current source architecture (2026-08-16): launcher-only desktop.** The image
 > has one production runtime: Selkies with `gst-wayland-display` as the compositor
 > and capture source, nested Sway as the default desktop/XWayland provider, and the
@@ -203,9 +210,19 @@ Useful logs inside the container:
 
 ## Driver matrix
 
+Host bootstrap policy: `DPAD_DRIVER_POLICY=validated` (default) retains the matrix
+below. Explicit `host` requires a working installed NVIDIA driver and bypasses
+all driver package swaps, upgrades, and downgrades. `DPAD_SKIP_DRIVER_SWAP=1`
+remains an alias when policy is unset or `host`; conflicting or invalid values
+fail. Modeset remains a separate bootstrap requirement. Do not make host-first
+the production default until GPU acceptance across the relevant providers.
+
+
 - OVH desktop proprietary 580: keep.
 - Scaleway 580-server: swap to open 580.
-- UpCloud 595: downgrade to open 580.
+- UpCloud 595: retain the validated downgrade to open 580 by default; explicit
+  `host` preservation is for separately approved acceptance. The isolated valid
+  manifest probe passed device EGL, not streaming/game acceptance.
 - Hyperstack R570-open: keep.
 - MassedCompute R580-open: keep.
 - `ensure_driver_580` remains provider-gated; do not make it universal.
@@ -215,7 +232,7 @@ Useful logs inside the container:
 | Symptom | Cause / fix |
 |---|---|
 | Container exits before `DPAD_READY` | Inspect `/tmp/selkies.log`, PipeWire logs, and `docker logs`. Verify `/dev/dri` and the assigned NVIDIA device are exposed. |
-| `waylanddisplaysrc` EGL init fails with `dri2 screen` | Wrong provider driver variant. Apply the driver matrix above; Scaleway server-580 and UpCloud 595 are not usable. |
+| `waylanddisplaysrc` EGL init fails with `dri2 screen` | First inspect private EGL metadata and exact-version library resolution. An empty system NVIDIA vendor manifest reproduced this error on 595; valid metadata passed isolated NVIDIA device EGL. Full 595 support remains unaccepted; retain the validated policy and investigate with the approved canary checklist. |
 | `DPAD_READY` appears but no launcher after connecting | Inspect `/run/dpadcloud/${DPAD_DESKTOP_CLIENT:-sway}-client.log`; verify the browser reached Selkies through HTTPS and created a real WebRTC peer. |
 | Steam card appears to do nothing | Inspect `/tmp/launcher.log`, `/tmp/steam-bootstrap.log`, and Steam processes. Verify `/usr/local/bin/steam` and `/usr/bin/steam` are executable. |
 | Steam opens an unexpected presentation mode | The image is stale. Current source installs `/usr/local/bin/steam`, which always starts the standard desktop client even if a cached launcher bundle supplies obsolete flags. |
@@ -231,6 +248,8 @@ Useful logs inside the container:
 ## Source validation
 
 ```bash
+python3 scripts/test_nvidia_egl_runtime.py
+python3 scripts/test_host_driver_policy.py
 python3 scripts/test_launcher_only_architecture.py
 python3 scripts/test_desktop_client_selection.py
 python3 scripts/test_desktop_runtime_helpers.py

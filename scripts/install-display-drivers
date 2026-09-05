@@ -1,7 +1,7 @@
 #!/bin/bash
 # install-display-drivers — ported from vast-ai/base-image (ROOT/opt/instance-tools/bin/).
 #
-# Installs NVIDIA display-driver *userspace* libraries (OpenGL / GLX / EGL / OptiX
+# Installs NVIDIA display-driver *userspace* libraries (OpenGL / GLX / EGL
 # / Vulkan, 32- and 64-bit) matching the host's driver version.
 #
 # Why DpadCloud needs this: some Vast hosts install only the *compute* portion of
@@ -11,31 +11,50 @@
 # — and there's no way to know before renting. This downloads the exact matching
 # NVIDIA .run, extracts the libraries to /opt/nvidia-drivers, and registers them
 # with ldconfig (at a *lower* priority than the toolkit libs, so toolkit-mounted
-# libs win when present).
+# libs win for callers without the explicit compositor library-path override).
 #
-# NOTE: this does NOT install libnvidia-encode (NVENC) — that is injected by the
+# NOTE: raw extraction may contain compute/video files, but only the explicit
+# graphics projection is registered or selected. libnvidia-encode is supplied by the
 # container toolkit via the `video`/`all` driver capability. NVENC's multi-GPU
 # peer-init bug (#1249) is handled separately by the flexgrip interposer.
 #
-# Idempotent: re-running is a no-op once libs for the current driver version are
-# installed (re-extracts only if the host driver version changed).
+# Idempotent: cached libraries are revalidated and private metadata is published
+# on every run (re-extracts if the host driver version changed or DDX is missing).
 # Requirements: root, internet, an NVIDIA GPU. Downloads ~300 MB on first run.
 
-set -u
+set -euo pipefail
+umask 022
+
+# Required on old images too: never continue with a missing helper.
+/opt/dpadcloud/dpad-nvidia-egl prepare
 
 NVIDIA_DRIVERS_DIR="/opt/nvidia-drivers"
 # Lower priority than container toolkit libs (zz-* sorts after the toolkit confs)
 NVIDIA_DRIVERS_LDCONF="/etc/ld.so.conf.d/zz-nvidia-drivers.conf"
 
+# Both cold extraction and old warm caches use the same graphics-only projection.
+# -n creates package SONAME links without registering the raw cache. Replace the
+# old broad ldconfig file on every run, then rebuild the actual system cache.
+publish_display_libraries() {
+    ldconfig -n "${NVIDIA_DRIVERS_DIR}/lib64" "${NVIDIA_DRIVERS_DIR}/lib32"
+    /opt/dpadcloud/dpad-nvidia-egl publish
+    {
+        echo "${NVIDIA_DRIVERS_DIR}/graphics/lib64"
+        echo "${NVIDIA_DRIVERS_DIR}/graphics/lib32"
+    } > "$NVIDIA_DRIVERS_LDCONF"
+    ldconfig
+    /opt/dpadcloud/dpad-nvidia-egl check
+}
+
 configure_nvidia_display_drivers() {
-    command -v nvidia-smi &>/dev/null || { echo "No nvidia-smi / GPU — nothing to do"; return 0; }
+    command -v nvidia-smi &>/dev/null || { echo "ERROR: no nvidia-smi / GPU"; return 1; }
 
     # Read driver version from kernel module
     local DRIVER_VERSION
     DRIVER_VERSION="$(head -n1 </proc/driver/nvidia/version | awk '{ for(i=1;i<=NF;i++) if($i ~ /^[0-9]+\.[0-9]+(\.[0-9]+)?$/) { print $i; exit } }')"
     if [[ -z "$DRIVER_VERSION" ]]; then
         echo "Warning: Could not determine NVIDIA driver version from /proc"
-        return 0
+        return 1
     fi
 
     # If we already extracted libs for this exact driver version, ensure
@@ -44,13 +63,7 @@ configure_nvidia_display_drivers() {
         local CACHED_VERSION
         CACHED_VERSION="$(<"${NVIDIA_DRIVERS_DIR}/.driver-version")"
         if [[ "$CACHED_VERSION" == "$DRIVER_VERSION" ]] && [[ -f /usr/lib/xorg/modules/nvidia/drivers/nvidia_drv.so ]]; then
-            if [[ ! -f "$NVIDIA_DRIVERS_LDCONF" ]]; then
-                {
-                    echo "${NVIDIA_DRIVERS_DIR}/lib64"
-                    echo "${NVIDIA_DRIVERS_DIR}/lib32"
-                } > "$NVIDIA_DRIVERS_LDCONF"
-                ldconfig
-            fi
+            publish_display_libraries
             echo "NVIDIA display driver ${DRIVER_VERSION} libs already installed"
             return 0
         fi
@@ -78,7 +91,7 @@ configure_nvidia_display_drivers() {
         "https://international.download.nvidia.com/XFree86/Linux-${DRIVER_ARCH}/${DRIVER_VERSION}" \
         "https://international.download.nvidia.com/tesla/${DRIVER_VERSION}"; do
         echo "Downloading ${BASE_URL}/${RUN_FILE} ..."
-        if curl -fL --progress-bar -o "${TMPDIR}/${RUN_FILE}" "${BASE_URL}/${RUN_FILE}"; then
+        if curl -fL --connect-timeout 15 --max-time 300 --retry 2 --progress-bar -o "${TMPDIR}/${RUN_FILE}" "${BASE_URL}/${RUN_FILE}"; then
             DOWNLOAD_OK=true
             break
         fi
@@ -87,7 +100,7 @@ configure_nvidia_display_drivers() {
     if ! $DOWNLOAD_OK; then
         echo "Warning: Failed to download NVIDIA driver ${DRIVER_VERSION} .run package"
         rm -rf "$TMPDIR"
-        return 0
+        return 1
     fi
 
     # Extract without running nvidia-installer
@@ -95,7 +108,7 @@ configure_nvidia_display_drivers() {
     if ! sh "${TMPDIR}/${RUN_FILE}" --extract-only --target "$EXTRACT_DIR" 2>/dev/null; then
         echo "Warning: Failed to extract NVIDIA driver .run package"
         rm -rf "$TMPDIR"
-        return 0
+        return 1
     fi
 
     # Copy libraries and Vulkan manifests
@@ -128,7 +141,7 @@ configure_nvidia_display_drivers() {
         done
         # Xorg dlopens the unversioned libglx.so — point it at the nvidia build.
         local _glxv
-        _glxv=$(ls /usr/lib/xorg/modules/nvidia/extensions/libglx.so.* 2>/dev/null | head -1)
+        _glxv=$(ls /usr/lib/xorg/modules/nvidia/extensions/libglx.so.* 2>/dev/null | head -1) || true
         [[ -n "$_glxv" ]] && ln -sf "$(basename "$_glxv")" \
             /usr/lib/xorg/modules/nvidia/extensions/libglx.so
         echo "Installed nvidia_drv.so + libglx (X DDX) under /usr/lib/xorg/modules/nvidia"
@@ -145,23 +158,8 @@ configure_nvidia_display_drivers() {
         echo "Installed 32-bit NVIDIA display driver libs"
     fi
 
-    # Point the Vulkan loader at our manifests if they aren't already
-    # in a standard search path.  Only write if the file is not a
-    # read-only bind-mount from the toolkit.
-    if [[ -f "${NVIDIA_DRIVERS_DIR}/lib64/nvidia_icd.json" ]]; then
-        local icd_dest="/etc/vulkan/icd.d/nvidia_icd.json"
-        mkdir -p /etc/vulkan/icd.d
-        if cp -f "${NVIDIA_DRIVERS_DIR}/lib64/nvidia_icd.json" "$icd_dest" 2>/dev/null; then
-            echo "Installed Vulkan ICD manifest -> ${icd_dest}"
-        fi
-    fi
-    if [[ -f "${NVIDIA_DRIVERS_DIR}/lib64/nvidia_layers.json" ]]; then
-        local layers_dest="/etc/vulkan/implicit_layer.d/nvidia_layers.json"
-        mkdir -p /etc/vulkan/implicit_layer.d
-        if cp -f "${NVIDIA_DRIVERS_DIR}/lib64/nvidia_layers.json" "$layers_dest" 2>/dev/null; then
-            echo "Installed Vulkan implicit layer manifest -> ${layers_dest}"
-        fi
-    fi
+    # EGL and headless Vulkan metadata are published privately below. Never
+    # copy over toolkit-mounted /usr/share/glvnd or /etc/vulkan files.
 
     # Record version for cache validation on next run
     echo "$DRIVER_VERSION" > "${NVIDIA_DRIVERS_DIR}/.driver-version"
@@ -169,12 +167,7 @@ configure_nvidia_display_drivers() {
     # Clean up temp files
     rm -rf "$TMPDIR"
 
-    # Register library paths with ldconfig
-    {
-        echo "${NVIDIA_DRIVERS_DIR}/lib64"
-        echo "${NVIDIA_DRIVERS_DIR}/lib32"
-    } > "$NVIDIA_DRIVERS_LDCONF"
-    ldconfig
+    publish_display_libraries
 
     echo "NVIDIA display driver ${DRIVER_VERSION} libs configured. You may need to"
     echo "restart any process that needs them (e.g. the relevant supervisor service)."

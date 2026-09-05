@@ -373,16 +373,16 @@ RUN chmod +x /opt/dpadcloud/dpad-validate-stream-fps /opt/dpadcloud/dpad-resolve
 # manual debug fallbacks). dpad-launch (the deprecated Vast steamcmd headless
 # launcher, no Steam UI — docs/PROJECT_STATE.md §7) is NO LONGER baked in.
 # mws-autopair + bubbleroot are GONE (mws/Sunshine + proot removed).
-COPY scripts/vgl-steam scripts/proton-wined3d scripts/vgl-test scripts/install-display-drivers /opt/dpadcloud/
+COPY scripts/vgl-steam scripts/proton-wined3d scripts/vgl-test scripts/install-display-drivers scripts/dpad-nvidia-egl /opt/dpadcloud/
 # Strip CR (CRLF) — repo is edited on Windows; `#!/bin/bash\r` fails to exec.
 RUN sed -i 's/\r$//' /opt/dpadcloud/entrypoint.sh /opt/dpadcloud/healthcheck.sh \
         /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \
-        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/evdev_bridge.py \
+        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/dpad-nvidia-egl /opt/dpadcloud/evdev_bridge.py \
         /opt/dpadcloud/extract-nvrtc.sh \
         ${HOME}/.config/sunshine/sunshine.conf 2>/dev/null || true && \
     chmod +x /opt/dpadcloud/*.sh \
         /opt/dpadcloud/vgl-steam /opt/dpadcloud/proton-wined3d /opt/dpadcloud/vgl-test \
-        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/extract-nvrtc.sh && \
+        /opt/dpadcloud/install-display-drivers /opt/dpadcloud/dpad-nvidia-egl /opt/dpadcloud/extract-nvrtc.sh && \
     chown -R ${USERNAME}:${USERNAME} ${HOME}/.config && \
     rm -f ${HOME}/.config/autostart/*.desktop 2>/dev/null || true
 

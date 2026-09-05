@@ -745,7 +745,7 @@ start_launcher_session() {
       stream_height="${resolution#*x}"
       quality="$(_dpad_quality "$stream_width" "$stream_height")" || return 1
       read -r video_bitrate audio_bitrate <<<"$quality"
-      echo "export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_DESKTOP_CLIENT=${DPAD_DESKTOP_CLIENT} DPAD_STREAM_WIDTH=${stream_width} DPAD_STREAM_HEIGHT=${stream_height} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=${selkies_port} --enable_https=false --encoder=${enc} --framerate=${stream_fps} --video_bitrate=${video_bitrate} --audio_bitrate=${audio_bitrate} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
+      echo "export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_DESKTOP_CLIENT=${DPAD_DESKTOP_CLIENT} DPAD_STREAM_WIDTH=${stream_width} DPAD_STREAM_HEIGHT=${stream_height} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; export __EGL_VENDOR_LIBRARY_FILENAMES=/run/dpad-nvidia/egl.json VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json LD_LIBRARY_PATH=/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32:\${LD_LIBRARY_PATH:-}; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=${selkies_port} --enable_https=false --encoder=${enc} --framerate=${stream_fps} --video_bitrate=${video_bitrate} --audio_bitrate=${audio_bitrate} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
     }
     local initial_resolution initial_width initial_height initial_quality video_bitrate audio_bitrate selkies_cmd
     initial_resolution="$(_dpad_res)"
@@ -784,8 +784,8 @@ start_launcher_session() {
     _launch_sway() {
         local wl_name="$1"
         local egl_unset="unset DISPLAY __EGL_VENDOR_LIBRARY_FILENAMES"
-        local egl_set="__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
-        local shared_env="WAYLAND_DISPLAY=${wl_name} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'"
+        local egl_set="__EGL_VENDOR_LIBRARY_FILENAMES=/run/dpad-nvidia/egl.json LD_LIBRARY_PATH=/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32"
+        local shared_env="WAYLAND_DISPLAY=${wl_name} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'"
         if ! /opt/dpadcloud/dpad-publish-desktop-config sway "$SHELL_APP" "$(_dpad_w)" "$(_dpad_h)"; then
             echo "[!] Failed to publish Sway configuration" >&2
             return 1
@@ -796,8 +796,8 @@ start_launcher_session() {
     _launch_labwc() {
         local wl_name="$1"
         local egl_unset="unset DISPLAY __EGL_VENDOR_LIBRARY_FILENAMES"
-        local egl_set="__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
-        local shared_env="WAYLAND_DISPLAY=${wl_name} SWAYSOCK=${XDG_RUNTIME_DIR}/sway-ipc.labwc-compat.sock XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'"
+        local egl_set="__EGL_VENDOR_LIBRARY_FILENAMES=/run/dpad-nvidia/egl.json LD_LIBRARY_PATH=/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32"
+        local shared_env="WAYLAND_DISPLAY=${wl_name} SWAYSOCK=${XDG_RUNTIME_DIR}/sway-ipc.labwc-compat.sock XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'"
         if ! /opt/dpadcloud/dpad-publish-desktop-config labwc "$SHELL_APP" "$(_dpad_w)" "$(_dpad_h)"; then
             echo "[!] Failed to publish Labwc configuration" >&2
             return 1
@@ -895,26 +895,21 @@ fi
 # This does NOT touch libnvidia-encode (NVENC) — that's toolkit-injected; the
 # multi-GPU NVENC peer-init bug (#1249) is handled by the flexgrip block below.
 echo "[*] Ensuring NVIDIA display-driver userspace libs (libGL/EGL/Vulkan)..."
-if [ -x /opt/dpadcloud/install-display-drivers ]; then
-    /opt/dpadcloud/install-display-drivers 2>&1 | sed 's/^/    /' || echo "    (display-driver install skipped/failed, continuing)"
-else
-    echo "    install-display-drivers not present — skipping (graphics libs rely on toolkit injection)"
+if ! /opt/dpadcloud/install-display-drivers 2>&1 | sed 's/^/    /'; then
+    echo "ERROR: exact host NVIDIA userspace/EGL setup failed; refusing startup" >&2
+    exit 1
 fi
-
-# --- Vulkan ICD: use libEGL_nvidia.so.0 in headless/no-X11 envs (driver 595+) ---
-# NVIDIA's 595 driver (Vulkan 1.4) libGLX_nvidia.so.0 Vulkan ICD fails to init
-# without an X display server — the loader reports "Could not get 'vkCreateInstance'
-# via 'vk_icdGetInstanceProcAddr'" and vkCreateInstance returns NULL (driver init
-# failed). NVIDIA's own installed-components docs state libEGL_nvidia.so.0 should be
-# used as the Vulkan ICD "in environments where X11 client libraries are not
-# available" — and the launcher desktop --backend headless path has no X display server.
-# The .run installer's nvidia_icd.json points at libGLX_nvidia.so.0; rewrite it to
-# libEGL_nvidia.so.0 (idempotent; both libs export the full Vulkan ICD entry points).
-if [ -f /etc/vulkan/icd.d/nvidia_icd.json ] && [ -x /usr/bin/sed ]; then
-    if sed -i 's#"library_path"[[:space:]]*:[[:space:]]*"libGLX_nvidia.so.0"#"library_path" : "libEGL_nvidia.so.0"#' /etc/vulkan/icd.d/nvidia_icd.json 2>/dev/null; then
-        echo "    Vulkan ICD: pinned to libEGL_nvidia.so.0 (headless/no-X11 fix for driver 595+)"
-    fi
+# Old images have a permissive installer and no helper. A streamed entrypoint
+# alone must not claim readiness there; rebuild or ship a complete pinned bundle.
+if ! /opt/dpadcloud/dpad-nvidia-egl check; then
+    echo "ERROR: required NVIDIA EGL runtime helper/metadata unavailable; rebuild required" >&2
+    exit 1
 fi
+# Fixed, root-owned metadata; never inherit a user-supplied Mesa/vendor override.
+# The SONAME is shared by ELF64 and ELF32 for Steam/Proton children.
+export __EGL_VENDOR_LIBRARY_FILENAMES=/run/dpad-nvidia/egl.json
+export VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json
+export LD_LIBRARY_PATH="/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 # --- Render-node permissions for gst-wayland-display and nested Sway ---
 # Provider images can expose renderD128 with a host GID that maps to an unrelated

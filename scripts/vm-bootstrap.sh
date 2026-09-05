@@ -56,6 +56,7 @@
 #                           --privileged; legacy = old --privileged --gpus
 #                           device=i, no isolation, debug only)
 #   DPAD_TURN_BASE_PORT     default 3478
+#   DPAD_DRIVER_POLICY    validated (default) | host (explicit canary opt-in)
 #   DPAD_BUILD=1            clone+build instead of pull (dev path)
 #   DPAD_REPO_URL, DPAD_REPO_DIR, SELKIES_BASIC_AUTH_USER
 # =============================================================================
@@ -77,7 +78,9 @@ REPO_URL="${DPAD_REPO_URL:-https://github.com/ForcesPT/container-gaming.git}"
 REPO_DIR="${DPAD_REPO_DIR:-/opt/dpadcloud/container-gaming}"
 SCRIPT_PATH="/opt/dpadcloud/vm-bootstrap.sh"
 DPAD_STREAM_HOTFIX_UPDATER_SHA256="14875689d6a9c50ac4d535e79f20ac68f9e0ad6a890c159837b0e6bc876d9043"
-DPAD_STREAM_HOTFIX_ENTRYPOINT_SHA256="354e0de5b129679a5527bb07f5bb3330294903541973a8e0d94b5cec01daa6fa"
+# This source candidate requires an image with dpad-nvidia-egl + the updated
+# installer. Do not roll out this bootstrap/entrypoint to old production images.
+DPAD_STREAM_HOTFIX_ENTRYPOINT_SHA256="88985bc21b6adfd803fc9fa5a9eb93ea85e0bb682643029f913e581372ee5ecf"
 DPAD_STREAM_HOTFIX_RESOLVER_SHA256="ba6738a8a0817c469a54e251a758440883ff18e3e2bbecc472b260ac8d4c31f9"
 DPAD_STREAM_HOTFIX_BROWSER_PATCH_SHA256="4cbe62015084171a5b948096b403fbf090bbec8b42074766978de48490844f03"
 # Image tag is selected dynamically by image_tag_for_gpu() in Phase 3:
@@ -198,19 +201,34 @@ install_open_580_and_reboot() {
 }
 
 ensure_driver_580() {
-    # PROBE knob (default off → no regression): skip the driver swap/downgrade
-    # entirely so the SHIPPED driver stays. Used to test whether a given shipped
-    # driver works for the compositor's EGL/GBM glamor without the swap — e.g.
-    # UpCloud's 595 (severe L4 flicker on retired compositor-headless, but does it crash
-    # the gst-wayland-display compositor's EGL init like the -580-server variant
-    # did, or just flicker?). Set DPAD_SKIP_DRIVER_SWAP=1 in /etc/environment
-    # before `vm-bootstrap.sh install`. The shipped driver is left untouched
-    # (no apt install, no DKMS build, no reboot) → the fastest possible boot.
-    if [ "${DPAD_SKIP_DRIVER_SWAP:-0}" = "1" ]; then
-        log "DPAD_SKIP_DRIVER_SWAP=1 — skipping the driver swap/downgrade (PROBE; the shipped driver stays)"
+    # Staged adoption: validated remains the production default. Host mode
+    # opts out of *all* package swaps; successful EGL registration alone is not
+    # GPU/streaming acceptance. Keep the old canary knob as a strict alias.
+    local policy="${DPAD_DRIVER_POLICY-validated}" drv
+    case "${DPAD_SKIP_DRIVER_SWAP-0}" in
+        0) ;;
+        1)
+            if [ "${DPAD_DRIVER_POLICY+x}" = x ] && [ "$policy" != host ]; then
+                err "DPAD_SKIP_DRIVER_SWAP=1 conflicts with DPAD_DRIVER_POLICY"; return 1
+            fi
+            policy=host ;;
+        *) err "invalid DPAD_SKIP_DRIVER_SWAP (expected 0 or 1)"; return 1 ;;
+    esac
+    case "$policy" in validated|host) ;; *) err "invalid DPAD_DRIVER_POLICY (expected validated or host)"; return 1 ;; esac
+    if [ "$policy" = host ]; then
+        drv="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null)" || {
+            err "host driver policy requires a working NVIDIA GPU driver"; return 1;
+        }
+        local version
+        [ -n "$drv" ] || { err "no host GPU driver detected"; return 1; }
+        while IFS= read -r version; do
+            [[ "$version" =~ ^[0-9]{3}\.[0-9]{1,3}(\.[0-9]{1,3})?$ ]] || {
+                err "invalid host NVIDIA driver version"; return 1;
+            }
+        done <<< "$drv"
+        log "DPAD_DRIVER_POLICY=host — preserving installed NVIDIA driver $drv (GPU acceptance required)"
         return 0
     fi
-    local drv
     drv="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | tr -d '[:space:]')"
     log "NVIDIA driver = ${drv:-?} (need 580.x on the L4 pool)"
     [ -z "$drv" ] && { log "no driver detected — skipping driver pin (template has none?)"; return 0; }
@@ -295,7 +313,7 @@ ensure_driver_580() {
             log "driver already 580 LTS (open variant) — good"
             return 0
             ;;
-        595.*) : ;;  # the known-bad flicker driver — downgrade below
+        595.*) : ;;  # retained validated fallback until full host-mode acceptance
         *)    log "WARNING: driver $drv is not 580 or 595 — leaving it (only 595 is auto-downgraded)"; return 0 ;;
     esac
 

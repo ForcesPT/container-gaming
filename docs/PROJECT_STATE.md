@@ -1,5 +1,22 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-05 NVIDIA host-driver EGL — SOURCE CANDIDATE; GPU/BUILD ACCEPTANCE
+> PENDING.** The UpCloud 595 canary isolated an empty GLVND vendor manifest as
+> an immediate registration blocker: a separate process initialized real NVIDIA
+> device EGL using valid metadata and the installed exact 595 userspace. This
+> does not establish streaming/game compatibility. The installer now validates
+> exact host-matching libraries and atomically publishes protected private EGL
+> and headless Vulkan manifests; Selkies, Sway, and Labwc receive them explicitly.
+> Missing/unsafe/partial setup fails before `DPAD_READY`, including an old image
+> without the new helper. `DPAD_DRIVER_POLICY=host` is an explicit preservation
+> opt-in; `validated` remains default with the existing provider exceptions and
+> 595 fallback. **Rebuild required: the existing three-file entrypoint hotfix
+> cannot supply the new helper/installer.** No control-plane pin changed, no
+> image built, and no VM created. See [source handoff and future GPU checklist](NVIDIA-HOST-DRIVER-ACCEPTANCE.md).
+> Historical claims below that 595 must inherently fail EGL are superseded by
+> this evidence; the production fallback remains pending full acceptance.
+
+
 > **2026-08-29 adaptive H.264/Opus quality — SOURCE COMPLETE, GPU ACCEPTANCE
 > PENDING.** Selkies no longer falls back to its low 8 Mbps video / 128 kbps
 > audio defaults. `dpad-resolve-stream-quality` derives a validated H.264 CBR

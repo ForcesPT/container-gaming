@@ -1,0 +1,344 @@
+#!/usr/bin/env python3
+"""Validate exact kernel-matching userspace and publish private loader metadata.
+
+No kernel installation, GPU initialization, or streaming acceptance is performed.
+Root-owned paths are the trust boundary; no environment-selected output paths.
+"""
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import shutil
+import stat
+import struct
+import subprocess
+import sys
+import tempfile
+
+OWNER = 0
+TRUST_ROOT = Path("/")
+LIBROOT = Path("/opt/nvidia-drivers")
+GRAPHICS = LIBROOT / "graphics"
+RUNTIME = Path("/run/dpad-nvidia")
+VERSION_FILE = Path("/proc/driver/nvidia/version")
+LDCONF = Path("/etc/ld.so.conf.d/zz-nvidia-drivers.conf")
+
+# Only NVIDIA graphics providers and their graphics dependencies get loader
+# precedence. gpucomp/rtcore/allocator are shared with compute but are also
+# graphics dependencies; CUDA, NVENC/NVCUVID, OptiX, NVML, PTX/JIT and generic
+# GLVND dispatch libraries remain owned by the toolkit/system/CUDA compat.
+# External EGL platform libraries carry independent versions.
+GRAPHICS_LIBRARIES = frozenset({
+    'libEGL_nvidia', 'libGLX_nvidia', 'libGLESv1_CM_nvidia', 'libGLESv2_nvidia',
+    'libnvidia-eglcore', 'libnvidia-glcore', 'libnvidia-glsi',
+    'libnvidia-glvkspirv', 'libnvidia-gpucomp', 'libnvidia-rtcore',
+    'libnvidia-allocator', 'libnvidia-tls', 'libnvidia-vulkan-producer',
+    'libnvidia-egl-gbm', 'libnvidia-egl-wayland',
+    'libnvidia-egl-xcb', 'libnvidia-egl-xlib',
+})
+
+
+def graphics_name(name):
+    stem, separator, suffix = name.partition('.so')
+    return (stem in GRAPHICS_LIBRARIES and separator
+            and (not suffix or re.fullmatch(r'(\.[0-9]+)+', suffix)))
+
+
+def graphics_files(bits):
+    directory = LIBROOT / f'lib{bits}'
+    files = {}
+    for path in directory.iterdir():
+        if not graphics_name(path.name):
+            continue
+        target = path.resolve(strict=True)
+        # A graphics alias must not smuggle another library into precedence.
+        if target.parent != directory or not graphics_name(target.name):
+            raise ValueError(f'invalid graphics library target: {path}')
+        protected(target, public=True)
+        files[path.name] = path
+    return files
+
+
+def publish_graphics(version):
+    # The raw .run cache is retained but is never a loader directory. Rebuild
+    # this protected projection on EVERY publication, including warm old caches.
+    # Startup remains fail-closed until both architectures and manifests pass.
+    for bits in (64, 32):
+        library(bits, version, LIBROOT)
+    secure_tree(GRAPHICS)
+    if GRAPHICS.exists():
+        shutil.rmtree(GRAPHICS)
+    GRAPHICS.mkdir(mode=0o755)
+    for bits in (64, 32):
+        destination = GRAPHICS / f'lib{bits}'
+        destination.mkdir(mode=0o755)
+        for name, source in graphics_files(bits).items():
+            if source.is_symlink():
+                (destination / name).symlink_to(source.resolve(strict=True).name)
+            else:
+                shutil.copy2(source, destination / name)
+
+
+def check_graphics():
+    secure_tree(GRAPHICS)
+    for bits in (64, 32):
+        directory = GRAPHICS / f'lib{bits}'
+        expected = graphics_files(bits)
+        if {p.name for p in directory.iterdir()} != set(expected):
+            raise ValueError(f'unexpected/missing graphics loader files: {directory}')
+        for name in expected:
+            target = (directory / name).resolve(strict=True)
+            if target.parent != directory or not graphics_name(target.name):
+                raise ValueError(f'invalid published graphics target: {directory / name}')
+
+
+def protected(path, *, directory=False, missing=False, public=False):
+    """Reject symlinks and untrusted ancestors before accessing root-owned data.
+
+    Trusted root processes can mutate these paths; session users cannot. Do not
+    chmod/chown an existing unsafe directory into apparent compliance.
+    """
+    if not path.is_absolute() or '..' in path.parts:
+        raise ValueError(f'noncanonical path: {path}')
+    parts = path.relative_to(TRUST_ROOT).parts
+    current = TRUST_ROOT
+    for part in ('', *parts):
+        if part:
+            current /= part
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            if missing:
+                return
+            raise
+        if stat.S_ISLNK(info.st_mode) or info.st_uid != OWNER or info.st_mode & 0o022:
+            raise ValueError(f'unsafe owner/mode/symlink: {current}')
+        if current != path or directory:
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError(f'not a directory: {current}')
+            if public and not info.st_mode & 0o001:
+                raise ValueError(f'directory is not traversable by session users: {current}')
+        elif not stat.S_ISREG(info.st_mode):
+            raise ValueError(f'not a regular file: {current}')
+        elif public and not info.st_mode & 0o004:
+            raise ValueError(f'file is not readable by session users: {current}')
+
+
+def no_mounts(path):
+    # mountinfo detects file bind mounts and nested mounts
+    # before installer cache replacement. /proc mount metadata is kernel-owned.
+    for line in Path('/proc/self/mountinfo').read_text().splitlines():
+        mount = Path(re.sub(r'\\([0-7]{3})', lambda m: chr(int(m[1], 8)), line.split()[4]))
+        ancestor = (TRUST_ROOT in mount.parents and mount in path.parents)
+        # /run may be a container-owned tmpfs. Other mounted ancestors (e.g.
+        # a host bind over /opt or /etc) must not receive installation writes.
+        if mount == Path("/run") and line.split(' - ', 1)[1].split()[0] == 'tmpfs':
+            ancestor = False
+        if mount == path or path in mount.parents or ancestor:
+            raise ValueError(f'refusing mounted installation/publication target: {mount}')
+
+
+def secure_tree(path):
+    protected(path, directory=True, missing=True, public=True)
+    no_mounts(path)
+    if path.exists():
+        for child in path.rglob('*'):
+            if child.is_symlink():
+                target = child.resolve(strict=True)
+                if path not in target.parents:
+                    raise ValueError(f'escaping library symlink: {child}')
+                protected(target, public='.so' in target.name)
+            else:
+                protected(child, directory=child.is_dir(), public=child.is_dir() or '.so' in child.name)
+
+
+def host_version():
+    text = VERSION_FILE.read_text().splitlines()[0]
+    match = re.search(r'\b([0-9]{3}\.[0-9]{1,3}(?:\.[0-9]{1,3})?)\b', text)
+    if not match:
+        raise ValueError('missing/unsupported NVIDIA kernel version')
+    version = match[1]
+    result = subprocess.run(['nvidia-smi', '--query-gpu=driver_version', '--format=csv,noheader'],
+                            text=True, capture_output=True, timeout=15, check=True)
+    versions = result.stdout.split()
+    if not versions or any(v != version for v in versions):
+        raise ValueError('nvidia-smi does not match the loaded kernel driver')
+    return version
+
+
+def prepare():
+    secure_tree(LIBROOT)
+    secure_tree(RUNTIME)
+    for target in (LDCONF, Path("/usr/bin/nvidia-xconfig")):
+        protected(target, missing=True)
+        no_mounts(target)
+    secure_tree(Path("/usr/lib/xorg/modules/nvidia"))
+    LIBROOT.mkdir(mode=0o755, exist_ok=True)
+    RUNTIME.mkdir(mode=0o755, exist_ok=True)
+
+
+def library(bits, version, root=GRAPHICS):
+    directory = root / f'lib{bits}'
+    exact = directory / f'libEGL_nvidia.so.{version}'
+    protected(exact, public=True)
+    with exact.open('rb') as file:
+        header = file.read(64 if bits == 64 else 52)
+    # ELF class, little-endian, ET_DYN and x86 machine. A placeholder or a
+    # filename with the right suffix is not proof of a usable shared library.
+    machine = 62 if bits == 64 else 3
+    if (len(header) != (64 if bits == 64 else 52) or header[:6] != bytes([127, 69, 76, 70, 2 if bits == 64 else 1, 1])
+            or int.from_bytes(header[16:18], 'little') != 3
+            or int.from_bytes(header[18:20], 'little') != machine):
+        raise ValueError(f'invalid ELF{bits} NVIDIA library: {exact}')
+    fields = struct.unpack('<16sHHIQQQIHHHHHH' if bits == 64 else '<16sHHIIIIIHHHHHH', header)
+    phoff, ehsize, phsize, phcount = fields[5], fields[8], fields[9], fields[10]
+    size = exact.stat().st_size
+    if (ehsize != len(header) or phsize != (56 if bits == 64 else 32)
+            or not 1 <= phcount <= 128 or phoff < ehsize or phoff + phsize * phcount > size):
+        raise ValueError(f'invalid ELF{bits} program table: {exact}')
+    kinds = set()
+    with exact.open('rb') as file:
+        file.seek(phoff)
+        for _ in range(phcount):
+            segment = struct.unpack('<IIQQQQQQ' if bits == 64 else '<IIIIIIII', file.read(phsize))
+            offset, length = (segment[2], segment[5]) if bits == 64 else (segment[1], segment[4])
+            if offset + length > size:
+                raise ValueError(f'truncated ELF{bits} segment: {exact}')
+            kinds.add(segment[0])
+    if not {1, 2} <= kinds:  # PT_LOAD and PT_DYNAMIC
+        raise ValueError(f'ELF{bits} has no loadable dynamic image: {exact}')
+    alias = directory / 'libEGL_nvidia.so.0'
+    # ldconfig creates this alias from the SONAME for both architectures.
+    if alias.resolve(strict=True) != exact:
+        raise ValueError(f'stale NVIDIA SONAME target: {alias}')
+    if not alias.is_symlink():
+        protected(alias)
+    return exact
+
+
+def validate():
+    version = host_version()
+    secure_tree(LIBROOT)
+    protected(LIBROOT / '.driver-version')
+    if (LIBROOT / '.driver-version').read_text().strip() != version:
+        raise ValueError('cached userspace version differs from loaded host driver')
+    check_graphics()
+    exact = library(64, version)
+    library(32, version)
+    # Fresh process: loader environment is effective only at exec, and a prior
+    # dlopen can cache a stale SONAME. Match the path actually mapped, not ldd.
+    probe = '''import ctypes, pathlib, sys
+lib = ctypes.CDLL('libEGL_nvidia.so.0')
+getattr(lib, '__egl_Main')
+getattr(lib, 'vk_icdGetInstanceProcAddr')
+paths = {line.split()[-1] for line in pathlib.Path('/proc/self/maps').read_text().splitlines() if 'libEGL_nvidia.so.' in line}
+if paths != {sys.argv[1]}:
+    raise RuntimeError('unexpected effective NVIDIA EGL library: ' + repr(paths))
+version = pathlib.Path(sys.argv[1]).name.removeprefix('libEGL_nvidia.so.')
+for line in pathlib.Path('/proc/self/maps').read_text().splitlines():
+    path = line.split()[-1]
+    if any(name in path for name in ('libnvidia-glsi.so.', 'libnvidia-eglcore.so.', 'libnvidia-glcore.so.', 'libnvidia-glvkspirv.so.')):
+        if not path.endswith('.so.' + version):
+            raise RuntimeError('mismatched NVIDIA EGL dependency: ' + path)
+'''
+    env = {**os.environ, 'LD_LIBRARY_PATH': f'{GRAPHICS}/lib64:{GRAPHICS}/lib32'}
+    # No session-controlled preload may execute inside this root validation.
+    env.pop('LD_PRELOAD', None)
+    env.pop('LD_AUDIT', None)
+    subprocess.run([sys.executable, '-I', '-c', probe, str(exact)], env=env,
+                   check=True, timeout=20)
+    return version
+
+
+def atomic_json(name, value, directory=RUNTIME, replace=True):
+    target = directory / name
+    protected(directory, directory=True, public=True)
+    protected(target, missing=True)
+    no_mounts(target)
+    fd, temp = tempfile.mkstemp(prefix='.' + name + '.', dir=directory)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(value, stream)
+            stream.write('\n')
+            stream.flush()
+            os.fchmod(stream.fileno(), 0o644)
+            os.fsync(stream.fileno())
+        if replace:
+            os.replace(temp, target)
+        else:
+            # Publish only if absent, including under a concurrent root writer.
+            os.link(temp, target)
+
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
+
+
+def install_optional_layer():
+    # Preserve the existing Vulkan implicit-layer installation on compute-only
+    # hosts, but never overwrite a system/toolkit manifest (even if writable).
+    source = LIBROOT / 'lib64/nvidia_layers.json'
+    destination = Path("/etc/vulkan/implicit_layer.d/nvidia_layers.json")
+    if not source.exists() or destination.exists() or destination.is_symlink():
+        return
+    protected(source)
+    protected(destination.parent, directory=True, missing=True)
+    no_mounts(destination.parent)
+    destination.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    atomic_json(destination.name, json.loads(source.read_text()), destination.parent, replace=False)
+
+
+def manifests():
+    # SONAME is intentionally architecture-neutral for Steam/Proton's 32-bit
+    # children. Both lib32 and lib64 exact-version targets are validated above.
+    source = LIBROOT / 'lib64/nvidia_icd.json'
+    protected(source)
+    metadata = json.loads(source.read_text())
+    api_version = metadata['ICD']['api_version']
+    if metadata.get('file_format_version') != '1.0.0' or not re.fullmatch(r'1\.[0-9]+\.[0-9]+', api_version):
+        raise ValueError('invalid installed Vulkan ICD metadata')
+    return {
+        'egl.json': {'file_format_version': '1.0.0', 'ICD': {'library_path': 'libEGL_nvidia.so.0'}},
+        'nvidia_icd.json': {'file_format_version': '1.0.0', 'ICD': {
+            'library_path': 'libEGL_nvidia.so.0', 'api_version': api_version}},
+    }
+
+
+def main():
+    if os.geteuid() != OWNER or platform.machine() != 'x86_64':
+        raise ValueError('requires root on x86_64')
+    if len(sys.argv) != 2 or sys.argv[1] not in ('prepare', 'publish', 'check'):
+        raise ValueError('usage: dpad-nvidia-egl prepare|publish|check')
+    if sys.argv[1] == 'prepare':
+        host_version()
+        prepare()
+        return
+    if sys.argv[1] == 'publish':
+        secure_tree(LIBROOT)
+        publish_graphics(host_version())
+    version = validate()
+    secure_tree(RUNTIME)
+    if sys.argv[1] == 'publish':
+        RUNTIME.mkdir(mode=0o755, exist_ok=True)
+        for name, value in manifests().items():
+            atomic_json(name, value)
+        install_optional_layer()
+    else:
+        protected(LDCONF)
+        if LDCONF.read_text().splitlines() != [str(GRAPHICS / f'lib{bits}') for bits in (64, 32)]:
+            raise ValueError('ldconfig must register only the graphics projection')
+        for name, value in manifests().items():
+            path = RUNTIME / name
+            protected(path, public=True)
+            if json.loads(path.read_text()) != value:
+                raise ValueError(f'invalid runtime manifest: {path}')
+    print(f'NVIDIA {version}: exact ELF64 load and ELF32 SONAME validated; private EGL/Vulkan manifests {sys.argv[1]}')
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, ValueError, IndexError, KeyError, TypeError, struct.error, subprocess.SubprocessError) as error:
+        print(f'NVIDIA EGL setup failed: {error}', file=sys.stderr)
+        sys.exit(1)
