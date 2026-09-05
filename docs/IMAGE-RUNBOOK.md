@@ -135,7 +135,8 @@ Expected flow:
 | `DPAD_DESKTOP_CLIENT` | `sway` | Nested desktop/XWayland provider: `sway` (production default) or `labwc` (experimental stacking canary). Any other value fails closed. |
 | `DPAD_VOLUME_MOUNT` | unset | In-container persistent library mount. Steam's complete install root is linked to `<volume>/steam-install`. |
 | `DPAD_GAMEPAD_INTERPOSER` | classic | Set `evdev` for the fake-libudev + evdev interposer path. |
-| `DPAD_ENCODER` | `nvh264enc` | Selkies encoder. Use another validated Selkies encoder only after a GPU/browser canary. |
+| `DPAD_ENCODER` | `nvh264enc` | Explicit `nvcudah264enc` is a local stock595 candidate; modern preflight required, GPU/browser acceptance pending. No automatic fallback. |
+| `DPAD_COMPOSITOR_EGL` | `nvidia` | Explicit `multivendor` adds the trusted image Mesa manifest only to Selkies discovery. Both Vulkan loader variables force private NVIDIA; desktops/games remain NVIDIA-only. |
 | `DPAD_WD_WIDTH` / `DPAD_WD_HEIGHT` | `1920` / `1080` | Initial outer compositor and selected nested desktop output resolution. Labwc explicitly synchronizes its output to these dimensions after startup. |
 | `DPAD_STREAM_WIDTH` / `DPAD_STREAM_HEIGHT` | `1920` / `1080` | Values forwarded by the session launcher; normally match the compositor size. |
 | `DPAD_ALLOW_LIVE_RESOLUTION` | `0` | Browser `_arg_res` commands are ignored by default so persisted client settings cannot override control-plane dimensions. Set exactly `1` only when per-session live resizing is intentionally enabled. |
@@ -272,3 +273,47 @@ bash -n entrypoint.sh healthcheck.sh scripts/dpad-launch-session scripts/vm-boot
 
 A source-only pass is not a production release. A new image must still be built,
 inspected, and exercised on an NVIDIA VM before promotion.
+
+## Local stock595 integration candidate (2026-09-05)
+
+`Dockerfile.stock595` is a differential recipe based on
+`forcespt/dpadcloud-gaming@sha256:f4bf28e7e17b6717b4c83f2e0f6d598eb0761f72543ffe065be5ff27b7ff26e8`.
+Build context is the worktree root. It bakes the entrypoint, graphics installer,
+EGL helper, quality resolver/browser patch, modern encoder module/patcher and
+runtime desktop helpers. A minimal hashed context is preserved in diagnostics.
+No build was run locally; the installed module in that exact image still needs
+build-time patch validation and runtime hash inspection. Do not overlay old host
+hotfix files onto the candidate. The three-file hotfix bundle cannot deliver
+this change by itself. No production image or driver-policy defaults changed.
+
+The isolated candidate selections are `DPAD_ENCODER=nvcudah264enc` and
+`DPAD_COMPOSITOR_EGL=multivendor`. Labwc still requires its separate explicit
+`DPAD_DESKTOP_CLIENT=labwc` opt-in. The session launcher forwards all three.
+Host-preservation policy remains an independent, explicit canary requirement;
+no provisioning/bootstrap driver changes are part of this integration.
+
+Modern encoding uses P4, ultra-low-latency tuning, quarter-resolution two-pass,
+CBR in kbit/s, no B frames/lookahead/reordering, per-IDR sequence headers and
+Selkies' existing frame-time VBV calculation. The entrypoint fixes the initial
+modern profile to GPU 0 and infinite GOP (Selkies' default); the patched API
+retains periodic keyframe support and live bitrate/FPS updates. Persisted JSON
+cannot silently change the preflighted modern encoder/profile during startup.
+
+Before each Selkies process launch, the same user/GStreamer/interposer/graphics
+loader environment runs a bounded preflight. Modern mode loads CUDA, encode and
+decode libraries through existing loader precedence, validates the patched
+Selkies encoder/plugin support, then requires three synthetic RGBx frames to
+traverse CUDA upload/conversion, the configured modern encoder, H.264 parser
+and NVIDIA decoder, reaching EOS. Missing factories/properties, rejected
+property values, failed links/PLAYING, errors, timeout or incomplete frames
+abort before launch/readiness. The bus deadline is 30 seconds; an outer timeout
+bounds setup/JIT/teardown to 45 seconds plus a five-second kill grace.
+Legacy mode retains its existing codec behavior and performs only scoped
+environment validation.
+
+The prior stock595 compute host lacked matching encode/decode libraries; the
+helper diagnoses this prerequisite and does not install packages or change the
+driver. Multi-vendor discovery is not proof of NVIDIA rendering. Exact-image
+GPU tests must still verify actual renderer/device identity, static caps,
+latency, bitrate, browser-decoded video, input, audio, stores and reconnect.
+`DPAD_READY` continues to mean signaling readiness, not browser video acceptance.

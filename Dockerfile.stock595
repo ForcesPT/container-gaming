@@ -1,0 +1,20 @@
+# Build context: this worktree root. Local recipe only; no production promotion.
+FROM forcespt/dpadcloud-gaming@sha256:f4bf28e7e17b6717b4c83f2e0f6d598eb0761f72543ffe065be5ff27b7ff26e8
+USER root
+# The pinned image supplies Gst 1.24, persistent waylanddisplaysrc, desktop,
+# launcher and interposers. Bake the entire required delta, including the quality
+# bundle omitted in the first prior canary. Do not bind old host hotfixes over it.
+COPY entrypoint.sh scripts/install-display-drivers scripts/dpad-nvidia-egl scripts/dpad-resolve-stream-quality scripts/patch_live_resolution.py scripts/dpad_nvenc.py scripts/patch_selkies_nvenc.py /opt/dpadcloud/
+# Include entrypoint/desktop runtime helpers explicitly, even where inherited.
+COPY healthcheck.sh scripts/dpad-validate-stream-fps scripts/dpad-publish-desktop-config scripts/dpad-waybar scripts/dpad-waybar-state-check scripts/dpad-labwc-set-output-mode scripts/launcher-shell scripts/launcher-toggle scripts/evdev_bridge.py scripts/extract-nvrtc.sh scripts/patch_gst_web_cursors.sh /opt/dpadcloud/
+COPY scripts/dpad_nvenc.py /usr/local/lib/python3.12/dist-packages/dpad_nvenc.py
+RUN chmod 755 /opt/dpadcloud/entrypoint.sh /opt/dpadcloud/install-display-drivers /opt/dpadcloud/dpad-nvidia-egl /opt/dpadcloud/dpad-resolve-stream-quality /opt/dpadcloud/patch_live_resolution.py /opt/dpadcloud/dpad_nvenc.py /opt/dpadcloud/patch_selkies_nvenc.py \
+    && chmod 755 /opt/dpadcloud/healthcheck.sh /opt/dpadcloud/dpad-validate-stream-fps /opt/dpadcloud/dpad-publish-desktop-config /opt/dpadcloud/dpad-waybar /opt/dpadcloud/dpad-waybar-state-check /opt/dpadcloud/dpad-labwc-set-output-mode /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/evdev_bridge.py /opt/dpadcloud/extract-nvrtc.sh /opt/dpadcloud/patch_gst_web_cursors.sh \
+    && test -s /opt/dpadcloud/libnvenc_fix.so \
+    && python3 /opt/dpadcloud/patch_selkies_nvenc.py \
+    && python3 /opt/dpadcloud/patch_live_resolution.py \
+    && python3 -m py_compile /usr/local/lib/python3.12/dist-packages/dpad_nvenc.py /usr/local/lib/python3.12/dist-packages/selkies_gstreamer/gstwebrtc_app.py \
+    && bash -n /opt/dpadcloud/entrypoint.sh
+# No ENV selector overrides: nvh264enc / NVIDIA-only discovery / Sway stay default.
+LABEL com.dpadplay.canary="stock595-local-candidate" \
+      com.dpadplay.base.digest="sha256:f4bf28e7e17b6717b4c83f2e0f6d598eb0761f72543ffe065be5ff27b7ff26e8"

@@ -695,6 +695,20 @@ start_launcher_session() {
     # → creates wayland-N in $XDG_RUNTIME_DIR). So: launch selkies, fire DPAD_READY
     # (listening), then the health loop polls for the socket and launches Sway.
     local enc="${DPAD_ENCODER:-nvh264enc}"
+    local compositor_egl="${DPAD_COMPOSITOR_EGL:-nvidia}"
+    case "$compositor_egl" in nvidia|multivendor) ;; *) echo "ERROR: invalid DPAD_COMPOSITOR_EGL" >&2; return 1 ;; esac
+    # Encoder names enter a shell command; preserve supported legacy selections.
+    case "$enc" in
+        nvh264enc|nvcudah264enc|nvh265enc|nvav1enc|vah264enc|vah265enc|vavp9enc|vaav1enc|x264enc|openh264enc|x265enc|vp8enc|vp9enc|svtav1enc|av1enc|rav1enc) ;;
+        *) echo "ERROR: unsupported DPAD_ENCODER" >&2; return 1 ;;
+    esac
+    local modern_encoder_args=""
+    if [ "$enc" = nvcudah264enc ]; then
+        modern_encoder_args="--gpu_id=0 --keyframe_distance=-1"
+        if ! [[ "${DPAD_VIDEO_PACKETLOSS:-0}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+            echo "ERROR: invalid modern NVENC packet loss profile" >&2; return 1
+        fi
+    fi
     local video_src="waylanddisplaysrc"
     local selkies_port="${DPAD_SELKIES_PORT:-16100}"
     if ! _dpad_valid_port "$selkies_port"; then
@@ -745,7 +759,10 @@ start_launcher_session() {
       stream_height="${resolution#*x}"
       quality="$(_dpad_quality "$stream_width" "$stream_height")" || return 1
       read -r video_bitrate audio_bitrate <<<"$quality"
-      echo "export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_DESKTOP_CLIENT=${DPAD_DESKTOP_CLIENT} DPAD_STREAM_WIDTH=${stream_width} DPAD_STREAM_HEIGHT=${stream_height} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; export __EGL_VENDOR_LIBRARY_FILENAMES=/run/dpad-nvidia/egl.json VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json LD_LIBRARY_PATH=/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32:\${LD_LIBRARY_PATH:-}; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=${selkies_port} --enable_https=false --encoder=${enc} --framerate=${stream_fps} --video_bitrate=${video_bitrate} --audio_bitrate=${audio_bitrate} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
+      # Same user, Gst environment, interposer and graphics-only loader order as
+      # Selkies. Every initial/restart command is gated; stdout remains command-only.
+      as_user "export DISPLAY=:99 XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}'; . /opt/gstreamer/gst-env; export LD_LIBRARY_PATH=/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32:\${LD_LIBRARY_PATH:-}; timeout --kill-after=5s 45s python3 /opt/dpadcloud/dpad_nvenc.py check ${compositor_egl} ${enc} ${stream_width} ${stream_height} ${stream_fps} ${video_bitrate} '${DPAD_VIDEO_PACKETLOSS:-0}'" >&2 || return 1
+      echo "export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_DESKTOP_CLIENT=${DPAD_DESKTOP_CLIENT} DPAD_STREAM_WIDTH=${stream_width} DPAD_STREAM_HEIGHT=${stream_height} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; export __EGL_VENDOR_LIBRARY_FILENAMES=/run/dpad-nvidia/egl.json VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json LD_LIBRARY_PATH=/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32:\${LD_LIBRARY_PATH:-}; python3 /opt/dpadcloud/dpad_nvenc.py exec ${compositor_egl} selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=${selkies_port} --enable_https=false --encoder=${enc} ${modern_encoder_args} --framerate=${stream_fps} --video_bitrate=${video_bitrate} --audio_bitrate=${audio_bitrate} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
     }
     local initial_resolution initial_width initial_height initial_quality video_bitrate audio_bitrate selkies_cmd
     initial_resolution="$(_dpad_res)"
@@ -785,7 +802,7 @@ start_launcher_session() {
         local wl_name="$1"
         local egl_unset="unset DISPLAY __EGL_VENDOR_LIBRARY_FILENAMES"
         local egl_set="__EGL_VENDOR_LIBRARY_FILENAMES=/run/dpad-nvidia/egl.json LD_LIBRARY_PATH=/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32"
-        local shared_env="WAYLAND_DISPLAY=${wl_name} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'"
+        local shared_env="WAYLAND_DISPLAY=${wl_name} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_DRIVER_FILES=/run/dpad-nvidia/nvidia_icd.json VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'"
         if ! /opt/dpadcloud/dpad-publish-desktop-config sway "$SHELL_APP" "$(_dpad_w)" "$(_dpad_h)"; then
             echo "[!] Failed to publish Sway configuration" >&2
             return 1
@@ -797,7 +814,7 @@ start_launcher_session() {
         local wl_name="$1"
         local egl_unset="unset DISPLAY __EGL_VENDOR_LIBRARY_FILENAMES"
         local egl_set="__EGL_VENDOR_LIBRARY_FILENAMES=/run/dpad-nvidia/egl.json LD_LIBRARY_PATH=/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32"
-        local shared_env="WAYLAND_DISPLAY=${wl_name} SWAYSOCK=${XDG_RUNTIME_DIR}/sway-ipc.labwc-compat.sock XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'"
+        local shared_env="WAYLAND_DISPLAY=${wl_name} SWAYSOCK=${XDG_RUNTIME_DIR}/sway-ipc.labwc-compat.sock XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} DBUS_SESSION_BUS_ADDRESS='${DBUS_SESSION_BUS_ADDRESS}' HOME=${USER_HOME} USER=${USER_NAME} VK_DRIVER_FILES=/run/dpad-nvidia/nvidia_icd.json VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json LD_PRELOAD='${LD_PRELOAD}' ${SDL_GP_ENV} SELKIES_INTERPOSER='${SELKIES_INTERPOSER}'"
         if ! /opt/dpadcloud/dpad-publish-desktop-config labwc "$SHELL_APP" "$(_dpad_w)" "$(_dpad_h)"; then
             echo "[!] Failed to publish Labwc configuration" >&2
             return 1
@@ -909,6 +926,7 @@ fi
 # The SONAME is shared by ELF64 and ELF32 for Steam/Proton children.
 export __EGL_VENDOR_LIBRARY_FILENAMES=/run/dpad-nvidia/egl.json
 export VK_ICD_FILENAMES=/run/dpad-nvidia/nvidia_icd.json
+export VK_DRIVER_FILES=/run/dpad-nvidia/nvidia_icd.json
 export LD_LIBRARY_PATH="/opt/nvidia-drivers/graphics/lib64:/opt/nvidia-drivers/graphics/lib32${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 # --- Render-node permissions for gst-wayland-display and nested Sway ---

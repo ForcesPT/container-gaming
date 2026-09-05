@@ -442,6 +442,9 @@ class NvidiaRuntimeTests(unittest.TestCase):
         gst = self.fs / 'opt/gstreamer'
         gst.mkdir()
         (gst / 'gst-env').write_text('export LD_LIBRARY_PATH=/gstreamer-fixture __EGL_VENDOR_LIBRARY_FILENAMES=/mesa-fixture\n')
+        runtime = (ROOT / 'scripts/dpad_nvenc.py').read_text()
+        runtime = runtime.replace('/run/dpad-nvidia/', str(self.fs) + '/run/dpad-nvidia/')
+        (self.fs / 'opt/dpadcloud/dpad_nvenc.py').write_text(runtime)
         publisher = self.fs / 'opt/dpadcloud/dpad-publish-desktop-config'
         publisher.write_text('#!/bin/bash\nexit 0\n')
         publisher.chmod(0o755)
@@ -457,9 +460,9 @@ class NvidiaRuntimeTests(unittest.TestCase):
             for prefix in ('/opt/', '/run/'):
                 function = function.replace(prefix, str(self.fs) + prefix)
             output = self.base / (program + '.env')
-            script = 'as_user() { bash -c "$1"; }; _dpad_res() { echo 1920x1080; }; _dpad_quality() { echo "20000 192000"; }; _dpad_w() { echo 1920; }; _dpad_h() { echo 1080; }; USER_HOME="' + str(self.base) + '"\n'
+            script = 'compositor_egl=nvidia; enc=nvh264enc; stream_fps=60; as_user() { bash -c "$1"; }; _dpad_res() { echo 1920x1080; }; _dpad_quality() { echo "20000 192000"; }; _dpad_w() { echo 1920; }; _dpad_h() { echo 1080; }; USER_HOME="' + str(self.base) + '"\n'
             script += function + '\n'
-            script += 'as_user "$(build_selkies_cmd)"' if program == 'selkies-gstreamer' else name + ' wayland-1; wait'
+            script += 'cmd=$(build_selkies_cmd) && as_user "$cmd"' if program == 'selkies-gstreamer' else name + ' wayland-1; wait'
             result = subprocess.run(['bash', '-c', script], env={**self.env, 'PROCESS_ENV': str(output)}, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             values = output.read_text().splitlines()

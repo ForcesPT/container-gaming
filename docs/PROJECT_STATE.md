@@ -1,5 +1,17 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-05 stock595 Selkies — LOCAL SOURCE ONLY, NOT BUILT.** Explicit
+> `DPAD_COMPOSITOR_EGL=multivendor` scopes NVIDIA+Mesa discovery to Selkies;
+> NVIDIA Vulkan is forced, and Sway/Labwc/game environments stay NVIDIA-only.
+> Explicit `DPAD_ENCODER=nvcudah264enc` uses the modern 1.24 property API with
+> a bounded hardware codec capability preflight before initial/restart launch.
+> Legacy encoder, NVIDIA-only discovery, Sway and validated driver policy remain
+> defaults. `Dockerfile.stock595` packages the complete differential runtime on
+> the brief's pinned image. RED/GREEN and local gate evidence is under
+> `diagnostics/stock595-local/`; no image/GPU/browser acceptance is claimed.
+> No provisioning, SSH, deployment, push or commits were performed.
+
+
 > **2026-09-05 NVIDIA host-driver EGL — SOURCE CANDIDATE; GPU/BUILD ACCEPTANCE
 > PENDING.** The UpCloud 595 canary isolated an empty GLVND vendor manifest as
 > an immediate registration blocker: a separate process initialized real NVIDIA

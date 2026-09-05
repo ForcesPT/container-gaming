@@ -360,6 +360,7 @@ launch() {
         -e DPAD_STORES="${DPAD_STORES:-}" \
         -e DPAD_DESKTOP_CLIENT="${DPAD_DESKTOP_CLIENT:-sway}" \
         -e DPAD_VIDEO_SRC="${DPAD_VIDEO_SRC:-}" \
+        -e DPAD_COMPOSITOR_EGL="${DPAD_COMPOSITOR_EGL:-nvidia}" \
         -e DPAD_ENCODER="${DPAD_ENCODER:-}" \
         -e DPAD_STREAM_WIDTH="${DPAD_STREAM_WIDTH:-1920}" \
         -e DPAD_STREAM_HEIGHT="${DPAD_STREAM_HEIGHT:-1080}" \

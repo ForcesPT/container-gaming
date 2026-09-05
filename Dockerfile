@@ -771,6 +771,9 @@ COPY --from=wayland-display-builder /out/lib/x86_64-linux-gnu/gstreamer-1.0/libg
 
 # Apply the waylanddisplaysrc capture branch to Selkies. The entrypoint always
 # selects this branch with DPAD_VIDEO_SRC=waylanddisplaysrc.
+COPY scripts/dpad_nvenc.py /usr/local/lib/python3.12/dist-packages/dpad_nvenc.py
+COPY scripts/dpad_nvenc.py scripts/patch_selkies_nvenc.py /opt/dpadcloud/
+RUN python3 /opt/dpadcloud/patch_selkies_nvenc.py
 COPY scripts/patch_selkies_waylanddisplay.py /opt/dpadcloud/patch_selkies_waylanddisplay.py
 RUN python3 /opt/dpadcloud/patch_selkies_waylanddisplay.py /usr/local/lib/python3.12/dist-packages/selkies_gstreamer/gstwebrtc_app.py \
     && rm -f /opt/dpadcloud/patch_selkies_waylanddisplay.py
