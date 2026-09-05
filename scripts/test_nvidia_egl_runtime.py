@@ -266,6 +266,43 @@ class NvidiaRuntimeTests(unittest.TestCase):
                 self.assertEqual(self.manifest.stat().st_uid, os.getuid())
                 self.assertEqual(self.helper('check').returncode, 0)
 
+    def test_stock_595_manifest_101_preserves_private_manifest_semantics(self):
+        source = self.fs / 'opt/nvidia-drivers/lib64/nvidia_icd.json'
+        stock = '{"file_format_version":"1.0.1","ICD":{"library_path":"libGLX_nvidia.so.0","api_version":"1.4.329"}}'
+        source.write_text(stock)
+        for cold in (False, True):
+            with self.subTest(cold=cold):
+                if cold:
+                    self.prepare_cold_package()
+                result = self.run_installer()
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(self.helper('check').returncode, 0)
+                self.assertEqual(source.read_text(), stock)
+                self.assertEqual(json.loads(self.manifest.read_text()), {
+                    'file_format_version': '1.0.0',
+                    'ICD': {'library_path': 'libEGL_nvidia.so.0'}})
+                self.assertEqual(json.loads((self.manifest.parent / 'nvidia_icd.json').read_text()), {
+                    'file_format_version': '1.0.0',
+                    'ICD': {'library_path': 'libEGL_nvidia.so.0', 'api_version': '1.4.329'}})
+
+    def test_unsupported_manifest_versions_and_invalid_api_fields_fail_closed(self):
+        source = self.fs / 'opt/nvidia-drivers/lib64/nvidia_icd.json'
+        invalid = [
+            {'file_format_version': version, 'ICD': {
+                'library_path': 'libGLX_nvidia.so.0', 'api_version': '1.4.329'}}
+            for version in (None, 1, '1.0.2', '1.1.0', '2.0.0', '1.0.1 ')
+        ]
+        invalid += [{'file_format_version': '1.0.1', 'ICD': icd}
+                    for icd in ({}, None, {'api_version': None},
+                                {'api_version': '2.4.329'}, {'api_version': '1.4.329junk'})]
+        for metadata in invalid:
+            with self.subTest(metadata=metadata):
+                source.write_text(json.dumps(metadata))
+                result = self.run_installer()
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertFalse(self.manifest.exists())
+                self.assertFalse((self.manifest.parent / 'nvidia_icd.json').exists())
+
     def test_zero_missing_wrong_arch_or_stale_library_fails_closed(self):
         for bits in (32, 64):
             exact = self.fs / f'opt/nvidia-drivers/lib{bits}/libEGL_nvidia.so.{self.version}'

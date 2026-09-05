@@ -296,7 +296,7 @@ def manifests():
     protected(source)
     metadata = json.loads(source.read_text())
     api_version = metadata['ICD']['api_version']
-    if metadata.get('file_format_version') != '1.0.0' or not re.fullmatch(r'1\.[0-9]+\.[0-9]+', api_version):
+    if metadata.get('file_format_version') not in ('1.0.0', '1.0.1') or not re.fullmatch(r'1\.[0-9]+\.[0-9]+', api_version):
         raise ValueError('invalid installed Vulkan ICD metadata')
     return {
         'egl.json': {'file_format_version': '1.0.0', 'ICD': {'library_path': 'libEGL_nvidia.so.0'}},
