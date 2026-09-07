@@ -537,7 +537,7 @@ ensure_docker_xfs_quota() {
     systemctl stop docker 2>/dev/null || true
     # Preserve any existing Docker state (usually just an init scaffold — the
     # image is pulled AFTER this, so /var/lib/docker is typically empty here).
-    if [ -d /var/lib/docker ] && [ ! -m /var/lib/docker ]; then
+    if [ -d /var/lib/docker ] && ! mountpoint -q /var/lib/docker; then
         mv /var/lib/docker /var/lib/docker.pre-xfs
     fi
     mkdir -p /var/lib/docker

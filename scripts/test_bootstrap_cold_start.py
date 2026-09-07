@@ -12,6 +12,20 @@ def function(name):
     return SOURCE[start:SOURCE.index('\n}\n', start) + 3]
 
 class ColdStartTests(unittest.TestCase):
+    def test_docker_state_is_preserved_before_xfs_mount(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp, 'docker')
+            root.mkdir()
+            (root/'existing-state').write_text('keep')
+            code = function('ensure_docker_xfs_quota')
+            start = code.index('    if [ -d /var/lib/docker ]')
+            condition = code[start:code.index('\n    mkdir -p /var/lib/docker', start)]
+            condition = condition.replace('/var/lib/docker', str(root))
+            result = subprocess.run(['bash', '-c', condition], text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(Path(str(root)+'.pre-xfs', 'existing-state').read_text() if Path(str(root)+'.pre-xfs', 'existing-state').exists() else None, 'keep')
+            self.assertEqual(result.stderr, '')
+
     def nct(self, cdi_failure=False):
         with tempfile.TemporaryDirectory() as tmp:
             code = function('ensure_nct').replace('/tmp/cdi-gen.log', tmp+'/cdi.log')
@@ -40,7 +54,7 @@ docker() { echo UNEXPECTED_DOCKER; }
     def test_invalid_optimization_scope_fails_before_host_changes(self):
         import os
         for provider, flag, profile in [('upcloud','1','default'), ('ovh','yes','default'), ('ovh','1','upcloud-stock595')]:
-            script = 'set -eu\nerr() { :; }\nrelease_profile() { echo HOST_TOUCHED; }\n' + function('bootstrap') + '\nbootstrap'
+            script = 'set -eu\nerr() { :; }\nlog() { :; }\nensure_no_auto_updates() { echo HOST_TOUCHED; exit 91; }\n' + function('bootstrap') + '\nbootstrap'
             result = subprocess.run(['bash','-c',script], text=True, capture_output=True, env={**os.environ, 'DPAD_PROVIDER':provider, 'DPAD_OVH_COLD_START':flag, 'DPAD_RELEASE_PROFILE':profile})
             self.assertNotEqual(result.returncode, 0)
             self.assertNotIn('HOST_TOUCHED', result.stdout)
