@@ -442,13 +442,27 @@ ensure_nct() {
         log "CDI spec generated ($(nvidia-ctk cdi list 2>/dev/null | grep -c 'nvidia.com/gpu=') devices)"
     else
         err "CDI spec generation failed (see /tmp/cdi-gen.log) — CDI launch will not work"
+        [ "${DPAD_OVH_COLD_START:-0}" != 1 ] || return 1
     fi
+    # OVH canary: defer the probe until the exact gaming image is on final storage.
+    # Keep other provider profiles byte-for-byte equivalent at this boundary.
+    [ "${DPAD_OVH_COLD_START:-0}" != 1 ] || return 0
     if ! docker run --rm --gpus all nvidia/cuda:12.8.1-runtime-ubuntu24.04 nvidia-smi >/dev/null 2>&1; then
         err "container cannot see the GPU after nvidia-container-toolkit install"
         docker run --rm --gpus all nvidia/cuda:12.8.1-runtime-ubuntu24.04 nvidia-smi || true
         return 1
     fi
     log "GPU visible inside a container (nvidia-container-toolkit OK)"
+}
+
+ensure_gpu_image() {
+    local image
+    image="$(<"$TAG_FILE")" || return 1
+    [ -n "$image" ] || { err "missing prepared gaming image"; return 1; }
+    # Never start the gaming entrypoint or trigger a second implicit image pull.
+    docker run --rm --pull=never --gpus all --entrypoint nvidia-smi "$image" \
+        || { err "GPU verification failed in prepared gaming image"; return 1; }
+    log "GPU visible inside prepared gaming image (final Docker storage)"
 }
 
 # -----------------------------------------------------------------------------
@@ -1063,6 +1077,12 @@ report_all_urls() {
 # The full bootstrap (phases 1-5), with the one reboot in phase 1
 # -----------------------------------------------------------------------------
 bootstrap() {
+    case "${DPAD_OVH_COLD_START:-0}" in
+        0) ;;
+        1) [ "${DPAD_PROVIDER:-}" = ovh ] && [ "${DPAD_RELEASE_PROFILE-default}" = default ] \
+               || { err "OVH cold-start optimization requires OVH default profile"; return 1; } ;;
+        *) err "DPAD_OVH_COLD_START must be 0 or 1"; return 1 ;;
+    esac
     log "=== DpadCloud VM bootstrap starting (warm-VM mode=${DPAD_WARM_VM}) ==="
     ensure_no_auto_updates   # FIRST: stop apt from killing the session mid-boot
     systemctl start docker 2>/dev/null || true
@@ -1072,6 +1092,9 @@ bootstrap() {
     ensure_docker_xfs_quota   || return 1
     ensure_userns
     ensure_image              || return 1
+    if [ "${DPAD_OVH_COLD_START:-0}" = 1 ]; then
+        ensure_gpu_image      || return 1
+    fi
     if [ "${DPAD_WARM_VM}" = "1" ]; then
         # v2 warm-VM: host prep + image + MPS, then emit the VM-ready marker and
         # STOP — no pre-launched session containers (a session = a fresh
