@@ -1,5 +1,20 @@
 # OVH cold-start canary — 2026-09-07
 
+> **Worker integration release boundary:** the report below describes the earlier
+> live canary on image-source baseline `1c2d158`, not this branch's final bytes.
+> Production worker revision `1624492069e13c5da5ea25f1fe516dbd44604286` actually
+> pins the newer atomic stream-hotfix host baseline `bc12cbd5413fdad3202aba58685eb34d12afa1bd`.
+> Branch `perf/ovh-cold-start-release` therefore reapplies only the tested cold-start
+> changes on that baseline. Bootstrap artifact commit
+> `fe03e9ee15d5bfce85d4555826221e3d65e14c78`, SHA-256
+> `e35c1d47022c3781d3fb859a6bbf1e43dfdc11e5eab92f984fdce4f42edf0d28`.
+> The existing launcher and atomic stream bundle are unchanged. Thirty applicable
+> host source-test scripts pass; five runtime-dependent scripts are excluded.
+> The worker integration stays opt-in and restricted to exact single-slot OVH L4
+> image identity. This combined release has **not** had a new GPU/customer-path
+> acceptance, and the earlier cold timing does not apply to these exact bytes.
+> Production deployment and another paid session require separate authorization.
+
 ## Scope and release boundary
 
 Local `perf/ovh-cold-start` branch, based on image source `1c2d158` (the OCI revision of the actual production OVH image), not the incompatible newer stock595 host branch. No production deployment, mutable-tag update, or image rebuild. Keep the newer UpCloud release work untouched.
