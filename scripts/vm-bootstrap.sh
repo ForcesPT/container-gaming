@@ -520,8 +520,14 @@ ensure_nct() {
     # such file or directory`). Regenerating the CDI spec here (reading the
     # now-loaded driver) refreshes the libcuda path so both paths work.
     # Idempotent; also re-runs on every boot (keeps CDI in sync with the driver).
-    mkdir -p /etc/cdi
-    if nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml >/tmp/cdi-gen.log 2>&1; then
+    local cdi_dir=/etc/cdi
+    if [ "${DPAD_RELEASE_PROFILE-default}" = upcloud-stock595 ]; then
+        # Refresh the same spec as nvidia-cdi-refresh, after codec installation.
+        # Its boot-time /run spec can omit codecs and override a fresh /etc spec.
+        cdi_dir=/var/run/cdi
+    fi
+    mkdir -p "$cdi_dir"
+    if nvidia-ctk cdi generate --output="$cdi_dir/nvidia.yaml" >/tmp/cdi-gen.log 2>&1; then
         log "CDI spec generated ($(nvidia-ctk cdi list 2>/dev/null | grep -c 'nvidia.com/gpu=') devices)"
     else
         [ "${DPAD_RELEASE_PROFILE-default}" != upcloud-stock595 ] || return 1

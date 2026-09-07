@@ -14,6 +14,43 @@ IMAGE = 'forcespt/dpadcloud-gaming@sha256:' + 'a'*64
 ENV = dict(DPAD_RELEASE_PROFILE='upcloud-stock595', DPAD_PROVIDER='upcloud', DPAD_IMAGE_TAG=IMAGE)
 
 class HelperTests(unittest.TestCase):
+    def test_stock595_accepts_exact_l4_and_l40s_only(self):
+        image = ('forcespt/dpadcloud-gaming@sha256:'
+                 '207c38a46a2a768698291a37f8073b7c4c0e0bed21e5b84253c44f7bc078882a')
+        env = {**ENV, 'DPAD_IMAGE_TAG': image}
+        expected = {**env, 'DPAD_DRIVER_POLICY': 'host',
+                    'DPAD_ENCODER': 'nvcudah264enc',
+                    'DPAD_COMPOSITOR_EGL': 'multivendor',
+                    'DPAD_DESKTOP_CLIENT': 'sway'}
+        denied = [f'{name}, 595.58.03' for name in (
+            'NVIDIA L40', 'NVIDIA L4S', 'NVIDIA L40SX', 'NVIDIA L400',
+            'NVIDIA A40', 'NVIDIA RTX 6000 Ada Generation',
+            'L40S', 'nvidia l40s', 'NVIDIA L40S vGPU', '',
+        )]
+        denied += [f'{name}, {driver}'
+                   for name in ('NVIDIA L4', 'NVIDIA L40S')
+                   for driver in ('595.58.04', '580.178.04', '595.58.030')]
+        denied += ['NVIDIA L4, 595.58.03\nNVIDIA L40S, 595.58.03',
+                   'NVIDIA L40S, 595.58.03\nNVIDIA L40S, 595.58.03']
+        # Only external host identity/configuration inputs are fixtures. Exercise
+        # the real profile decision without executing bootstrap, Docker or APT.
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(helper, 'CONFIG', Path(tmp) / 'profile.json'), \
+                patch.dict(os.environ, env, clear=True):
+            for device in denied:
+                with self.subTest(rejected=device), \
+                        patch.object(helper, 'identity', return_value=(device, 'boot')), \
+                        self.assertRaises(ValueError):
+                    helper.profile(image)
+            for name in ('NVIDIA L4', 'NVIDIA L40S'):
+                with self.subTest(accepted=name), patch.object(
+                        helper, 'identity', return_value=(f'{name}, 595.58.03', 'boot')):
+                    try:
+                        values = helper.profile(image)
+                    except ValueError as exc:
+                        self.fail(f'{name} with exact driver 595.58.03 must be accepted: {exc}')
+                    self.assertEqual(values, expected)
+
     def test_profile_tuple_and_enums(self):
         with patch.object(helper, 'CONFIG', Path('/nonexistent/profile.json')), patch.object(helper, 'identity', return_value=('NVIDIA L4, 595.58.03','boot')):
             with patch.dict(os.environ, ENV, clear=True):
@@ -21,7 +58,7 @@ class HelperTests(unittest.TestCase):
                 self.assertEqual([values[k] for k in ('DPAD_DRIVER_POLICY','DPAD_ENCODER','DPAD_COMPOSITOR_EGL','DPAD_DESKTOP_CLIENT')], ['host','nvcudah264enc','multivendor','sway'])
             for k, v in [('DPAD_PROVIDER','ovh'),('DPAD_RELEASE_PROFILE',''),('DPAD_DRIVER_POLICY','validated'),('DPAD_ENCODER','bad'),('DPAD_COMPOSITOR_EGL','bad'),('DPAD_DESKTOP_CLIENT','bad'),('DPAD_BUILD','1'),('DPAD_WARM_VM','0'),('DPAD_SKIP_MODESET','1')]:
                 with self.subTest(k=k), patch.dict(os.environ, {**ENV,k:v}, clear=True), self.assertRaises(ValueError): helper.profile(IMAGE)
-            for device in ('NVIDIA L40S, 595.58.03','NVIDIA L4, 595.58.04','NVIDIA L4, 580.1','NVIDIA L4, 595.58.03\nNVIDIA L4, 595.58.03'):
+            for device in ('NVIDIA L40, 595.58.03','NVIDIA L4, 595.58.04','NVIDIA L4, 580.1','NVIDIA L4, 595.58.03\nNVIDIA L4, 595.58.03'):
                 with patch.dict(os.environ, ENV, clear=True), patch.object(helper,'identity',return_value=(device,'boot')), self.assertRaises(ValueError): helper.profile(IMAGE)
             for image in ('tag:latest', IMAGE+'\n', IMAGE.replace('a'*64,'b'*64)):
                 with patch.dict(os.environ, ENV, clear=True), self.assertRaises(ValueError): helper.profile(image)

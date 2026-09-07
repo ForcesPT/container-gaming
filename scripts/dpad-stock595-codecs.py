@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Narrow production UpCloud L4 stock595 host profile and codec transaction.
+"""Narrow UpCloud L4/L40S stock595 host profile and codec transaction.
 
 Worker contract (no downloads performed by this helper): install immutable-commit,
 SHA256-verified artifacts owned by root, with no group/world write permission:
@@ -9,10 +9,10 @@ SHA256-verified artifacts owned by root, with no group/world write permission:
   /usr/local/bin/dpad-launch-session
 Call bootstrap `install` with DPAD_RELEASE_PROFILE=upcloud-stock595,
 DPAD_PROVIDER=upcloud and DPAD_IMAGE_TAG=<repository>@sha256:<digest>.
-The parent worker selects the approved persisted UpCloud L4 + exact image digest;
-this helper verifies immutable syntax and the actual single L4 / 595.58.03 host.
+The parent worker selects the approved persisted UpCloud profile + exact image digest;
+this helper verifies immutable syntax and the actual single L4 or L40S / 595.58.03 host.
 NVIDIA container toolkit must already be installed. Existing modeset/XFS/MPS
-bootstrap steps remain in use. This does not authorize L40S or shared promotion.
+bootstrap steps remain in use. Source admission does not establish live acceptance or authorize promotion.
 
 Defaults: host driver policy, nvcudah264enc, multivendor EGL, Sway. The protected
 stock595-profile.json preserves all seven selectors across systemd boots and
@@ -97,8 +97,8 @@ def profile(image):
         raise ValueError('stock595 requires normal modeset handling')
     if os.environ.get('DPAD_SKIP_DRIVER_SWAP', '0') not in ('0','1'):
         raise ValueError('invalid DPAD_SKIP_DRIVER_SWAP')
-    if identity()[0] != 'NVIDIA L4, 595.58.03':
-        raise ValueError('requires one actual NVIDIA L4 with exact driver 595.58.03')
+    if identity()[0] not in ('NVIDIA L4, 595.58.03', 'NVIDIA L40S, 595.58.03'):
+        raise ValueError('requires one actual NVIDIA L4 or NVIDIA L40S with exact driver 595.58.03')
     return values
 
 NAMES = ('libnvidia-encode', 'libnvidia-decode')
