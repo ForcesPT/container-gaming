@@ -239,8 +239,23 @@ launch() {
         *) err "DPAD_ALLOW_LIVE_RESOLUTION must be 0 or 1"; return 1 ;;
     esac
 
+    # Opt-in host contract; validated before even inspecting/removing a slot.
+    # The helper must be staged beside this launcher in a verified host bundle.
+    local -a instant_args=()
+    local instant_deadline="" instant_output
+    if [ -n "${DPAD_INSTANT_CONFIG:-}" ]; then
+        is_ephemeral "$volumeId" || { err "Instant Play requires private ephemeral session state"; return 1; }
+        instant_output="$(timeout 15s python3 -I "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/dpad_instant_mount.py" "$DPAD_INSTANT_CONFIG" "$slot" "$image")" \
+            || { err "Instant Play contract refused"; return 1; }
+        mapfile -t instant_args <<< "$instant_output"
+        instant_deadline="${instant_args[0]}"
+        [[ "$instant_deadline" =~ ^[0-9]+$ ]] || { err "Invalid Instant deadline"; return 1; }
+        instant_args=( "${instant_args[@]:1}" )
+    fi
+
     # Stop+remove a stale container at this slot (a re-launch after a crash).
     if docker ps -a --format '{{.Names}}' | grep -qx "$name"; then
+        [ -z "${DPAD_INSTANT_CONFIG:-}" ] || { err "Instant slot occupied; reconcile its owner before reuse"; return 1; }
         log "removing stale container $name"
         docker rm -f "$name" >/dev/null
     fi
@@ -263,7 +278,9 @@ launch() {
     # /var/lib/docker on an XFS-prjquota loopback (on the VM's own boot disk) so
     # this enforces on every provider, incl. ephemeral-disk ones (MassedCompute).
     local -a vol_args=()
-    if is_ephemeral "$volumeId"; then
+    if [ -n "${DPAD_INSTANT_CONFIG:-}" ]; then
+        : # Scratch budget and release mount come only from the validated contract.
+    elif is_ephemeral "$volumeId"; then
         log "ephemeral slot $slot — capped container rootfs (games re-download each launch, gone on end)"
         # Per-container rootfs cap via --storage-opt size (default 200 GB;
         # DPAD_EPHEMERAL_DISK_GB overrides, in GB). On a plain ext4 root this is
@@ -369,11 +386,13 @@ launch() {
         -e DPAD_ALLOW_LIVE_RESOLUTION="${DPAD_ALLOW_LIVE_RESOLUTION:-0}" \
         -e DPAD_WD_WIDTH="${DPAD_WD_WIDTH:-${DPAD_STREAM_WIDTH:-1920}}" \
         -e DPAD_WD_HEIGHT="${DPAD_WD_HEIGHT:-${DPAD_STREAM_HEIGHT:-1080}}" \
+        "${instant_args[@]}" \
         "$image" || { err "docker run $name failed"; return 1; }
     log "container $name launched with host networking (coturn ${port}/udp, selkies ${selkies_port}, authenticated)"
 
     # Wait for the DPAD_READY marker (entrypoint emits it once Selkies is up).
     local deadline=$(( $(date +%s) + 360 ))   # 6 min (container boot ~50s + Steam)
+    if [ -n "$instant_deadline" ] && [ "$instant_deadline" -lt "$deadline" ]; then deadline="$instant_deadline"; fi
     while [ "$(date +%s)" -lt "$deadline" ]; do
         if docker logs "$name" 2>&1 | grep -q '^DPAD_READY '; then
             log "READY: $(docker logs "$name" 2>&1 | grep '^DPAD_READY ' | tail -1)"
