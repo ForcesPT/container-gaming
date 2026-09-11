@@ -44,6 +44,8 @@ ARG SELKIES_INTERPOSER_SHA256=84edf046587de0e2284186b90601cc2c08670042c1bd38b46a
 #   (NVENC #1249 multi-GPU fix). Keeps gcc-multilib out of the final images.
 # =============================================================================
 FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS interposer-builder
+COPY scripts/build-apt-https.sh /tmp/build-apt-https.sh
+RUN sh /tmp/build-apt-https.sh
 RUN apt-get update && apt-get install -y --no-install-recommends gcc-multilib libc6-dev-i386 make \
     && rm -rf /var/lib/apt/lists/*
 COPY scripts/joystick_interposer_v162.c /tmp/joystick_interposer_v162.c
@@ -84,6 +86,8 @@ RUN mkdir -p /out/x86_64 /out/i386 \
 #   the exact SONAME dpad-launcher's koffi integration dlopens. No symlink games.
 # =============================================================================
 FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS sdl3-builder
+COPY scripts/build-apt-https.sh /tmp/build-apt-https.sh
+RUN sh /tmp/build-apt-https.sh
 ARG DEBIAN_FRONTEND
 ARG SDL3_VERSION=3.2.28
 ARG SDL3_SHA256=1330671214d146f8aeb1ed399fc3e081873cdb38b5189d1f8bb6ab15bbc04211
@@ -135,6 +139,8 @@ RUN set -e; \
 #   X/Python + the dpad user. No launcher, no desktop — those are per-target.
 # =============================================================================
 FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS base
+COPY scripts/build-apt-https.sh /tmp/build-apt-https.sh
+RUN sh /tmp/build-apt-https.sh
 ARG CUDA_VERSION
 ARG CUDA_PKG
 ARG DEBIAN_FRONTEND
@@ -444,6 +450,8 @@ RUN ln -sf /opt/dpadcloud/vgl-steam /usr/local/bin/vgl-steam && \
 #   libwayland 1.23 .so) happens AFTER
 #   the live spike validates the compositor→Selkies path on one VM (§8 step 2).
 FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS wayland-display-builder
+COPY scripts/build-apt-https.sh /tmp/build-apt-https.sh
+RUN sh /tmp/build-apt-https.sh
 ARG DEBIAN_FRONTEND
 ARG GST_WAYLAND_DISPLAY_REF=b15285a2f1bb4dae5725b049915a4971664fafc6
 ARG GST_WAYLAND_DISPLAY_SHA256=0aecd9df1a5a50a3a9b21ccc00468f4e1f4054242468e5c63fd7e09d542c9e29
@@ -517,6 +525,10 @@ RUN set -e; \
 #   retaining Noble's wlroots 0.17 ABI and all distro runtime integration.
 # =============================================================================
 FROM ubuntu:24.04 AS labwc-builder
+# Minimal Ubuntu lacks CA roots. Reuse the certificate bundle from our base.
+COPY --from=base /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY scripts/build-apt-https.sh /tmp/build-apt-https.sh
+RUN sh /tmp/build-apt-https.sh
 ARG DEBIAN_FRONTEND=noninteractive
 ARG LABWC_REF=0.7.1
 ARG LABWC_SHA256=1810ec55e287708e7a3cd44c726aa887db02480704db82b3d0bd550a6c4bfb76
