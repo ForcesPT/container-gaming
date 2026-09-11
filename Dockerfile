@@ -862,6 +862,7 @@ COPY scripts/dpad-x11-input-hint /opt/dpadcloud/dpad-x11-input-hint
 COPY scripts/ubisoft-launch /opt/dpadcloud/ubisoft-launch
 COPY scripts/dpad-open-url /opt/dpadcloud/dpad-open-url
 COPY scripts/epic-launch /opt/dpadcloud/epic-launch
+COPY scripts/dpad_instant_register.py /opt/dpadcloud/dpad_instant_register.py
 COPY scripts/gog-launch /opt/dpadcloud/gog-launch
 RUN set -e; \
     sed -i 's/\r$//' \

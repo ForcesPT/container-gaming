@@ -2,13 +2,20 @@
 Install alongside dpad-launch-session in the same verified host artifact bundle.
 """
 import hashlib
+import base64
+import json
 import re
 import stat
+import sys
 from pathlib import Path
+
+# -I excludes the script directory; this directory is part of the trusted bundle.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from dpad_instant_register import validate_metadata
 
 
 def compile_mount(config, slot, image, mount, root, *, now):
-    fields = {'sessionId', 'releaseId', 'manifestSha256', 'image', 'slot', 'app', 'scratchGiB', 'expiresAt'}
+    fields = {'sessionId', 'releaseId', 'manifestSha256', 'image', 'slot', 'app', 'scratchGiB', 'expiresAt', 'metadata'}
     if not isinstance(config, dict) or set(config) != fields:
         raise ValueError('invalid contract fields')
     def matches(key, pattern):
@@ -26,6 +33,10 @@ def compile_mount(config, slot, image, mount, root, *, now):
         raise ValueError('invalid scratch budget')
     if type(config['expiresAt']) is not int or not now < config['expiresAt'] <= now + 420:
         raise ValueError('invalid launch deadline')
+    validate_metadata(config['metadata'])
+    if config['metadata']['app'] != config['app']:
+        raise ValueError('registration app mismatch')
+    metadata = base64.b64encode(json.dumps(config['metadata'], separators=(',', ':')).encode()).decode('ascii')
     root = Path(root)
     if not re.fullmatch(r'/[A-Za-z0-9_/-]+', str(root)) or root.resolve() != root:
         raise ValueError('unsafe mount path')
@@ -45,7 +56,8 @@ def compile_mount(config, slot, image, mount, root, *, now):
             '--label', 'dpad.instant.session=' + config['sessionId'],
             '--label', 'dpad.instant.release=' + config['releaseId'],
             '--storage-opt', f"size={config['scratchGiB']}g", '-e', 'DPAD_STORES=epic',
-            '-e', 'DPAD_INSTANT_APP=' + config['app']]
+            '-e', 'DPAD_INSTANT_APP=' + config['app'],
+            '-e', 'DPAD_INSTANT_METADATA=' + metadata]
 
 
 def main():

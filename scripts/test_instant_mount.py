@@ -19,6 +19,8 @@ def fixture():
         bundle = root / release
         bundle.mkdir()
         (bundle / 'files').mkdir()
+        (bundle / 'files' / 'Game.exe').write_bytes(b'fixture')
+        (bundle / 'files' / 'Game.exe').chmod(0o444)
         (bundle / 'manifest.jsonl').write_text('fixture manifest\n')
         (bundle / 'manifest.jsonl').chmod(0o444)
         (bundle / 'files').chmod(0o555)
@@ -26,7 +28,9 @@ def fixture():
         image = 'forcespt/dpadcloud-gaming@sha256:' + 'a' * 64
         config = dict(sessionId=str(uuid.uuid4()), releaseId=release,
                       manifestSha256=hashlib.sha256(b'fixture manifest\n').hexdigest(),
-                      image=image, slot=0, app='Curry', scratchGiB=20, expiresAt=200)
+                      image=image, slot=0, app='Curry', scratchGiB=20, expiresAt=200,
+                      metadata=dict(app='Curry', title='Fixture', version='pinned-1', executable='Game.exe',
+                                    launchParameters='', requiresOwnershipToken=True, installSize=7))
         mount = dict(target=str(root), source='10.80.0.2:/releases', fstype='nfs4', options='ro,nosuid,nodev,vers=4.1')
         try:
             yield config, image, mount, root, bundle
@@ -35,6 +39,16 @@ def fixture():
             (bundle / 'files').chmod(0o755)
 
 class MountTests(unittest.TestCase):
+    def test_pinned_registration_metadata_reaches_container(self):
+        import base64
+        import json
+        with fixture() as (config, image, mount, root, bundle):
+            args = m.compile_mount(config, 0, image, mount, root, now=100)
+            encoded = next(a.split('=', 1)[1] for a in args if a.startswith('DPAD_INSTANT_METADATA='))
+            self.assertEqual(json.loads(base64.b64decode(encoded)), config['metadata'])
+            with self.assertRaises(ValueError):
+                m.compile_mount({**config, 'metadata': {**config['metadata'], 'app': 'Other'}}, 0, image, mount, root, now=100)
+
     def test_selected_release_only(self):
         with fixture() as (config, image, mount, root, bundle):
             args = m.compile_mount(config, 0, image, mount, root, now=100)

@@ -1,5 +1,18 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **Instant Play shared-release registration — SOURCE ONLY, NOT DEPLOYED.**
+> The maintained host launcher passes a validated pinned installation descriptor.
+> `launcher-shell` prepares private Heroic/Legendary inventory before any GUI starts;
+> `epic-launch` rechecks it before opening the store. Customer login and launch
+> authorization remain entirely inside Heroic on the GPU session. No game copy,
+> installer credentials, automatic download or website ownership scheme was added.
+> Ten local tests passed, including a real read-only bind in a network-disabled
+> namespace and real Legendary registry readback; the GUI was a fixture, not a
+> live login/gameplay test. Source handoff/provenance wiring, durable cleanup/unpin,
+> exact image and independent private NFS/GPU acceptance remain pending. See
+> `INSTANT-EPIC-REGISTRATION.md` and `INSTANT-MOUNT-INTEGRATION.md`. Do not enable
+> paid testing or publish ABZU based on this source-only result.
+
 > **2026-08-29 adaptive H.264/Opus quality — SOURCE COMPLETE, GPU ACCEPTANCE
 > PENDING.** Selkies no longer falls back to its low 8 Mbps video / 128 kbps
 > audio defaults. `dpad-resolve-stream-quality` derives a validated H.264 CBR
