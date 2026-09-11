@@ -523,8 +523,15 @@ ensure_docker_xfs_quota() {
     systemctl stop docker 2>/dev/null || true
     # Preserve any existing Docker state (usually just an init scaffold — the
     # image is pulled AFTER this, so /var/lib/docker is typically empty here).
-    if [ -d /var/lib/docker ] && [ ! -m /var/lib/docker ]; then
-        mv /var/lib/docker /var/lib/docker.pre-xfs
+    if [ -d /var/lib/docker ] && ! mountpoint -q /var/lib/docker; then
+        if [ -e /var/lib/docker.pre-xfs ] || [ -L /var/lib/docker.pre-xfs ]; then
+            err "existing Docker backup requires recovery; refusing to overwrite it"
+            return 1
+        fi
+        mv -T /var/lib/docker /var/lib/docker.pre-xfs || {
+            err "could not preserve Docker state; refusing storage setup"
+            return 1
+        }
     fi
     mkdir -p /var/lib/docker
 
@@ -556,8 +563,12 @@ ensure_docker_xfs_quota() {
 
     # Restore any pre-existing Docker state into the XFS.
     if [ -d /var/lib/docker.pre-xfs ]; then
-        cp -a /var/lib/docker.pre-xfs/. /var/lib/docker/ 2>/dev/null || true
-        rm -rf /var/lib/docker.pre-xfs
+        cp -a /var/lib/docker.pre-xfs/. /var/lib/docker/ || {
+            err "Docker state restore failed; retaining backup and refusing startup"
+            return 1
+        }
+        sync || { err "Docker state flush failed; retaining backup"; return 1; }
+        rm -rf /var/lib/docker.pre-xfs || return 1
     fi
 
     # Docker 29+ defaults to the containerd image store (overlayfs snapshotter),
