@@ -470,6 +470,25 @@ ensure_nct() {
 # runtime configured) and BEFORE ensure_image (so the image is pulled INTO the
 # XFS). The fstab entry re-mounts it at every boot; a docker.service drop-in
 # (RequiresMountsFor) orders Docker strictly after the mount.
+ensure_session_storage() {
+    case "${DPAD_INSTANT_STORAGE:-}" in
+        '') ensure_docker_xfs_quota; return $? ;;
+        dedicated-ephemeral)
+            [ "${DPAD_MAX_SESSIONS:-}" = 1 ] && [ "${DPAD_WARM_VM:-}" = 1 ] || {
+                err "dedicated ephemeral storage requires one warm-VM slot"; return 1;
+            }
+            local docker_root
+            docker_root="$(docker info --format '{{.DockerRootDir}}')" || return 1
+            # Admission only: no formatting, mount changes, or Docker migration.
+            python3 -c 'import shutil,sys; p=sys.argv[1]; assert p.startswith("/"); assert shutil.disk_usage(p).free >= 40*1024**3; assert shutil.disk_usage("/").free >= 5*1024**3' "$docker_root" || {
+                err "insufficient disk for dedicated image and session"; return 1;
+            }
+            log "Dedicated Instant storage uses existing VM disk; no per-container quota"
+            ;;
+        *) err "unknown Instant storage mode"; return 1 ;;
+    esac
+}
+
 ensure_docker_xfs_quota() {
     local img="/var/lib/dpad-docker-xfs.img"
     # A live mount is authoritative; never alter an unexpected mounted store.
@@ -1093,7 +1112,7 @@ bootstrap() {
     ensure_driver_580  || return 1   # may reboot once (595->580 OR proprietary->open); resumes here after
     ensure_modeset            # may reboot once; resumes here after
     ensure_nct                || return 1
-    ensure_docker_xfs_quota   || return 1
+    ensure_session_storage   || return 1
     ensure_userns
     ensure_image              || return 1
     if [ "${DPAD_WARM_VM}" = "1" ]; then

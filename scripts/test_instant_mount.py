@@ -39,6 +39,31 @@ def fixture():
             (bundle / 'files').chmod(0o755)
 
 class MountTests(unittest.TestCase):
+    def test_dedicated_ephemeral_omits_quota_but_retains_readonly_release(self):
+        with fixture() as (config, image, mount, root, bundle):
+            config['storageMode'] = 'dedicated-ephemeral'
+            args = m.compile_mount(config, 0, image, mount, root, now=100)
+            self.assertNotIn('--storage-opt', args)
+            self.assertTrue(any('readonly,bind-recursive=disabled' in arg for arg in args))
+            with self.assertRaises(ValueError):
+                m.compile_mount({**config, 'slot': 1}, 1, image, mount, root, now=100)
+            with self.assertRaises(ValueError):
+                m.compile_mount({**config, 'storageMode': 'unlimited'}, 0, image, mount, root, now=100)
+
+    def test_dedicated_host_requires_free_disk_and_no_running_peer(self):
+        from types import SimpleNamespace
+        config = {'scratchGiB': 20}
+        usage = lambda path: SimpleNamespace(free=30 * 1024**3)
+        m.check_dedicated_storage(config, '/var/lib/docker', [], usage)
+        with self.assertRaises(ValueError):
+            m.check_dedicated_storage(config, '/var/lib/docker', ['peer'], usage)
+        with self.assertRaises(ValueError):
+            m.check_dedicated_storage(config, '/var/lib/docker', [], lambda path: SimpleNamespace(free=24 * 1024**3))
+        with self.assertRaises(ValueError):
+            m.check_dedicated_storage(config, 'relative', [], usage)
+        with self.assertRaises(ValueError):
+            m.check_dedicated_storage(config, '/var/lib/docker', [], lambda path: SimpleNamespace(free=(4 if path == '/' else 30) * 1024**3))
+
     def test_pinned_registration_metadata_reaches_container(self):
         import base64
         import json

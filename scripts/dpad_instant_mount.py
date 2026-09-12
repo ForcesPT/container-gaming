@@ -16,8 +16,13 @@ from dpad_instant_register import validate_metadata
 
 def compile_mount(config, slot, image, mount, root, *, now):
     fields = {'sessionId', 'releaseId', 'manifestSha256', 'image', 'slot', 'app', 'scratchGiB', 'expiresAt', 'metadata'}
-    if not isinstance(config, dict) or set(config) != fields:
+    if not isinstance(config, dict) or set(config) not in (fields, fields | {'storageMode'}):
         raise ValueError('invalid contract fields')
+    dedicated = config.get('storageMode') == 'dedicated-ephemeral'
+    if 'storageMode' in config and not dedicated:
+        raise ValueError('invalid storage mode')
+    if dedicated and (slot != 0 or config.get('slot') != 0):
+        raise ValueError('dedicated storage requires slot zero')
     def matches(key, pattern):
         return isinstance(config[key], str) and re.fullmatch(pattern, config[key])
     for key in ('sessionId', 'releaseId'):
@@ -55,9 +60,21 @@ def compile_mount(config, slot, image, mount, root, *, now):
     return ['--pull=never', '--mount', f'type=bind,src={bundle}/files,dst=/opt/dpad-instant/game,readonly,bind-recursive=disabled',
             '--label', 'dpad.instant.session=' + config['sessionId'],
             '--label', 'dpad.instant.release=' + config['releaseId'],
-            '--storage-opt', f"size={config['scratchGiB']}g", '-e', 'DPAD_STORES=epic',
+            *([] if dedicated else ['--storage-opt', f"size={config['scratchGiB']}g"]), '-e', 'DPAD_STORES=epic',
             '-e', 'DPAD_INSTANT_APP=' + config['app'],
             '-e', 'DPAD_INSTANT_METADATA=' + metadata]
+
+
+def check_dedicated_storage(config, docker_root, running, usage):
+    """Admission headroom, not a quota: Docker's disk is shared with the host.
+
+    scratchGiB means minimum free workspace in dedicated mode, plus 5 GiB
+    operational headroom. Legacy contracts still use it as a container quota.
+    """
+    if not isinstance(docker_root, str) or not docker_root.startswith('/') or running:
+        raise ValueError('dedicated empty Docker host required')
+    if usage(docker_root).free < (config['scratchGiB'] + 5) * 1024**3 or usage('/').free < 5 * 1024**3:
+        raise ValueError('insufficient dedicated session disk headroom')
 
 
 def main():
@@ -94,6 +111,11 @@ def main():
     if len(mounts) != 1:
         raise ValueError('ambiguous mount')
     args = compile_mount(config, int(sys.argv[2]), sys.argv[3], mounts[0], root, now=time.time())
+    if config.get('storageMode') == 'dedicated-ephemeral':
+        import shutil
+        info = subprocess.run(['docker', 'info', '--format', '{{.DockerRootDir}}'], capture_output=True, text=True, check=True, timeout=5)
+        peers = subprocess.run(['docker', 'ps', '-q'], capture_output=True, text=True, check=True, timeout=5)
+        check_dedicated_storage(config, info.stdout.strip(), peers.stdout.split(), shutil.disk_usage)
     print(config['expiresAt'])
     print('\n'.join(args))
 

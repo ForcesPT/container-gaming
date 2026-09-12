@@ -44,6 +44,23 @@ class StoragePreservation(unittest.TestCase):
                       'ready() {\n' + branch + '\nreturn 77; }; ready')
             return subprocess.run(['bash', '-c', script], text=True, capture_output=True)
 
+    def test_dedicated_storage_dispatch_never_calls_quota_setup(self):
+        text = SOURCE.read_text()
+        start = text.index('ensure_session_storage() {')
+        end = text.index('\n}\n', start) + 3
+        branch = text[start:end]
+        for mode, slots, warm, expected in [('dedicated-ephemeral', '1', '1', 0),
+                                           ('dedicated-ephemeral', '2', '1', 1),
+                                           ('dedicated-ephemeral', '1', '0', 1),
+                                           ('unknown', '1', '1', 1), ('', '1', '1', 77)]:
+            with self.subTest(mode=mode, slots=slots, warm=warm):
+                script = ('log() { :; }; err() { :; }; ensure_docker_xfs_quota() { return 77; }; '
+                          'docker() { printf /var/lib/docker; }; python3() { return 0; }; '
+                          + branch + f'\nDPAD_INSTANT_STORAGE={mode!r}; DPAD_MAX_SESSIONS={slots}; DPAD_WARM_VM={warm}; ensure_session_storage')
+                result = subprocess.run(['bash', '-c', script], capture_output=True)
+                self.assertEqual(result.returncode, expected)
+        self.assertIn('    ensure_session_storage   || return 1', text)
+
     def test_non_xfs_mount_is_not_quota_ready(self):
         result = self.readiness()
         self.assertNotEqual(result.returncode, 0, 'ext4 is not Docker overlay2 XFS quota storage')
