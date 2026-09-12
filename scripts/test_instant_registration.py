@@ -9,6 +9,27 @@ m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 
 class RegistrationTests(unittest.TestCase):
+    def test_registry_preparation_refuses_redirects_and_unsafe_parents(self):
+        import os
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            home = pathlib.Path(tmp) / 'home'; home.mkdir(mode=0o700)
+            outside = pathlib.Path(tmp) / 'outside'; outside.mkdir(mode=0o775); outside.chmod(0o775)
+            (home / '.config').symlink_to(outside, target_is_directory=True)
+            with self.assertRaises((OSError, ValueError)):
+                m.prepare_private_registry(home)
+            self.assertEqual(outside.stat().st_mode & 0o777, 0o775)
+            (home / '.config').unlink()
+            m.prepare_private_registry(home)
+            target = home / '.config/heroic/legendaryConfig'
+            target.chmod(0o777)
+            with self.assertRaises(ValueError): m.prepare_private_registry(home)
+            self.assertEqual(target.stat().st_mode & 0o777, 0o777)
+            target.chmod(0o775)
+            with patch.object(m.os, 'geteuid', return_value=os.geteuid()+1):
+                with self.assertRaises(ValueError): m.prepare_private_registry(home)
+            self.assertEqual(target.stat().st_mode & 0o777, 0o775)
+
     def test_namespace_handoff_and_real_legendary_inventory(self):
         import json
         import os
@@ -18,6 +39,10 @@ class RegistrationTests(unittest.TestCase):
         from legendary.lfs.lgndry import LGDLFS
         with fixture() as (config, image, mount, root, bundle):
             home = root / 'home'; home.mkdir(mode=0o700)
+            # Real Heroic creates these two private directories with mode 0775.
+            private = home / '.config/heroic/legendaryConfig/legendary'
+            private.mkdir(parents=True, mode=0o775)
+            private.chmod(0o775); private.parent.chmod(0o775)
             heroic = root / 'heroic'
             heroic.write_text('#!/bin/sh\ntest -f "$HOME/.config/heroic/legendaryConfig/legendary/installed.json" || exit 43\nprintf called > "$HOME/heroic-called"\n')
             heroic.chmod(0o755)

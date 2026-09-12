@@ -104,6 +104,37 @@ def register(home, game, data):
         os.close(lock)
 
 
+def prepare_private_registry(home):
+    """Tighten only Heroic's own registry directories, never payload/files.
+
+    Walk with no-follow directory descriptors so symlinks cannot redirect chmod.
+    Parent directories and world-writable/foreign-owned state still fail closed.
+    """
+    home = Path(home)
+    if not home.is_absolute() or home.resolve() != home:
+        raise ValueError('redirected session path')
+    fd = os.open(home, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in ('', '.config', 'heroic', 'legendaryConfig', 'legendary'):
+            if part:
+                try:
+                    os.mkdir(part, mode=0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                os.close(fd)
+                fd = child
+            info = os.fstat(fd)
+            if info.st_uid != os.geteuid() or info.st_mode & 0o002:
+                raise ValueError('untrusted session directory')
+            if part in ('legendaryConfig', 'legendary'):
+                os.fchmod(fd, stat.S_IMODE(info.st_mode) & ~0o022)
+            elif info.st_mode & 0o022:
+                raise ValueError('untrusted session directory')
+    finally:
+        os.close(fd)
+
+
 def main():
     import base64
     import sys
@@ -123,6 +154,7 @@ def main():
     if not os.statvfs(game).f_flag & os.ST_RDONLY:
         raise ValueError('read-only game mount required')
     os.umask(0o077)
+    prepare_private_registry(home)
     print('DPAD_INSTANT_INSTALLATION ' + register(home, game, data))
 
 
