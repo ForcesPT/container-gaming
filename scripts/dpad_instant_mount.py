@@ -60,6 +60,7 @@ def compile_mount(config, slot, image, mount, root, *, now):
     return ['--pull=never', '--mount', f'type=bind,src={bundle}/files,dst=/opt/dpad-instant/game,readonly,bind-recursive=disabled',
             '--label', 'dpad.instant.session=' + config['sessionId'],
             '--label', 'dpad.instant.release=' + config['releaseId'],
+            *(['--label', 'dpad.instant.storage=dedicated-ephemeral'] if dedicated else []),
             *([] if dedicated else ['--storage-opt', f"size={config['scratchGiB']}g"]), '-e', 'DPAD_STORES=epic',
             '-e', 'DPAD_INSTANT_APP=' + config['app'],
             '-e', 'DPAD_INSTANT_METADATA=' + metadata]

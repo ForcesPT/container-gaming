@@ -93,6 +93,21 @@ def check_ready(engine, session, release, slot):
     engine.command('exec', row['Id'], 'sh', '-ec', "grep -q '^DPAD_INSTANT_INSTALLATION ' /tmp/instant-registration.log; pgrep -x dpad-launcher >/dev/null")
 
 
+def disk_status(engine, session, release, slot, usage):
+    """Read-only probe; terminalization and cleanup belong to the control plane."""
+    if slot != 0:
+        raise ValueError('dedicated slot required')
+    row = engine.inspect('dpad-slot-0')
+    labels = row['Config'].get('Labels') or {}
+    if not row['State']['Running'] or labels.get('dpad.instant.session') != session or labels.get('dpad.instant.release') != release or labels.get('dpad.instant.storage') != 'dedicated-ephemeral':
+        raise ValueError('disk probe owner mismatch')
+    root = engine.command('info', '--format', '{{.DockerRootDir}}').strip()
+    if not root.startswith('/'):
+        raise ValueError('invalid Docker root')
+    free = min(usage(root).free, usage('/').free)
+    return dict(status='low_space' if free < 5*1024**3 else 'storage_ok', sessionId=session, releaseId=release, slot=slot, freeBytes=free)
+
+
 def main():
     import sys
     import fcntl
@@ -109,7 +124,7 @@ def main():
             raise ValueError('launch deadline exceeded')
         if not all(re.fullmatch(r'[0-9]{2,4}', v) for v in sys.argv[4:]):
             raise ValueError('invalid display configuration')
-    elif len(sys.argv) == 5 and sys.argv[1] == 'cleanup':
+    elif len(sys.argv) == 5 and sys.argv[1] in ('cleanup', 'disk-status'):
         config = None
         session, release, slot_text = sys.argv[2:]
     else:
@@ -159,6 +174,10 @@ def main():
             if time.time() >= config['expiresAt']:
                 raise TimeoutError('Instant startup deadline exceeded')
             print(json.dumps(dict(status='runtime_ready', sessionId=session, releaseId=release, slot=slot)))
+            return
+        if sys.argv[1] == 'disk-status':
+            import shutil
+            print(json.dumps(disk_status(Engine(), session, release, slot, shutil.disk_usage)))
             return
         cleanup(Engine(), session, release, slot)
         if request.exists() or request.is_symlink():

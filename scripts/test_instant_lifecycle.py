@@ -8,6 +8,21 @@ SESSION='11111111-1111-4111-8111-111111111111'
 RELEASE='22222222-2222-4222-8222-222222222222'
 
 class LifecycleTests(unittest.TestCase):
+    def test_disk_status_is_read_only_and_bound_to_running_dedicated_owner(self):
+        from types import SimpleNamespace
+        engine=Mock()
+        engine.inspect.return_value={'Id':'a'*64,'State':{'Running':True},'Config':{'Labels':{'dpad.instant.session':SESSION,'dpad.instant.release':RELEASE,'dpad.instant.storage':'dedicated-ephemeral'}}}
+        engine.command.return_value='/var/lib/docker\n'
+        usage=lambda p: SimpleNamespace(free=6*1024**3)
+        result=lifecycle.disk_status(engine,SESSION,RELEASE,0,usage)
+        self.assertEqual(result['status'],'storage_ok')
+        result=lifecycle.disk_status(engine,SESSION,RELEASE,0,lambda p:SimpleNamespace(free=4*1024**3))
+        self.assertEqual(result['status'],'low_space')
+        engine.remove.assert_not_called()
+        engine.inspect.return_value['Config']['Labels']['dpad.instant.session']='replacement'
+        with self.assertRaises(ValueError): lifecycle.disk_status(engine,SESSION,RELEASE,0,usage)
+
+
     def test_cleanup_is_exact_and_does_not_call_unsafe_slot_stop(self):
         engine=Mock()
         engine.list_containers.side_effect=[[dict(Id='a'*64,Names=['/dpad-slot-0'])],[]]
