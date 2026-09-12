@@ -25,6 +25,48 @@ class StoragePreservation(unittest.TestCase):
             result = subprocess.run(['bash', '-c', script], text=True, capture_output=True)
             return result, (root / 'docker.pre-xfs/image-evidence').exists(), (store / 'image-evidence').exists()
 
+    def readiness(self, fstype='ext4', options='rw,pquota', mounted=True, stale=False):
+        # Execute only the readiness branch: never format, mount or stop Docker.
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            image = root / 'image'
+            fstab = root / 'fstab'
+            if stale:
+                image.touch()
+            fstab.write_text(f'{image} /var/lib/docker xfs loop,pquota 0 0\n' if stale else '')
+            text = SOURCE.read_text()
+            start = text.index('    local img=', text.index('ensure_docker_xfs_quota()'))
+            end = text.index('    command -v mkfs.xfs', start)
+            branch = text[start:end].replace('/var/lib/dpad-docker-xfs.img', str(image)).replace('/etc/fstab', str(fstab))
+            script = ('log() { :; }; err() { printf "%s\\n" "$*" >&2; }; '
+                      f'mountpoint() {{ return {0 if mounted else 1}; }}; '
+                      f'findmnt() {{ case "$*" in *FSTYPE*) printf "%s\\n" "{fstype}";; *) printf "%s\\n" "{options}";; esac; }}; '
+                      'ready() {\n' + branch + '\nreturn 77; }; ready')
+            return subprocess.run(['bash', '-c', script], text=True, capture_output=True)
+
+    def test_non_xfs_mount_is_not_quota_ready(self):
+        result = self.readiness()
+        self.assertNotEqual(result.returncode, 0, 'ext4 is not Docker overlay2 XFS quota storage')
+
+    def test_stale_image_and_fstab_are_not_readiness(self):
+        result = self.readiness(mounted=False, stale=True)
+        self.assertEqual(result.returncode, 1, 'stale mount requires recovery, not success or reformatting')
+        self.assertIn('recovery', result.stderr)
+
+    def test_read_only_xfs_is_not_ready(self):
+        result = self.readiness(fstype='xfs', options='ro,pquota')
+        self.assertEqual(result.returncode, 1, 'read-only Docker storage cannot run sessions')
+
+    def test_quota_accounting_without_enforcement_is_not_ready(self):
+        for option in ['pqnoenforce', 'prjnoenforce', 'noquota']:
+            with self.subTest(option=option):
+                result = self.readiness(fstype='xfs', options='rw,pquota,' + option)
+                self.assertEqual(result.returncode, 1, 'quota enforcement is explicitly disabled')
+
+    def test_valid_xfs_mount_is_idempotent(self):
+        for option in ['pquota', 'prjquota']:
+            self.assertEqual(self.readiness(fstype='xfs', options='rw,' + option).returncode, 0)
+
     def test_failed_restore_retains_the_backup(self):
         with tempfile.TemporaryDirectory() as temp:
             store = pathlib.Path(temp) / 'docker'

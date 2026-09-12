@@ -472,16 +472,29 @@ ensure_nct() {
 # (RequiresMountsFor) orders Docker strictly after the mount.
 ensure_docker_xfs_quota() {
     local img="/var/lib/dpad-docker-xfs.img"
-    # Already on XFS pquota? (idempotent — true after a reboot re-run.) Also
-    # short-circuit when the XFS img + fstab entry already exist (the setup is
-    # done) even if a transient findmnt/mountpoint race during a daemon-reexec
-    # makes the first check miss — re-running would `systemctl stop docker` and
-    # KILL live session containers on an already-correct host.
-    if { mountpoint -q /var/lib/docker 2>/dev/null \
-         && findmnt -no OPTIONS /var/lib/docker 2>/dev/null | grep -qw pquota; } \
-       || { [ -f "$img" ] && grep -q "^[^#].* /var/lib/docker " /etc/fstab 2>/dev/null; }; then
-        log "Docker storage already on XFS pquota (/var/lib/docker) — good"
-        return 0
+    # A live mount is authoritative; never alter an unexpected mounted store.
+    if mountpoint -q /var/lib/docker 2>/dev/null; then
+        local store_options
+        store_options="$(findmnt -no OPTIONS /var/lib/docker 2>/dev/null)" || return 1
+        if [ "$(findmnt -no FSTYPE /var/lib/docker 2>/dev/null)" = xfs ] \
+           && [[ ",$store_options," == *,rw,* ]] \
+           && [[ ",$store_options," != *,ro,* ]] \
+           && [[ ",$store_options," != *,pqnoenforce,* ]] \
+           && [[ ",$store_options," != *,prjnoenforce,* ]] \
+           && [[ ",$store_options," != *,noquota,* ]] \
+           && printf '%s\n' "$store_options" | grep -Eq '(^|,)(pquota|prjquota)(,|$)'; then
+            log "Docker storage already on XFS pquota (/var/lib/docker) — good"
+            return 0
+        fi
+        err "mounted Docker store is not XFS with project quotas; refusing storage changes"
+        return 1
+    fi
+    # Persisted intent is not proof of a successful mount. Fail without stopping
+    # Docker or modifying the image; an interrupted setup needs explicit recovery.
+    if [ -e "$img" ] || [ -L "$img" ] \
+       || grep -q '^[^#]*[[:space:]]/var/lib/docker[[:space:]]' /etc/fstab 2>/dev/null; then
+        err "Docker XFS setup exists but is not mounted; recovery required"
+        return 1
     fi
     command -v mkfs.xfs >/dev/null 2>&1 || {
         log "installing xfsprogs (mkfs.xfs)"
