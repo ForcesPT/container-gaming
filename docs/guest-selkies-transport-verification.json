@@ -1,0 +1,40 @@
+{
+  "recordedAt": "2026-09-12T04:01:51.344575+00:00",
+  "scope": "Local Selkies WSS and real transient user-systemd CSR/install/HTTPS/new-certificate rotation/stop; no production root-unit or image acceptance",
+  "tests": 35,
+  "failed": 0,
+  "skipped": 0,
+  "upstreamWheelSha256": "f426ae093853492ecf857609efd4c9bd2141b24c619118561e42220927554eee",
+  "websockets": "13.1",
+  "log": "/home/home/.cache/dpad-review-tmp/guest-certificate-runtime-green.log",
+  "sourceSha256": {
+    "scripts/dpad-guest-tls": "1e5ef5a3421630f231c76e29e286d790754a32155aebea16df49447da58392d8",
+    "scripts/dpad-patch-selkies-unix": "26a89e706c7bdb8ce3f352c275148b0a991ce3fd378aecae2393f382ac3652e3",
+    "tests/test_guest_tls_gateway.py": "91357a0b728876d4f37be8ca3725548287bf28d0886573dfa0cf4087a7f4134a",
+    "tests/test_selkies_unix_transport.py": "cee077d113bb7a32bc91d35e18fc596f1489d6f154197e2c282a472a7d89a0df",
+    "Dockerfile": "17ded7f5b5108b3480fe1a81191351cb9d8db748906a57015d35b5dd32e0c628",
+    "entrypoint.sh": "4570d77c22535cba013c3870522ee9535b2f8e4dc82777a9788f9d18200277b5",
+    "scripts/vm-bootstrap.sh": "062a7678b0fabb04b0b4706a5244c1fa529583db67b1735b412bf70f02e95939",
+    "scripts/dpad-session-control": "6567062e5168eb4b1200202169d1e45668e6c6d3ea7f2b7ff31bb05931f5e5f1",
+    "tests/test_session_control.py": "7dc4676f367b5b1839a858288d6c6e6e9aa437acf3f0b340f380e191377c8402",
+    "tests/test_selkies_launch_command.py": "1c620b8c459d635150431abfe67b31478efe41723ed4520bf0b3c4491a51b6e1",
+    "scripts/dpad-guest-tls@.service": "752ec05d5f0a4a493b357808fb8a581332c17bd590ad936ccd726224a6f071be"
+  },
+  "remaining": [
+    "Root service/image and provider acceptance",
+    "Worker CSR/signer/install/activation and renewal orchestration; latest controller not yet re-vendored",
+    "Whole-area main control-plane/bridge integration acceptance (components implemented)",
+    "C10/C11"
+  ],
+  "release": "NO-GO",
+  "deployed": false,
+  "additionalChecks": [
+    "24 stream FPS/quality/hotfix tests passed",
+    "Dockerfile pinned-download guard passed",
+    "TURN relay source guard passed",
+    "bash -n entrypoint and launcher passed",
+    "systemd-analyze verify unit passed"
+  ],
+  "userSystemdRuntime": true,
+  "logSha256": "4924d27cb409c865218bd201de9eca3a42727f39d5ba27e353e3f260149c5243"
+}

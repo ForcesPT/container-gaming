@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""Adapt supported Selkies signaling APIs to a session-private Unix socket."""
+from pathlib import Path
+import sys
+
+MARKER = '# DPAD_UNIX_SIGNAL_V1'
+
+
+def transform(name, text):
+    if MARKER in text:
+        return text
+    if name == 'signalling_web.py':
+        text = text.replace('async def handler(ws, path):', 'async def handler(ws, path=None):', 1)
+        old = 'async with websockets.serve(handler, self.addr, self.port, ssl=sslctx, process_request=http_handler, loop=self.loop,'
+        new = '''socket_path = os.environ.get('DPAD_SIGNAL_UNIX_SOCKET')
+        if not socket_path or not os.path.isabs(socket_path):
+            raise ValueError('session Unix signaling socket required')
+        if self.enable_https:
+            raise ValueError('TLS key belongs to the host gateway, not Selkies')
+        async with websockets.unix_serve(handler, socket_path, process_request=http_handler,'''
+    elif name == 'webrtc_signalling.py':
+        text = text.replace('import asyncio\n', 'import asyncio\nimport os\n', 1)
+        old = 'self.conn = await websockets.connect(self.server, extra_headers=headers, ssl=sslctx)'
+        new = '''socket_path = os.environ.get('DPAD_SIGNAL_UNIX_SOCKET')
+                    if not socket_path or not os.path.isabs(socket_path):
+                        raise ValueError('session Unix signaling socket required')
+                    if self.enable_https:
+                        raise ValueError('local signaling must use the session Unix socket')
+                    self.conn = await websockets.unix_connect(socket_path, uri='ws://localhost/ws', extra_headers=headers)'''
+    else:
+        raise ValueError('unsupported module')
+    if text.count(old) != 1:
+        raise ValueError('unsupported Selkies signaling source')
+    result = MARKER + '\n' + text.replace(old, new, 1)
+    compile(result, name, 'exec')
+    return result
+
+
+def main(directory):
+    root = Path(directory)
+    # Validate both transformations before writing either file.
+    transformed = {name: transform(name, (root/name).read_text())
+                   for name in ('signalling_web.py', 'webrtc_signalling.py')}
+    for name, text in transformed.items():
+        (root/name).write_text(text)
+
+
+if __name__ == '__main__':
+    main(sys.argv[1])

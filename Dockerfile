@@ -263,6 +263,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-get purge -y python3-dev build-essential libevdev-dev libudev-dev && \
     apt-get autoremove -y --purge && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/debconf/* /var/log/* /tmp/* /var/tmp/*
+# Signaling stays on the session-private Unix socket; TLS keys stay on the host.
+COPY scripts/dpad-patch-selkies-unix /opt/dpadcloud/dpad-patch-selkies-unix
+RUN python3 /opt/dpadcloud/dpad-patch-selkies-unix "$(python3 -c 'import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec("selkies_gstreamer").origin).parent)')"
+
 # Overwrite the deb's interposer .so with the patched build (JSIOCGNAME returns
 # name length so SDL3 accepts the Selkies virtual gamepad) for BOTH arches.
 COPY --from=interposer-builder /out/x86_64/selkies_joystick_interposer.so /usr/lib/x86_64-linux-gnu/selkies_joystick_interposer.so
@@ -862,6 +866,7 @@ COPY scripts/dpad-x11-input-hint /opt/dpadcloud/dpad-x11-input-hint
 COPY scripts/ubisoft-launch /opt/dpadcloud/ubisoft-launch
 COPY scripts/dpad-open-url /opt/dpadcloud/dpad-open-url
 COPY scripts/epic-launch /opt/dpadcloud/epic-launch
+COPY scripts/dpad_instant_register.py /opt/dpadcloud/dpad_instant_register.py
 COPY scripts/gog-launch /opt/dpadcloud/gog-launch
 RUN set -e; \
     sed -i 's/\r$//' \

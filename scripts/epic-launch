@@ -27,6 +27,16 @@ set -u
 LOG=/tmp/epic-launch.log
 echo "[epic-launch] $(date -Is) start (HOME=${HOME:-} DISPLAY=${DISPLAY:-})" >> "$LOG"
 
+# Inventory registration does not authenticate the user or grant ownership.
+# Run before Heroic starts, so its first library refresh sees the pinned install.
+# Ordinary Cloud Compute keeps the existing store flow unchanged.
+if [ -n "${DPAD_INSTANT_APP:-}${DPAD_INSTANT_METADATA:-}" ]; then
+    if ! timeout 15s python3 -I "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/dpad_instant_register.py" >>"$LOG" 2>&1; then
+        echo "[epic-launch] Instant registration refused; shared game not ready" >&2
+        exit 1
+    fi
+fi
+
 # Heroic binary (the .deb installs /opt/heroic/heroic symlinked to /usr/bin/heroic).
 HEROIC_BIN="${HEROIC_BIN:-heroic}"
 if ! command -v "$HEROIC_BIN" >/dev/null 2>&1; then

@@ -24,6 +24,15 @@ if [ ! -x "${APPRUN}" ]; then
     exit 1
 fi
 
+# Prepare inventory before any store GUI can cache its installed-game list.
+# Login, Wine setup and Play remain the customer's normal in-session store flow.
+if [ -n "${DPAD_INSTANT_APP:-}${DPAD_INSTANT_METADATA:-}" ]; then
+    if ! timeout 15s python3 -I "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/dpad_instant_register.py" >>/tmp/instant-registration.log 2>&1; then
+        echo "launcher-shell: Instant registration refused" >&2
+        exit 1
+    fi
+fi
+
 # Electron sandbox off (the container has userns; --no-sandbox avoids the
 # setuid chrome-sandbox requirement, matching the other Electron clients).
 exec "${APPRUN}" --no-sandbox >/tmp/launcher.log 2>&1
