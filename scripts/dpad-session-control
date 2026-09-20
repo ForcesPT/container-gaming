@@ -209,7 +209,9 @@ def tls_install(path, record, slot, session, encoded):
     })
 
 
-def tls_start(path, record, slot, session):
+def tls_start(path, record, slot, session, recovery=None):
+    # Recovery receipts are issued only by this trusted, locked controller. They
+    # bind a request to one completed gateway generation, not a customer path.
     require(record.get('phase') == 'active')
     ids = inventory(slot)
     require(ids == [record.get('container')])
@@ -231,19 +233,46 @@ def tls_start(path, record, slot, session):
     digest = hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     previous = record.get('gatewayUnit')
     require(previous is None or previous == unit)
-    if (previous == unit and record.get('gatewayConfigSha256') == digest
+    def receipt():
+        return base64.b64encode(json.dumps({'containerId': ids[0], 'configSha256': digest,
+            'generation': record.get('gatewayGeneration')}, sort_keys=True).encode()).decode()
+    if recovery is not None:
+        require(isinstance(recovery, str) and len(recovery) <= 1024)
+        require(record.get('gatewayGeneration') and recovery == receipt()
+                and previous == unit and record.get('gatewayConfigSha256') == digest
+                and not record.get('gatewayPendingConfigSha256'))
+        # This is only a fail-closed preflight; the new gateway still opens and
+        # pins its own inode with O_NOFOLLOW for its entire lifetime.
+        directory = os.open(path.parent / f'{session}.signal', os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            target = os.open('stream.sock', os.O_PATH | os.O_NOFOLLOW, dir_fd=directory)
+            try:
+                require(stat.S_ISSOCK(os.fstat(target).st_mode))
+            finally:
+                os.close(target)
+        finally:
+            os.close(directory)
+    if (recovery is None and previous == unit and record.get('gatewayConfigSha256') == digest
+            and not record.get('gatewayPendingConfigSha256')
             and command(['systemctl', 'show', '--property=ActiveState', '--value', unit]).strip() == 'active'):
+        if not record.get('gatewayGeneration'):
+            record['gatewayGeneration'] = str(uuid.uuid4())
+            persist(path, record)
+        print(receipt())
         return
     # Intent and completed configuration are separate crash fences. Persisting
     # the new desired hash must not make a still-running old context look ready.
     record['gatewayUnit'] = unit
     record['gatewayPendingConfigSha256'] = digest
+    record.pop('gatewayGeneration', None)  # Consume before the side effect, even on failure.
     persist(path, record)
     command(['systemctl', 'restart' if previous else 'start', unit])
     require(command(['systemctl', 'show', '--property=ActiveState', '--value', unit]).strip() == 'active')
     record['gatewayConfigSha256'] = digest
     record.pop('gatewayPendingConfigSha256', None)
+    record['gatewayGeneration'] = str(uuid.uuid4())
     persist(path, record)
+    print(receipt())
     # Running is not certificate activation or authority to publish a route.
 
 
@@ -338,8 +367,8 @@ def main(args):
     if args == ['protocol']:
         print('DPAD_SESSION_CONTROL_V1')
         return
-    require(len(args) in (3, 4, 7) and args[0] in ('stop', 'launch', 'tls-start', 'tls-csr', 'tls-install'))
-    require((args[0] in ('stop', 'tls-start', 'tls-csr') and len(args) == 3) or (args[0] == 'launch' and len(args) == 7) or (args[0] == 'tls-install' and len(args) == 4))
+    require(len(args) in (3, 4, 7) and args[0] in ('stop', 'launch', 'tls-start', 'tls-csr', 'tls-install', 'tls-recover'))
+    require((args[0] in ('stop', 'tls-start', 'tls-csr') and len(args) == 3) or (args[0] == 'launch' and len(args) == 7) or (args[0] in ('tls-install', 'tls-recover') and len(args) == 4))
     require(re.fullmatch(r'0|[1-9][0-9]?', args[1]) is not None)
     slot = int(args[1]); require(slot < 32)
     session = args[-1]; require(str(uuid.UUID(session)) == session)
@@ -364,6 +393,8 @@ def main(args):
             tls_csr(path, record, slot, session)
         elif args[0] == 'tls-start':
             tls_start(path, record, slot, session)
+        elif args[0] == 'tls-recover':
+            tls_start(path, record, slot, session, args[2])
         else:
             launch(path, record, slot, session, args[2:-1], fd)
     finally:
