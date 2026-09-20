@@ -1,6 +1,9 @@
 # Build context: this worktree root. Local recipe only; no production promotion.
 FROM forcespt/dpadcloud-gaming@sha256:f4bf28e7e17b6717b4c83f2e0f6d598eb0761f72543ffe065be5ff27b7ff26e8
 USER root
+# Signaling stays on the session-private Unix socket; TLS keys stay on the host.
+COPY scripts/dpad-patch-selkies-unix /opt/dpadcloud/dpad-patch-selkies-unix
+RUN python3 /opt/dpadcloud/dpad-patch-selkies-unix "$(python3 -c 'import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec("selkies_gstreamer").origin).parent)')"
 # The pinned image supplies Gst 1.24, persistent waylanddisplaysrc, desktop,
 # launcher and interposers. Bake the entire required delta, including the quality
 # bundle omitted in the first prior canary. Do not bind old host hotfixes over it.
