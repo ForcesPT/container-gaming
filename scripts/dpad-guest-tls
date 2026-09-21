@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""Host-side TLS transport. Never mount this service's key into games."""
+import asyncio
+import json
+import os
+import stat
+import ssl
+import subprocess
+import sys
+import time
+
+
+def open_socket(path):
+    """Resolve each directory without following customer-controlled symlinks."""
+    if not isinstance(path, str) or not path.startswith('/'):
+        raise OSError('absolute socket path required')
+    parts = path.split('/')[1:]
+    if any(part in ('', '.', '..') for part in parts):
+        raise OSError('invalid socket path')
+    directory = os.open('/', os.O_PATH | os.O_DIRECTORY)
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        return os.open(parts[-1], os.O_PATH | os.O_NOFOLLOW, dir_fd=directory)
+    finally:
+        os.close(directory)
+
+
+async def serve(config):
+    subprocess.run(['openssl', 'verify', '-CAfile', config['ca'], '-no-CApath', '-no-CAstore',
+                    '-purpose', 'sslserver', '-verify_hostname', config['serverName'], config['cert']],
+                   check=True, timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    key_fd = os.open(config['key'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(key_fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_nlink != 1 or info.st_mode & 0o077 or not 0 < info.st_size <= 16384):
+            raise ValueError('private key custody invalid')
+        context.load_cert_chain(config['cert'], f'/proc/self/fd/{key_fd}')
+    finally:
+        os.close(key_fd)
+
+    expiries = []
+    for path in (config["cert"], config["ca"]):
+        result = subprocess.run(["openssl", "x509", "-in", path, "-noout", "-enddate"],
+                                check=True, timeout=5, capture_output=True, text=True)
+        expiries.append(ssl.cert_time_to_seconds(result.stdout.strip().split("=", 1)[1]))
+    expiry = min(expiries)
+    deadline = time.monotonic() + max(0, expiry-time.time())
+    def valid():
+        return time.monotonic() < deadline and time.time() < expiry
+
+    socket_fd = None
+
+    async def connected(reader, writer):
+        nonlocal socket_fd
+        upstream = None
+        tasks = []
+        try:
+            if not valid():
+                return
+            # Pin the socket inode before connecting. A customer may control
+            # their own socket directory; a symlink must never redirect this
+            # privileged transport into another session's private directory.
+            if socket_fd is None:
+                candidate = open_socket(config['unixSocket'])
+                if not stat.S_ISSOCK(os.fstat(candidate).st_mode):
+                    os.close(candidate)
+                    raise OSError('invalid signaling socket')
+                # Keep the inode alive for this entire gateway lifetime. A
+                # replacement socket requires a newly authorized gateway.
+                socket_fd = candidate
+            source, upstream = await asyncio.wait_for(asyncio.open_unix_connection(f'/proc/self/fd/{socket_fd}'), 3)
+            async def copy(source, destination):
+                while data := await source.read(65536):
+                    if not valid():
+                        return
+                    destination.write(data)
+                    await destination.drain()
+            tasks = [asyncio.create_task(copy(reader, upstream)), asyncio.create_task(copy(source, writer))]
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        except (OSError, asyncio.TimeoutError):
+            pass
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for stream in (writer, upstream):
+                if stream is not None:
+                    stream.close()
+                    try:
+                        await stream.wait_closed()
+                    except (OSError, ssl.SSLError):
+                        pass
+
+    server = await asyncio.start_server(connected, config['host'], config['port'], ssl=context, ssl_handshake_timeout=5, ssl_shutdown_timeout=1)
+    try:
+        async with server:
+            await asyncio.sleep(max(0, deadline-time.monotonic()))
+            # Returning cancels and drains connection tasks in asyncio.run.
+    finally:
+        if socket_fd is not None:
+            os.close(socket_fd)
+
+
+if __name__ == '__main__':
+    try:
+        fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, encoding='utf-8') as source:
+            info = os.fstat(source.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                    or info.st_nlink != 1 or info.st_mode & 0o077
+                    or not 0 < info.st_size <= 16384):
+                raise ValueError('configuration custody invalid')
+            config = json.loads(source.read(16385))
+        asyncio.run(serve(config))
+    except Exception:
+        print('DPAD_GUEST_TLS_UNAVAILABLE', file=sys.stderr)
+        sys.exit(1)

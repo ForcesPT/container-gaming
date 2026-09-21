@@ -77,6 +77,11 @@ fi
 REPO_URL="${DPAD_REPO_URL:-https://github.com/ForcesPT/container-gaming.git}"
 REPO_DIR="${DPAD_REPO_DIR:-/opt/dpadcloud/container-gaming}"
 SCRIPT_PATH="/opt/dpadcloud/vm-bootstrap.sh"
+# Managed execution retains a non-optional identity across reboot, even if the
+# policy and release marker are both lost. Never copy/download a legacy script.
+if [[ "${BASH_SOURCE[0]-}" = */vm-bootstrap-transport.sh ]]; then
+    SCRIPT_PATH="/opt/dpadcloud/vm-bootstrap-transport.sh"
+fi
 DPAD_STREAM_HOTFIX_UPDATER_SHA256="14875689d6a9c50ac4d535e79f20ac68f9e0ad6a890c159837b0e6bc876d9043"
 # This source candidate requires dpad-nvidia-egl, the updated installer, and
 # patched Unix Selkies. Do not roll out this bootstrap/entrypoint to old images.
@@ -103,6 +108,63 @@ err()  { echo "[dpadcloud-bootstrap][ERROR] $*" >&2; }
 # SHA256/immutable-commit verified by the worker before bootstrap install.
 # stock595-profile.json persists the exact image and all reproduction selectors.
 release_profile() {
+    # Written only after the worker verifies the complete coherent host bundle.
+    # Reload on service restart AND backend launch; SSH/PAM env is not authority.
+    if [[ "${BASH_SOURCE[0]-}" = */vm-bootstrap-transport.sh ]] \
+        || [ -e /opt/dpadcloud/transport-managed ] || [ -L /opt/dpadcloud/transport-managed ] \
+        || [ -e /opt/dpadcloud/dpad-launch-session-backend ] || [ -L /opt/dpadcloud/dpad-launch-session-backend ] \
+        || [ -e /opt/dpadcloud/vm-bootstrap-transport.sh ] || [ -L /opt/dpadcloud/vm-bootstrap-transport.sh ] \
+        || [ -e /opt/dpadcloud/transport-release.env ] || [ -L /opt/dpadcloud/transport-release.env ]; then
+        local transport_path transport_owner transport_mode
+        for transport_path in /opt /opt/dpadcloud /opt/dpadcloud/transport-managed /opt/dpadcloud/transport-release.env; do
+            [ ! -L "$transport_path" ] && [ -e "$transport_path" ] || { err "unsafe transport policy"; return 1; }
+            read -r transport_owner transport_mode < <(stat -c '%u %a' -- "$transport_path")
+            [ "$transport_owner" = 0 ] && (( (8#$transport_mode & 022) == 0 )) || { err "unprotected transport policy"; return 1; }
+        done
+        [ -f /opt/dpadcloud/transport-release.env ] || { err "missing transport policy"; return 1; }
+        [ -f /opt/dpadcloud/transport-managed ] || { err "missing managed release identity"; return 1; }
+        local identity revision policy_digest actual_digest
+        identity="$(cat /opt/dpadcloud/transport-managed)" || return 1
+        [[ "$identity" =~ ^([a-f0-9]{40})\ ([a-f0-9]{64})$ ]] || { err "invalid managed release identity"; return 1; }
+        revision="${BASH_REMATCH[1]}"; policy_digest="${BASH_REMATCH[2]}"
+        actual_digest="$(sha256sum /opt/dpadcloud/transport-release.env)" || return 1
+        [ "${actual_digest%% *}" = "$policy_digest" ] || { err "transport policy differs from managed release"; return 1; }
+        # Parse data, never source shell code. Caller values cannot fill holes.
+        local key value line
+        local -A policy=()
+        while IFS= read -r line; do
+            [[ "$line" = *=* ]] || { err "invalid transport policy line"; return 1; }
+            key="${line%%=*}"; value="${line#*=}"
+            case "$key" in
+                DPAD_DRIVER_POLICY|DPAD_OVERLAY_POLICY|DPAD_IMAGE_TAG|DPAD_RELEASE_PROFILE|DPAD_PROVIDER|DPAD_ENCODER|DPAD_COMPOSITOR_EGL|DPAD_DESKTOP_CLIENT|DPAD_STOCK595_CODEC_INSTALLER|DPAD_STOCK595_CODEC_HOOK) ;;
+                *) err "unknown transport policy field"; return 1 ;;
+            esac
+            [ -z "${policy[$key]+present}" ] || { err "duplicate transport policy field"; return 1; }
+            policy[$key]="$value"
+        done < /opt/dpadcloud/transport-release.env
+        for key in DPAD_DRIVER_POLICY DPAD_OVERLAY_POLICY DPAD_IMAGE_TAG DPAD_RELEASE_PROFILE DPAD_PROVIDER DPAD_ENCODER DPAD_COMPOSITOR_EGL; do
+            [ -n "${policy[$key]+present}" ] || { err "incomplete transport policy: $key"; return 1; }
+        done
+        [ "${policy[DPAD_DRIVER_POLICY]}" = host ] && [ "${policy[DPAD_OVERLAY_POLICY]}" = image-only ] \
+            && [[ "${policy[DPAD_IMAGE_TAG]}" =~ ^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$ ]] \
+            || { err "invalid transport preservation policy"; return 1; }
+        case "${policy[DPAD_PROVIDER]}" in ovh|scaleway|upcloud|hyperstack|massedcompute) ;; *) err "invalid transport provider"; return 1 ;; esac
+        case "${policy[DPAD_RELEASE_PROFILE]}" in
+            default)
+                [ "${#policy[@]}" = 7 ] && [ "${policy[DPAD_ENCODER]}" = "" ] && [ "${policy[DPAD_COMPOSITOR_EGL]}" = nvidia ] \
+                    || { err "invalid standard transport policy"; return 1; } ;;
+            upcloud-stock595)
+                [ "${#policy[@]}" = 10 ] && [ "${policy[DPAD_PROVIDER]}" = upcloud ] \
+                    && [ "${policy[DPAD_ENCODER]}" = nvcudah264enc ] && [ "${policy[DPAD_COMPOSITOR_EGL]}" = multivendor ] \
+                    && [ "${policy[DPAD_DESKTOP_CLIENT]-}" = sway ] \
+                    && [ "${policy[DPAD_STOCK595_CODEC_INSTALLER]-}" = /opt/dpadcloud/dpad-stock595-codecs.py ] \
+                    && [ "${policy[DPAD_STOCK595_CODEC_HOOK]-}" = /opt/dpadcloud/dpad-stock595-apt-hook.py ] \
+                    || { err "invalid stock595 transport policy"; return 1; } ;;
+            *) err "invalid transport profile"; return 1 ;;
+        esac
+        for key in "${!policy[@]}"; do export "$key=${policy[$key]}"; done
+    fi
+    case "${DPAD_OVERLAY_POLICY-legacy}" in legacy|image-only) ;; *) err "invalid overlay policy"; return 1 ;; esac
     case "${DPAD_RELEASE_PROFILE-default}" in
         default|upcloud-stock595) ;;
         *) err "invalid DPAD_RELEASE_PROFILE (default|upcloud-stock595)"; return 1 ;;
@@ -784,6 +846,7 @@ ensure_image() {
     log "image ready: ${img_tag}"
 
     [ "${DPAD_RELEASE_PROFILE-default}" != upcloud-stock595 ] || return 0
+    [ "${DPAD_OVERLAY_POLICY-legacy}" != image-only ] || return 0
 
     # Atomically refresh the compatible stream-quality hotfix bundle. The updater
     # stages and validates entrypoint.sh, the bitrate resolver, and the browser

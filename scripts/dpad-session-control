@@ -1,0 +1,413 @@
+#!/usr/bin/env python3
+"""Session-bound host control around the pinned provider-specific launcher.
+
+Install this as dpad-launch-session and keep the checked original at
+/opt/dpadcloud/dpad-launch-session-backend. Legacy commands lack a session UUID
+and fail closed. No driver/image/volume-formatting logic is replaced here.
+"""
+import base64
+import hashlib
+import ssl
+import fcntl
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+import uuid
+
+LABEL = 'com.dpadplay.session'
+EXECUTION_LOCK = None
+
+
+class Unconfirmed(Exception):
+    pass
+
+
+def require(condition):
+    if not condition:
+        raise Unconfirmed()
+
+
+def command(args):
+    require(EXECUTION_LOCK is not None)
+    result = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60,
+                            pass_fds=(EXECUTION_LOCK,))
+    require(result.returncode == 0)
+    return result.stdout
+
+
+def inventory(slot=None):
+    args = ['docker', 'container', 'ls', '--all', '--quiet', '--no-trunc']
+    if slot is not None:
+        args += ['--filter', f'name=^/dpad-slot-{slot}$']
+    ids = command(args).splitlines()
+    require(all(re.fullmatch('[0-9a-f]{64}', value) for value in ids) and len(set(ids)) == len(ids))
+    if slot is not None:
+        require(len(ids) <= 1)
+    return ids
+
+
+def inspect(container):
+    result = json.loads(command(['docker', 'inspect', container]))
+    require(isinstance(result, list) and len(result) == 1 and result[0].get('Id') == container)
+    require(isinstance(result[0].get('Mounts'), list))
+    return result[0]
+
+
+def library_mount(container):
+    mounts = [m for m in container['Mounts'] if m.get('Destination') == '/mnt/dpad-library']
+    require(len(mounts) <= 1)
+    return mounts[0].get('Source') if mounts else None
+
+
+def is_mounted(target):
+    # Full successful mount inventory: a failing filtered lookup is not absence.
+    result = json.loads(command(['findmnt', '--json', '--list', '--output', 'TARGET']))
+    rows = result.get('filesystems')
+    require(isinstance(rows, list) and any(row.get('target') == '/' for row in rows))
+    matches = [row for row in rows if row.get('target') == target]
+    require(len(matches) <= 1)
+    return bool(matches)
+
+
+def safe_mount(value):
+    require(isinstance(value, str) and re.fullmatch(r'/mnt/dpad-vol/[A-Za-z0-9_:/.-]+', value))
+    require('..' not in value.split('/') and '.' not in value.split('/'))
+    require(str(PurePosixPath(value)) == value)
+    return value
+
+
+def persist(path, record):
+    fd, name = tempfile.mkstemp(prefix='.pending-', dir=path.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(record, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def active_container(record, slot, session):
+    require(record.get('phase') == 'active')
+    ids = inventory(slot)
+    require(ids == [record.get('container')])
+    native = inspect(ids[0])
+    require(native.get('Name') == f'/dpad-slot-{slot}')
+    require(native.get('Config', {}).get('Labels', {}).get(LABEL) == session)
+    require(native.get('State', {}).get('Running') is True)
+    return ids[0]
+
+
+def private_file(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+                and info.st_nlink == 1 and info.st_mode & 0o077 == 0
+                and 0 < info.st_size <= 16384)
+        return stream.read(16385)
+
+
+def tls_csr(path, record, slot, session):
+    active_container(record, slot, session)
+    key = path.parent / 'guest-tls.key'
+    # The host-wide execution lock serializes all slots and key creation. This
+    # directory is outside every gaming mount and the shared container image.
+    require(not key.is_symlink())
+    if not key.exists():
+        fd, temporary = tempfile.mkstemp(prefix='.guest-key-', dir=path.parent)
+        os.close(fd)
+        try:
+            command(['openssl', 'genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:2048', '-out', temporary])
+            private_file(temporary)
+            with open(temporary, 'rb') as stream:
+                os.fsync(stream.fileno())
+            os.replace(temporary, key)
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    private_file(key)
+    csr = command(['openssl', 'req', '-new', '-key', str(key), '-subj', '/CN=DpadPlay guest'])
+    public_key = command(['openssl', 'pkey', '-in', str(key), '-pubout'])
+    print(json.dumps({'csr': csr, 'publicKey': public_key}))
+
+
+def persist_text(path, value):
+    fd, name = tempfile.mkstemp(prefix='.certificate-', dir=path.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def tls_install(path, record, slot, session, encoded):
+    container = active_container(record, slot, session)
+    require(isinstance(encoded, str) and len(encoded) <= 49152)
+    raw = base64.b64decode(encoded, validate=True)
+    require(len(raw) <= 32768)
+    value = json.loads(raw)
+    require(isinstance(value, dict) and set(value) == {'issuanceId', 'serverName', 'certificatePem', 'issuerCertificatePem', 'spkiSha256'})
+    require(str(uuid.UUID(value['issuanceId'])) == value['issuanceId'])
+    parts = value['serverName'].split('.')
+    require(len(parts) == 6 and parts[3:] == ['guest', 'dpadplay', 'internal'])
+    require(all(str(uuid.UUID(part)) == part for part in parts[:3]))
+    require(all(isinstance(value[k], str) and 0 < len(value[k]) <= 16384 for k in ('certificatePem', 'issuerCertificatePem')))
+    key = path.parent / 'guest-tls.key'
+    private_file(key)
+    public = subprocess.run(['openssl', 'pkey', '-in', str(key), '-pubout', '-outform', 'DER'],
+                            capture_output=True, check=True, timeout=10, pass_fds=(EXECUTION_LOCK,)).stdout
+    require(base64.b64encode(hashlib.sha256(public).digest()).decode() == value['spkiSha256'])
+    with tempfile.TemporaryDirectory(prefix='.verify-certificate-', dir=path.parent) as temporary:
+        cert = Path(temporary) / 'cert.pem'
+        ca = Path(temporary) / 'ca.pem'
+        cert.write_text(value['certificatePem'])
+        ca.write_text(value['issuerCertificatePem'])
+        command(['openssl', 'verify', '-CAfile', str(ca), '-no-CApath', '-no-CAstore', '-purpose', 'sslserver',
+                 '-verify_hostname', value['serverName'], str(cert)])
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(str(cert), str(key))
+    cert = path.parent / f"{value['issuanceId']}.certificate.pem"
+    ca = path.parent / f"{value['issuanceId']}.issuer.pem"
+    for target, contents in ((cert, value['certificatePem']), (ca, value['issuerCertificatePem'])):
+        if target.exists() or target.is_symlink():
+            require(private_file(target).decode() == contents)
+        else:
+            persist_text(target, contents)
+    # Commit configuration last. Only the session-specific signaling socket is
+    # reachable; certificates and the host key remain outside gaming mounts.
+    persist(path.parent / f'{session}.tls.json', {
+        'sessionId': session, 'containerId': container, 'issuanceId': value['issuanceId'],
+        'host': '0.0.0.0', 'port': 16100 + slot,
+        'unixSocket': str(path.parent / f'{session}.signal' / 'stream.sock'),
+        'cert': str(cert), 'ca': str(ca), 'key': str(key), 'serverName': value['serverName'],
+    })
+
+
+def tls_start(path, record, slot, session, recovery=None):
+    # Recovery receipts are issued only by this trusted, locked controller. They
+    # bind a request to one completed gateway generation, not a customer path.
+    require(record.get('phase') == 'active')
+    ids = inventory(slot)
+    require(ids == [record.get('container')])
+    native = inspect(ids[0])
+    require(native.get('Name') == f'/dpad-slot-{slot}')
+    require(native.get('Config', {}).get('Labels', {}).get(LABEL) == session)
+    require(native.get('State', {}).get('Running') is True)
+    fd = os.open(path.parent / f'{session}.tls.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'r') as stream:
+        info = os.fstat(stream.fileno())
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+                and info.st_nlink == 1 and info.st_mode & 0o077 == 0
+                and 0 < info.st_size <= 16384)
+        config = json.loads(stream.read(16385))
+    require(config.get('sessionId') == session and config.get('containerId') == ids[0])
+    require(config.get('unixSocket') == str(path.parent / f'{session}.signal' / 'stream.sock'))
+    require(type(config.get('port')) is int and config['port'] == 16100 + slot)
+    unit = f'dpad-guest-tls@{session}.service'
+    digest = hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    previous = record.get('gatewayUnit')
+    require(previous is None or previous == unit)
+    def receipt():
+        return base64.b64encode(json.dumps({'containerId': ids[0], 'configSha256': digest,
+            'generation': record.get('gatewayGeneration')}, sort_keys=True).encode()).decode()
+    if recovery is not None:
+        require(isinstance(recovery, str) and len(recovery) <= 1024)
+        require(record.get('gatewayGeneration') and recovery == receipt()
+                and previous == unit and record.get('gatewayConfigSha256') == digest
+                and not record.get('gatewayPendingConfigSha256'))
+        # This is only a fail-closed preflight; the new gateway still opens and
+        # pins its own inode with O_NOFOLLOW for its entire lifetime.
+        directory = os.open(path.parent / f'{session}.signal', os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            target = os.open('stream.sock', os.O_PATH | os.O_NOFOLLOW, dir_fd=directory)
+            try:
+                require(stat.S_ISSOCK(os.fstat(target).st_mode))
+            finally:
+                os.close(target)
+        finally:
+            os.close(directory)
+    if (recovery is None and previous == unit and record.get('gatewayConfigSha256') == digest
+            and not record.get('gatewayPendingConfigSha256')
+            and command(['systemctl', 'show', '--property=ActiveState', '--value', unit]).strip() == 'active'):
+        if not record.get('gatewayGeneration'):
+            record['gatewayGeneration'] = str(uuid.uuid4())
+            persist(path, record)
+        print(receipt())
+        return
+    # Intent and completed configuration are separate crash fences. Persisting
+    # the new desired hash must not make a still-running old context look ready.
+    record['gatewayUnit'] = unit
+    record['gatewayPendingConfigSha256'] = digest
+    record.pop('gatewayGeneration', None)  # Consume before the side effect, even on failure.
+    persist(path, record)
+    command(['systemctl', 'restart' if previous else 'start', unit])
+    require(command(['systemctl', 'show', '--property=ActiveState', '--value', unit]).strip() == 'active')
+    record['gatewayConfigSha256'] = digest
+    record.pop('gatewayPendingConfigSha256', None)
+    record['gatewayGeneration'] = str(uuid.uuid4())
+    persist(path, record)
+    print(receipt())
+    # Running is not certificate activation or authority to publish a route.
+
+
+def stop(path, record, slot, session):
+    # The cancellation record is durable BEFORE any inspection or mutation.
+    # Retain it forever for this VM incarnation, including after host reboot.
+    if record.get('phase') == 'stopped':
+        return
+    record['phase'] = 'stopping'
+    persist(path, record)
+    if record.get('gatewayUnit'):
+        unit = f'dpad-guest-tls@{session}.service'
+        require(record['gatewayUnit'] == unit)
+        command(['systemctl', 'stop', unit])
+        require(command(['systemctl', 'show', '--property=ActiveState', '--value', unit]).strip() in ('inactive', 'failed'))
+    ids = inventory(slot)
+    if ids:
+        native = inspect(ids[0])
+        require(native.get('Name') == f'/dpad-slot-{slot}')
+        require(native.get('Config', {}).get('Labels', {}).get(LABEL) == session)
+        mount = library_mount(native)
+        require(mount == record.get('mount'))
+        # Remove the immutable ID, never the reusable slot name.
+        command(['docker', 'rm', '-f', ids[0]])
+        require(not inventory(slot))
+    mount = record.get('mount')
+    if mount:
+        safe_mount(mount)
+        # No other container may still refer to the library we are unmounting.
+        for other in inventory():
+            require(library_mount(inspect(other)) != mount)
+        if is_mounted(mount):
+            command(['umount', '--', mount])
+            require(not is_mounted(mount))
+    record['phase'] = 'stopped'
+    persist(path, record)
+
+
+def launch(path, record, slot, session, args, lock_fd):
+    # Only a never-issued session may launch. Ambiguous/replayed starts cannot
+    # remove or replace an existing container, including their own incarnation.
+    require(record.get('phase') == 'new' and not inventory(slot))
+    volume = args[0]
+    mount = None if volume in ('none', 'NONE', 'None', '-') else safe_mount('/mnt/dpad-vol/' + volume)
+    record.update(phase='launching', mount=mount)
+    persist(path, record)
+    # Only this leaf is mounted into the container. Its host parent remains
+    # service-owned 0700, so other slots cannot traverse sibling directories.
+    signal = path.parent / f'{session}.signal'
+    signal.mkdir(mode=0o700)
+    signal.chmod(0o777)
+    record['signalDirectory'] = str(signal)
+    persist(path, record)
+    environment = {**os.environ, 'DPAD_SESSION_ID': session,
+                   'DPAD_SIGNAL_DIRECTORY': str(signal)}
+    environment.pop('BASH_ENV', None)
+    environment.pop('ENV', None)
+    backend = os.environ.get('DPAD_SESSION_BACKEND', '/opt/dpadcloud/dpad-launch-session-backend')
+    # The unmodified Bash launcher retains all provider/driver/quality handling.
+    # Label injection applies to its Docker run, even if this controller dies
+    # before it can record the resulting ID. Its child inherits the flock FD:
+    # killing only the controller cannot permit a concurrent stop/replacement.
+    guarded = '''docker() {
+      if [ "${1:-}" = run ]; then
+        shift
+        command docker run --label "com.dpadplay.session=$DPAD_SESSION_ID" \
+          --mount "type=bind,src=$DPAD_SIGNAL_DIRECTORY,dst=/run/dpad-signaling" \
+          -e DPAD_SIGNAL_UNIX_SOCKET=/run/dpad-signaling/stream.sock "$@"
+      else
+        command docker "$@"
+      fi
+    }
+    export -f docker
+    exec bash "$@"
+    '''
+    result = subprocess.run(['bash', '-c', guarded, 'dpad-session-backend', backend, 'launch', str(slot), *args],
+                            env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, pass_fds=(lock_fd,))
+    require(result.returncode == 0)
+    ids = inventory(slot)
+    require(len(ids) == 1)
+    native = inspect(ids[0])
+    require(native.get('Name') == f'/dpad-slot-{slot}')
+    require(native.get('Config', {}).get('Labels', {}).get(LABEL) == session)
+    require(library_mount(native) == mount)
+    record.update(phase='active', container=ids[0])
+    persist(path, record)
+
+
+def main(args):
+    global EXECUTION_LOCK
+    if args == ['protocol']:
+        print('DPAD_SESSION_CONTROL_V1')
+        return
+    require(len(args) in (3, 4, 7) and args[0] in ('stop', 'launch', 'tls-start', 'tls-csr', 'tls-install', 'tls-recover'))
+    require((args[0] in ('stop', 'tls-start', 'tls-csr') and len(args) == 3) or (args[0] == 'launch' and len(args) == 7) or (args[0] in ('tls-install', 'tls-recover') and len(args) == 4))
+    require(re.fullmatch(r'0|[1-9][0-9]?', args[1]) is not None)
+    slot = int(args[1]); require(slot < 32)
+    session = args[-1]; require(str(uuid.UUID(session)) == session)
+    root = Path(os.environ.get('DPAD_SESSION_STATE_DIR', '/var/lib/dpadcloud/session-control'))
+    root.mkdir(parents=True, mode=0o700, exist_ok=True)
+    info = root.lstat()
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid() and info.st_mode & 0o077 == 0)
+    fd = os.open(root / 'execution.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    EXECUTION_LOCK = fd
+    try:
+        # Global host serialization also excludes cross-slot library unmount / launch races.
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        path = root / f'{session}.json'
+        record = json.loads(path.read_text()) if path.exists() else {'session': session, 'slot': slot, 'mount': None, 'phase': 'new'}
+        require(record.get('session') == session and record.get('slot') == slot)
+        require(record.get('phase') in ('new', 'launching', 'active', 'stopping', 'stopped'))
+        if args[0] == 'stop':
+            stop(path, record, slot, session)
+        elif args[0] == 'tls-install':
+            tls_install(path, record, slot, session, args[2])
+        elif args[0] == 'tls-csr':
+            tls_csr(path, record, slot, session)
+        elif args[0] == 'tls-start':
+            tls_start(path, record, slot, session)
+        elif args[0] == 'tls-recover':
+            tls_start(path, record, slot, session, args[2])
+        else:
+            launch(path, record, slot, session, args[2:-1], fd)
+    finally:
+        # Do not explicitly unlock: an executing child must retain its inherited
+        # open-file-description lock after unexpected parent loss.
+        os.close(fd)
+
+
+if __name__ == '__main__':
+    try:
+        main(sys.argv[1:])
+    except Exception:
+        # Provider paths, Docker output, container configuration and passwords
+        # never escape through an exception or remote diagnostic.
+        print('DPAD_SESSION_CONTROL_UNCONFIRMED', file=sys.stderr)
+        sys.exit(1)
