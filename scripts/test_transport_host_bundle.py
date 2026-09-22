@@ -55,6 +55,34 @@ class TransportHostTests(unittest.TestCase):
             return subprocess.run(['bash', '-c', script], capture_output=True, text=True,
                                   env={k:v for k,v in os.environ.items() if not k.startswith('DPAD_')})
 
+    def test_stock595_managed_policy_accepts_labwc_and_rejects_unknown_desktops(self):
+        import shlex
+        policy = ('DPAD_DRIVER_POLICY=host\nDPAD_OVERLAY_POLICY=image-only\nDPAD_IMAGE_TAG=' + IMAGE
+                  + '\nDPAD_RELEASE_PROFILE=upcloud-stock595\nDPAD_PROVIDER=upcloud\n'
+                  'DPAD_ENCODER=nvcudah264enc\nDPAD_COMPOSITOR_EGL=multivendor\n'
+                  'DPAD_DESKTOP_CLIENT={desktop}\n'
+                  'DPAD_STOCK595_CODEC_INSTALLER=/opt/dpadcloud/dpad-stock595-codecs.py\n'
+                  'DPAD_STOCK595_CODEC_HOOK=/opt/dpadcloud/dpad-stock595-apt-hook.py\n')
+        for file in ('dpad-launch-session', 'vm-bootstrap.sh'):
+            for desktop in ('labwc', 'sway', 'unknown', ''):
+                with self.subTest(file=file, desktop=desktop):
+                    # Codec/GPU boundary is a no-op fixture; real policy parsing,
+                    # digest verification, selector exports and refusal run below.
+                    body = ('printf %s ' + shlex.quote(policy.format(desktop=desktop))
+                            + ' > /opt/dpadcloud/transport-release.env\n'
+                            'hash=$(sha256sum /opt/dpadcloud/transport-release.env)\n'
+                            "printf '%s %s\\n' " + 'b' * 40 + ' "${hash%% *}" > /opt/dpadcloud/transport-managed\n'
+                            'touch /opt/dpadcloud/dpad-stock595-codecs.py /opt/dpadcloud/dpad-stock595-apt-hook.py\n'
+                            'release_profile "" || exit 1\n'
+                            "printf 'SELECTED:%s:%s:%s:%s\\n' \"$DPAD_DESKTOP_CLIENT\" \"$DPAD_DRIVER_POLICY\" \"$DPAD_ENCODER\" \"$DPAD_COMPOSITOR_EGL\"\n")
+                    result = self.shell(file, body)
+                    if desktop in ('labwc', 'sway'):
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                        self.assertIn('SELECTED:' + desktop + ':host:nvcudah264enc:multivendor', result.stdout)
+                    else:
+                        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                        self.assertNotIn('SELECTED:', result.stdout)
+
     def test_managed_backend_policy_loss_fails_before_docker(self):
         for policy in BAD_POLICIES:
             with self.subTest(policy=policy), tempfile.TemporaryDirectory() as tmp:

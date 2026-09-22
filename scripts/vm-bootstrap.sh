@@ -156,7 +156,7 @@ release_profile() {
             upcloud-stock595)
                 [ "${#policy[@]}" = 10 ] && [ "${policy[DPAD_PROVIDER]}" = upcloud ] \
                     && [ "${policy[DPAD_ENCODER]}" = nvcudah264enc ] && [ "${policy[DPAD_COMPOSITOR_EGL]}" = multivendor ] \
-                    && [ "${policy[DPAD_DESKTOP_CLIENT]-}" = sway ] \
+                    && [[ "${policy[DPAD_DESKTOP_CLIENT]-}" = sway || "${policy[DPAD_DESKTOP_CLIENT]-}" = labwc ]] \
                     && [ "${policy[DPAD_STOCK595_CODEC_INSTALLER]-}" = /opt/dpadcloud/dpad-stock595-codecs.py ] \
                     && [ "${policy[DPAD_STOCK595_CODEC_HOOK]-}" = /opt/dpadcloud/dpad-stock595-apt-hook.py ] \
                     || { err "invalid stock595 transport policy"; return 1; } ;;
