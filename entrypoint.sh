@@ -830,7 +830,10 @@ start_launcher_session() {
     }
 
     # --- health loop: peer starts compositor -> launch the selected desktop ---
-    local desktop_pid="" desktop_launched=0 listener_failures=0
+    # Startup may expose the Selkies PID before it binds signaling. Once a
+    # listener has been observed, missing it twice is a real regression.
+    local desktop_pid="" desktop_launched=0 listener_failures=0 listener_seen=0
+    local listener_start_grace_until=$((SECONDS + 30))
     while true; do
         sleep 5
         local wl_sock="" wl_name=""
@@ -868,11 +871,13 @@ start_launcher_session() {
         else
             python3 /opt/dpadcloud/dpad-selkies-listener-health.py || listener_status=$?
             case "$listener_status" in
-                0) listener_failures=0 ;;
+                0) listener_failures=0; listener_seen=1 ;;
                 1)
-                    listener_failures=$((listener_failures + 1))
-                    if [ "$listener_failures" -ge 2 ]; then
-                        selkies_restart_reason="listener_missing"
+                    if [ "$listener_seen" -eq 1 ] || [ "$SECONDS" -ge "$listener_start_grace_until" ]; then
+                        listener_failures=$((listener_failures + 1))
+                        if [ "$listener_failures" -ge 2 ]; then
+                            selkies_restart_reason="listener_missing"
+                        fi
                     fi ;;
                 *)
                     # An unreadable /proc observation is not proof of a dead
@@ -896,6 +901,8 @@ start_launcher_session() {
             as_user "$selkies_cmd" >>/tmp/selkies.log 2>&1 &
             desktop_launched=0
             listener_failures=0
+            listener_seen=0
+            listener_start_grace_until=$((SECONDS + 30))
         fi
         if [ "${DPAD_GAMEPAD_INTERPOSER:-}" = "evdev" ] && ! pgrep -f evdev_bridge.py >/dev/null; then
             echo "[*] WARNING: evdev_bridge.py died — restarting..."
