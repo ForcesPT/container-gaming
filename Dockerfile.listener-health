@@ -3,3 +3,5 @@
 FROM forcespt/dpadcloud-gaming@sha256:a6588db47431191308fe7a38c1b1c8854da04e0473fef5c203787d5188cdad4f
 COPY --chmod=0755 entrypoint.sh /opt/dpadcloud/entrypoint.sh
 COPY --chmod=0755 scripts/dpad-selkies-listener-health.py /opt/dpadcloud/dpad-selkies-listener-health.py
+COPY --chmod=0755 scripts/dpad-patch-selkies-gst-state.py /opt/dpadcloud/dpad-patch-selkies-gst-state.py
+RUN python3 /opt/dpadcloud/dpad-patch-selkies-gst-state.py "$(python3 -c 'import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec("selkies_gstreamer").origin).parent)')"

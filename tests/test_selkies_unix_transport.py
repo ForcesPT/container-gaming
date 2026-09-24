@@ -17,9 +17,10 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 WHEEL = os.environ.get('DPAD_SELKIES_WHEEL')
+INSTALLED = os.environ.get('DPAD_SELKIES_INSTALLED') == '1'
 GATEWAY = os.environ.get('DPAD_GUEST_TLS_GATEWAY')
 
-@unittest.skipUnless(WHEEL, 'requires explicit pinned Selkies wheel and websockets<14')
+@unittest.skipUnless(WHEEL or INSTALLED, 'requires pinned Selkies wheel or installed image source')
 class SelkiesUnixTest(unittest.IsolatedAsyncioTestCase):
     async def test_actual_server_and_local_client_use_unix_only(self):
         await self.exercise(False)
@@ -33,12 +34,16 @@ class SelkiesUnixTest(unittest.IsolatedAsyncioTestCase):
         from websockets.exceptions import InvalidStatusCode
         with tempfile.TemporaryDirectory(prefix='dpad-selkies-') as directory:
             root = Path(directory)
-            assert WHEEL is not None
-            wheel = Path(WHEEL)
-            self.assertEqual(hashlib.sha256(wheel.read_bytes()).hexdigest(), 'f426ae093853492ecf857609efd4c9bd2141b24c619118561e42220927554eee')
-            with zipfile.ZipFile(wheel) as archive:
+            if WHEEL:
+                wheel = Path(WHEEL)
+                self.assertEqual(hashlib.sha256(wheel.read_bytes()).hexdigest(), 'f426ae093853492ecf857609efd4c9bd2141b24c619118561e42220927554eee')
+                with zipfile.ZipFile(wheel) as archive:
+                    for name in ('signalling_web.py', 'webrtc_signalling.py'):
+                        (root/name).write_bytes(archive.read('selkies_gstreamer/'+name))
+            else:
+                source_root = Path(importlib.util.find_spec('selkies_gstreamer').origin).parent
                 for name in ('signalling_web.py', 'webrtc_signalling.py'):
-                    (root/name).write_bytes(archive.read('selkies_gstreamer/'+name))
+                    (root/name).write_bytes((source_root/name).read_bytes())
             patcher = ROOT/'scripts/dpad-patch-selkies-unix'
             if patcher.exists():
                 patch = await asyncio.create_subprocess_exec(sys.executable, str(patcher), str(root))

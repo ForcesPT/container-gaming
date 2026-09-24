@@ -266,6 +266,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Signaling stays on the session-private Unix socket; TLS keys stay on the host.
 COPY scripts/dpad-patch-selkies-unix /opt/dpadcloud/dpad-patch-selkies-unix
 RUN python3 /opt/dpadcloud/dpad-patch-selkies-unix "$(python3 -c 'import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec("selkies_gstreamer").origin).parent)')"
+COPY scripts/dpad-patch-selkies-gst-state.py /opt/dpadcloud/dpad-patch-selkies-gst-state.py
+RUN python3 /opt/dpadcloud/dpad-patch-selkies-gst-state.py "$(python3 -c 'import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec("selkies_gstreamer").origin).parent)')"
 
 # Overwrite the deb's interposer .so with the patched build (JSIOCGNAME returns
 # name length so SDL3 accepts the Selkies virtual gamepad) for BOTH arches.
