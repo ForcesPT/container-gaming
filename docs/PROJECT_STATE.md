@@ -1,14 +1,13 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
-> **2026-09-24 OVH L4 Selkies follow-up — LOCAL CANDIDATE, GPU ACCEPTANCE
-> PENDING.** The listener-watchdog canary failed browser playback and was
-> rolled back; its paid VM was destroyed. The pinned Selkies pipeline rejected
-> valid `ASYNC`/`NO_PREROLL` state transitions. A narrow exact-source patch in
-> `Dockerfile.listener-health` and the full Dockerfile accepts those states
-> while preserving failure rejection. Local image build, method-level state
-> tests, and authenticated Unix signaling relay passed. The canary's exact
-> GStreamer return value was not captured, so GPU and browser acceptance still
-> require a fresh, explicitly authorized paid test. See
+> **2026-09-24 OVH Selkies follow-up — GPU ACCEPTANCE PENDING.** The
+> GStreamer-state derivative failed a paid Gravelines RTX 5000 browser canary.
+> Its exact return value was `FAILURE`, preceded by a Rust EGL device-enumeration
+> panic. NVIDIA-only client EGL discovery omitted `EGL_EXT_device_enumeration`
+> on that VM; adding the protected Mesa ICD exposed it. The next OVH-only
+> derivative enables the existing multivendor Selkies EGL mode through an
+> image flag, preserving NVIDIA-only desktop and Vulkan. Local build and tests
+> pass; live GPU and browser acceptance require separate authorization. See
 > `docs/SELKIES-LISTENER-HEALTH.md`.
 
 > **2026-09-05 stock595 Selkies — LOCAL SOURCE ONLY, NOT BUILT.** Explicit

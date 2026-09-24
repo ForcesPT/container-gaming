@@ -1,6 +1,7 @@
 # Narrow derivative of the immutable OVH Unix-signaling production image.
 # Keep the installed Selkies, driver, launcher, and codec stack byte-for-byte.
 FROM forcespt/dpadcloud-gaming@sha256:a6588db47431191308fe7a38c1b1c8854da04e0473fef5c203787d5188cdad4f
+ENV DPAD_OVH_MULTIVENDOR_EGL=1
 COPY --chmod=0755 entrypoint.sh /opt/dpadcloud/entrypoint.sh
 COPY --chmod=0755 scripts/dpad-selkies-listener-health.py /opt/dpadcloud/dpad-selkies-listener-health.py
 COPY --chmod=0755 scripts/dpad-patch-selkies-gst-state.py /opt/dpadcloud/dpad-patch-selkies-gst-state.py

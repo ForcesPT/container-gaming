@@ -8,6 +8,31 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 class SelkiesLaunchCommand(unittest.TestCase):
+    def test_ovh_uses_multivendor_egl_for_selkies_only(self):
+        text = (ROOT/'entrypoint.sh').read_text()
+        start = text.index('dpad_select_compositor_egl() {')
+        end = text.index('\n}', start) + len('\n}')
+        selector = text[start:end]
+        self.assertIn('dpad_select_compositor_egl "${DPAD_COMPOSITOR_EGL:-nvidia}" "${DPAD_OVH_MULTIVENDOR_EGL:-0}"', text)
+        self.assertIn('ENV DPAD_OVH_MULTIVENDOR_EGL=1', (ROOT/'Dockerfile.listener-health').read_text())
+        self.assertNotIn('ENV DPAD_OVH_MULTIVENDOR_EGL=1', (ROOT/'Dockerfile').read_text())
+        for requested, flag, expected in (
+            ('nvidia', '1', 'multivendor'),
+            ('multivendor', '1', 'multivendor'),
+            ('nvidia', '0', 'nvidia'),
+            ('multivendor', '0', 'multivendor'),
+        ):
+            result = subprocess.run(['bash', '-c', selector + '\ndpad_select_compositor_egl "$1" "$2"',
+                                     'fixture', requested, flag], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), expected)
+        invalid = subprocess.run(['bash', '-c', selector + '\ndpad_select_compositor_egl invalid 1'],
+                                 capture_output=True, text=True)
+        self.assertNotEqual(invalid.returncode, 0)
+        invalid_flag = subprocess.run(['bash', '-c', selector + '\ndpad_select_compositor_egl nvidia invalid'],
+                                      capture_output=True, text=True)
+        self.assertNotEqual(invalid_flag.returncode, 0)
+
     def test_image_applies_unix_transform_after_pinned_wheel_install(self):
         dockerfile = (ROOT/'Dockerfile').read_text()
         copy = 'COPY scripts/dpad-patch-selkies-unix /opt/dpadcloud/dpad-patch-selkies-unix'

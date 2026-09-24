@@ -555,6 +555,20 @@ setup_gamepad_interposer() {
     fi
 }
 
+dpad_select_compositor_egl() {
+    local requested="$1" image_multivendor="$2"
+    case "$requested" in nvidia|multivendor) ;; *) return 1 ;; esac
+    case "$image_multivendor" in 0|1) ;; *) return 1 ;; esac
+    # OVH's NVIDIA-only EGL client did not expose device enumeration on a live
+    # RTX 5000, while the same driver with the protected Mesa ICD did. Only the
+    # OVH-scoped derivative image sets this flag. Keep desktop and Vulkan on NVIDIA.
+    if [ "$image_multivendor" = 1 ] && [ "$requested" = nvidia ]; then
+        printf '%s\n' multivendor
+    else
+        printf '%s\n' "$requested"
+    fi
+}
+
 start_launcher_session() {
     local DPAD_DESKTOP_CLIENT="${DPAD_DESKTOP_CLIENT:-sway}"
     case "$DPAD_DESKTOP_CLIENT" in
@@ -695,8 +709,11 @@ start_launcher_session() {
     # → creates wayland-N in $XDG_RUNTIME_DIR). So: launch selkies, fire DPAD_READY
     # (listening), then the health loop polls for the socket and launches Sway.
     local enc="${DPAD_ENCODER:-nvh264enc}"
-    local compositor_egl="${DPAD_COMPOSITOR_EGL:-nvidia}"
-    case "$compositor_egl" in nvidia|multivendor) ;; *) echo "ERROR: invalid DPAD_COMPOSITOR_EGL" >&2; return 1 ;; esac
+    local compositor_egl
+    compositor_egl="$(dpad_select_compositor_egl "${DPAD_COMPOSITOR_EGL:-nvidia}" "${DPAD_OVH_MULTIVENDOR_EGL:-0}")" || {
+        echo "ERROR: invalid DPAD_COMPOSITOR_EGL" >&2; return 1
+    }
+    echo "    Selkies EGL discovery: ${compositor_egl}"
     # Encoder names enter a shell command; preserve supported legacy selections.
     case "$enc" in
         nvh264enc|nvcudah264enc|nvh265enc|nvav1enc|vah264enc|vah265enc|vavp9enc|vaav1enc|x264enc|openh264enc|x265enc|vp8enc|vp9enc|svtav1enc|av1enc|rav1enc) ;;
