@@ -1,0 +1,7 @@
+# Selkies listener health candidate
+
+The 2026-09-24 OVH GRA11 L4 canary showed gateway `upstream_connect_refused` while the container was running, `pgrep -f selkies-gstreamer` still returned the same PID, and the Unix socket pathname still existed. The process-only health loop did not restart Selkies. The worker's socket-generation repin could not repair a listener that was not accepting on its existing socket.
+
+This local candidate checks the container's `/proc/net/unix` table for the exact live listening socket, without opening an extra WebSocket connection. Two consecutive five-second checks that find no listener trigger the existing Selkies/compositor restart path. An unreadable `/proc/net/unix` observation does not trigger a restart. The helper rejects symlinks, stale socket files, bound-but-not-listening sockets, and relative paths. Its Linux socket tests and `bash -n entrypoint.sh` pass.
+
+This does not identify why Selkies stopped listening. The worker candidate from `ForcesPT/dpadplay` revision `718ce09` must also be redeployed so that it can repin the socket after this supervisor creates a replacement. The current gaming image may bind-mount a pinned host entrypoint over its baked entrypoint, so any release must update the complete pinned host bundle and gaming-image digest together. No new image has been published and no second paid VM has been launched for this candidate.

@@ -830,7 +830,7 @@ start_launcher_session() {
     }
 
     # --- health loop: peer starts compositor -> launch the selected desktop ---
-    local desktop_pid="" desktop_launched=0
+    local desktop_pid="" desktop_launched=0 listener_failures=0
     while true; do
         sleep 5
         local wl_sock="" wl_name=""
@@ -862,11 +862,32 @@ start_launcher_session() {
                 desktop_launched=0
             fi
         fi
+        local selkies_restart_reason="" listener_status=0
         if ! pgrep -f selkies-gstreamer >/dev/null; then
-            echo "[*] WARNING: selkies-gstreamer died — restarting compositor and desktop..."
+            selkies_restart_reason="process_missing"
+        else
+            python3 /opt/dpadcloud/dpad-selkies-listener-health.py || listener_status=$?
+            case "$listener_status" in
+                0) listener_failures=0 ;;
+                1)
+                    listener_failures=$((listener_failures + 1))
+                    if [ "$listener_failures" -ge 2 ]; then
+                        selkies_restart_reason="listener_missing"
+                    fi ;;
+                *)
+                    # An unreadable /proc observation is not proof of a dead
+                    # listener. Keep the process and let the worker fail closed.
+                    listener_failures=0 ;;
+            esac
+        fi
+        if [ -n "$selkies_restart_reason" ]; then
+            echo "[*] WARNING: selkies-gstreamer ${selkies_restart_reason} — restarting compositor and desktop..."
             pkill -f selkies-gstreamer 2>/dev/null || true
-            pkill -9 -x "$DPAD_DESKTOP_CLIENT" 2>/dev/null || true
             sleep 2
+            if pgrep -f selkies-gstreamer >/dev/null; then
+                pkill -9 -f selkies-gstreamer 2>/dev/null || true
+            fi
+            pkill -9 -x "$DPAD_DESKTOP_CLIENT" 2>/dev/null || true
             _dpad_clean_wayland_sockets
             if ! selkies_cmd="$(build_selkies_cmd)"; then
                 echo "[!] Refusing to restart Selkies with an invalid stream bitrate profile" >&2
@@ -874,6 +895,7 @@ start_launcher_session() {
             fi
             as_user "$selkies_cmd" >>/tmp/selkies.log 2>&1 &
             desktop_launched=0
+            listener_failures=0
         fi
         if [ "${DPAD_GAMEPAD_INTERPOSER:-}" = "evdev" ] && ! pgrep -f evdev_bridge.py >/dev/null; then
             echo "[*] WARNING: evdev_bridge.py died — restarting..."
