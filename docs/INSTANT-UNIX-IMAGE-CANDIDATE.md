@@ -25,10 +25,16 @@ Local unbilled verification:
 - 20 focused launch, quality, hotfix, and TURN checks passed in Linux.
 
 The local handshake is signaling evidence, not decoded GPU video or Epic game
-acceptance. The candidate has not been published or selected in production.
-Before release, publish it under a new immutable registry reference, add that
-exact digest to the host controller's baked-Unix-image allowlist, and verify the
-controller omits only the stale stream-hotfix mounts for that image. Otherwise
-the old entrypoint overlay would recreate the TCP mismatch. Then build a scoped
-worker release and run a separately bounded Paris canary through gameplay,
-billing, and complete server/boot-volume cleanup.
+acceptance. The candidate was published without selecting it in production:
+`forcespt/dpadcloud-gaming:instant-unix-20260925-937ed8c` resolves to exact
+digest `sha256:056eb3a0bd2ec139030519e17e2914ef5261aa1b267adee4be952b4389e2c3c2`
+with a Linux amd64 manifest. Its source revision label is
+`937ed8c5f79ffbe93b111406477fec011ba1652c`. The companion worker branch
+adds precisely this digest to the baked-Unix-image allowlist. Its 15 host
+controller fixture tests verify that only the stale stream-hotfix mounts are
+removed for this image, and that unrelated image references retain their mounts.
+
+Before production selection, build and review the scoped worker release from
+the companion branch, then run a separately bounded Paris canary through
+gameplay, billing, and complete server/boot-volume cleanup. The old entrypoint
+overlay must never shadow this image in that release.
