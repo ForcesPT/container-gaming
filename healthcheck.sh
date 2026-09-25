@@ -12,8 +12,8 @@ fi
 if ! pgrep -f "selkies-gstreamer" >/dev/null; then
     echo "UNHEALTHY: selkies-gstreamer is not running"; exit 1
 fi
-if ! timeout 3 bash -c "</dev/tcp/127.0.0.1/${selkies_port}" 2>/dev/null; then
-    echo "UNHEALTHY: Selkies is not listening on port $selkies_port"; exit 1
+if ! timeout 3 python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect("/run/dpad-signaling/stream.sock"); s.close()' 2>/dev/null; then
+    echo "UNHEALTHY: Selkies is not listening on its private Unix socket"; exit 1
 fi
 # The server can listen and pass pgrep while its capture plugin is blacklisted;
 # that failure only crashes Selkies when the first browser peer starts video.

@@ -1,0 +1,12 @@
+# Scoped Instant Play transport correction. Keep the Epic-capable base image
+# identical to the 2026-09-25 canary and replace only its signaling transport
+# modules, entrypoint, and health check. Build from this source revision.
+FROM forcespt/dpadcloud-gaming@sha256:c5fa2556c232dbf2cfb4e031aa215fade1a5ca233090ba98cf03dbd93a1142dd
+
+COPY scripts/dpad-patch-selkies-unix /opt/dpadcloud/dpad-patch-selkies-unix
+RUN python3 /opt/dpadcloud/dpad-patch-selkies-unix "$(python3 -c 'import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec("selkies_gstreamer").origin).parent)')"
+
+COPY entrypoint.sh healthcheck.sh /opt/dpadcloud/
+RUN sed -i 's/\r$//' /opt/dpadcloud/entrypoint.sh /opt/dpadcloud/healthcheck.sh \
+    && chmod 0755 /opt/dpadcloud/entrypoint.sh /opt/dpadcloud/healthcheck.sh \
+    && bash -n /opt/dpadcloud/entrypoint.sh /opt/dpadcloud/healthcheck.sh

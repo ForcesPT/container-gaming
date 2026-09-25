@@ -745,7 +745,7 @@ start_launcher_session() {
       stream_height="${resolution#*x}"
       quality="$(_dpad_quality "$stream_width" "$stream_height")" || return 1
       read -r video_bitrate audio_bitrate <<<"$quality"
-      echo "export DISPLAY=:99 DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_DESKTOP_CLIENT=${DPAD_DESKTOP_CLIENT} DPAD_STREAM_WIDTH=${stream_width} DPAD_STREAM_HEIGHT=${stream_height} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=${selkies_port} --enable_https=false --encoder=${enc} --framerate=${stream_fps} --video_bitrate=${video_bitrate} --audio_bitrate=${audio_bitrate} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
+      echo "export DISPLAY=:99 DPAD_SIGNAL_UNIX_SOCKET=/run/dpad-signaling/stream.sock DPAD_VIDEO_SRC=${video_src} DPAD_INPUT_DISPLAY=:0 DPAD_DESKTOP_CLIENT=${DPAD_DESKTOP_CLIENT} DPAD_STREAM_WIDTH=${stream_width} DPAD_STREAM_HEIGHT=${stream_height} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} PULSE_SERVER=${PULSE_SERVER} PIPEWIRE_LATENCY=10ms GST_DEBUG=1 LD_PRELOAD='${LD_PRELOAD:-${SELKIES_INTERPOSER}}' SDL_JOYSTICK_DEVICE=/dev/input/js0 SELKIES_INTERPOSER='${SELKIES_INTERPOSER}' DPAD_GAMEPAD_INTERPOSER=${DPAD_GAMEPAD_INTERPOSER:-}; . /opt/gstreamer/gst-env; selkies-gstreamer --addr=${DPAD_SELKIES_BIND:-127.0.0.1} --port=${selkies_port} --enable_https=false --encoder=${enc} --framerate=${stream_fps} --video_bitrate=${video_bitrate} --audio_bitrate=${audio_bitrate} --enable_basic_auth=true --basic_auth_user='${SELKIES_USER}' --basic_auth_password='${SELKIES_PASS}' --enable_resize=false --enable_cursors=true --rtc_config_json='${rtc}' --audio_packetloss_percent=${DPAD_AUDIO_PACKETLOSS:-0} --video_packetloss_percent=${DPAD_VIDEO_PACKETLOSS:-0} --js_socket_path=/tmp --web_root=${SELKIES_WEB_ROOT}"
     }
     local initial_resolution initial_width initial_height initial_quality video_bitrate audio_bitrate selkies_cmd
     initial_resolution="$(_dpad_res)"
@@ -775,8 +775,20 @@ start_launcher_session() {
         echo "    WARNING: selkies failed to start (see /tmp/selkies.log)"; tail -20 /tmp/selkies.log 2>/dev/null | sed 's/^/      /'
         return 1
     fi
-    echo "    Selkies listening on ${DPAD_SELKIES_BIND:-127.0.0.1}:${selkies_port} (wayland-display compositor; encoder=${enc}, video=${video_bitrate}kbps, audio=${audio_bitrate}bps, audio_fec=${DPAD_AUDIO_PACKETLOSS:-0}%, video_fec=${DPAD_VIDEO_PACKETLOSS:-0}%)"
-    echo "DPAD_READY slot=${DPAD_SLOT:-0} bind=${DPAD_SELKIES_BIND:-127.0.0.1}:${selkies_port} encoder=${enc} video_kbps=${video_bitrate} audio_bps=${audio_bitrate}"
+    local signaling_ready=0
+    for ((attempt=0; attempt<20; attempt++)); do
+        if timeout 2 python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(1); s.connect("/run/dpad-signaling/stream.sock"); s.close()' 2>/dev/null; then
+            signaling_ready=1
+            break
+        fi
+        sleep 0.5
+    done
+    if [ "$signaling_ready" -ne 1 ]; then
+        echo "    ERROR: Selkies private signaling socket is unavailable" >&2
+        return 1
+    fi
+    echo "    Selkies listening on the private Unix signaling socket (wayland-display compositor; encoder=${enc}, video=${video_bitrate}kbps, audio=${audio_bitrate}bps, audio_fec=${DPAD_AUDIO_PACKETLOSS:-0}%, video_fec=${DPAD_VIDEO_PACKETLOSS:-0}%)"
+    echo "DPAD_READY slot=${DPAD_SLOT:-0} transport=unix encoder=${enc} video_kbps=${video_bitrate} audio_bps=${audio_bitrate}"
     echo "    NOTE: video appears after a peer connects and the ${DPAD_DESKTOP_CLIENT} launcher desktop starts"
 
     # The selected nested desktop provides XWayland for Steam and Windows store
