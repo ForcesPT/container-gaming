@@ -1,5 +1,16 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-26 reconnect canary — SPEED ACCEPTANCE FAILED, REFERENCE RESTORED.**
+> The scoped `b01a785` browser image was published at digest
+> `252180a771f53c2df6f96be64366223b1ff91b328e9d5a28f302beb265ac557f` and tested
+> in one approved Paris L4 session. Renewal recovered automatically in about
+> 27 seconds, slower than the previous 13-second observation. Certificate
+> activation overlap was also longer, so the single run does not isolate cause.
+> Production was restored to gaming digest `056eb3a0bd2ec139030519e17e2914ef5261aa1b267adee4be952b4389e2c3c2`.
+> The session ended; server and exact boot volume returned provider 404 at
+> 03:15:50 UTC. No store login or gameplay was attempted. Diagnose authority
+> activation and signalling registration delay before another paid test.
+
 > **2026-09-26 Selkies reconnect — LOCAL CANDIDATE ONLY.** Fixed independent
 > audio/video reconnect coordination, duplicate retry timers and stale socket/peer
 > events in the pinned 1.6.2 browser client. Retry backoff starts at 250 ms and
