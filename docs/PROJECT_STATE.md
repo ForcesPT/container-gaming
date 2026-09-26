@@ -1,5 +1,15 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-26 Selkies reconnect — LOCAL CANDIDATE ONLY.** Fixed independent
+> audio/video reconnect coordination, duplicate retry timers and stale socket/peer
+> events in the pinned 1.6.2 browser client. Retry backoff starts at 250 ms and
+> caps at 3 seconds; unstable peer reset no longer adds a fixed 3-second delay.
+> Local build and lifecycle/transform checks passed. `Dockerfile.reconnect` pins
+> the exact live image and excludes the pending Heroic runner change. Certificate
+> expiry, revocation and gateway rotation behavior are unchanged. No live latency
+> improvement has been measured; production's last observed recovery was 13 seconds.
+> See `STREAM-RECONNECT.md` for reproduction and the remaining GPU acceptance.
+
 > **2026-09-25 Instant ABZÛ canary — gameplay blocked.** The live Paris L4
 > session streamed the desktop and Heroic, and Epic sign-in exposed ABZÛ as
 > installed from the shared game path. Its first launch stopped at a DirectX 11

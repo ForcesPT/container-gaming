@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Bounded reconnect lifecycle for the pinned Selkies 1.6.2 browser client."""
+from pathlib import Path
+import hashlib
+import re
+import sys
+
+MARKER = '// DPAD_RECONNECT_V1'
+SUPPORTED = {
+    'signalling.js': '17829db232fc118ab9cac1b4463372bdcdd842e7bfa32f6140a7883639ef762d',
+    'webrtc.js': '0352126179520df87f094d1db6907acb5bf0980c09dca8debee88365dc9a00b3',
+}
+
+
+def replace_once(text, old, new):
+    if text.count(old) != 1:
+        raise ValueError('unsupported Selkies reconnect source')
+    return text.replace(old, new, 1)
+
+
+def method(text, name, body):
+    pattern = re.compile(r'^    ' + re.escape(name) + r'\(\) \{\n.*?^    \}', re.M | re.S)
+    if len(pattern.findall(text)) != 1:
+        raise ValueError('unsupported Selkies reconnect method')
+    return pattern.sub(lambda _: '    ' + name + '() {\n' + body + '\n    }', text, count=1)
+
+
+def transform(name, text):
+    if MARKER in text:
+        return text
+    if name in SUPPORTED and hashlib.sha256(text.encode()).hexdigest() != SUPPORTED[name]:
+        raise ValueError('unsupported Selkies reconnect source hash: ' + name)
+    if name == 'app.js':
+        for signal, rtc in (('signalling', 'webrtc'), ('audio_signalling', 'audio_webrtc')):
+            pattern = re.compile(r'^' + signal + r'\.ondisconnect = \(\) => \{\n.*?^\}', re.M | re.S)
+            matches = pattern.findall(text)
+            if len(matches) != 1 or 'var checkconnect = app.status == checkconnect;' not in matches[0]:
+                raise ValueError('unsupported Selkies disconnect coordinator')
+            replacement = f'''{signal}.ondisconnect = () => {{
+    app.status = 'connecting';
+    videoElement.style.cursor = "auto";
+    {rtc}.reset();
+}}'''
+            text = pattern.sub(lambda _: replacement, text, count=1)
+    elif name == 'signalling.js':
+        text = replace_once(
+            text, '        this.retry_count = 0;\n    }\n\n    /**\n     * Sets status message.',
+            '        this.retry_count = 0;\n        this._retryTimer = null;\n    }\n\n    /**\n     * Sets status message.')
+        text = replace_once(text, '        this._setStatus("Registering with server, peer ID: " + this.peer_id);\n        this.retry_count = 0;',
+                            '        this._setStatus("Registering with server, peer ID: " + this.peer_id);')
+        text = replace_once(text, '        if (event.data === "HELLO") {',
+                            '        if (event.data === "HELLO") {\n            this.retry_count = 0;')
+        text = method(text, '_onServerError', '''        this._scheduleReconnect();''')
+        text = method(text, '_onServerClose', '''        if (this.state === 'connecting') {
+            this._scheduleReconnect();
+            return;
+        }
+        this.state = 'disconnected';
+        this._setError("Server closed connection.");
+        if (this.ondisconnect !== null) this.ondisconnect();''')
+        text = method(text, 'connect', '''        if (this._ws_conn && (this._ws_conn.readyState === WebSocket.CONNECTING || this._ws_conn.readyState === WebSocket.OPEN)) return;
+        if (this._retryTimer !== null) clearTimeout(this._retryTimer);
+        this._retryTimer = null;
+        this.state = 'connecting';
+        this._setStatus("Connecting to server.");
+        const socket = new WebSocket(this._server);
+        this._ws_conn = socket;
+        // Late events from a replaced socket cannot reset the new connection.
+        for (const [event, handler] of [['open', this._onServerOpen], ['error', this._onServerError], ['message', this._onServerMessage], ['close', this._onServerClose]]) {
+            socket.addEventListener(event, value => {
+                if (this._ws_conn === socket) handler.call(this, value);
+            });
+        }''')
+        text = replace_once(text, '    _onServerError() {', '''    _scheduleReconnect() {
+        if (this._retryTimer !== null) return;
+        const delay = Math.min(3000, 250 * Math.pow(2, Math.min(this.retry_count++, 4)));
+        this._setStatus("Connection interrupted, retry in " + delay + " ms.");
+        this._retryTimer = setTimeout(() => {
+            this._retryTimer = null;
+            this.connect();
+        }, delay);
+    }
+
+    _onServerError() {''')
+    elif name == 'webrtc.js':
+        text = method(text, 'reset', '''        this.cursor_cache = new Map();
+        if (this._send_channel !== null && this._send_channel.readyState === "open") this._send_channel.close();
+        if (this.peerConnection !== null) this.peerConnection.close();
+        this.connect();''')
+        text = replace_once(text, '        this.peerConnection.onconnectionstatechange = () => {',
+                            '        const currentPeer = this.peerConnection;\n        this.peerConnection.onconnectionstatechange = () => {\n            if (this.peerConnection !== currentPeer) return;')
+    else:
+        raise ValueError('unsupported Selkies browser file')
+    return MARKER + '\n' + text
+
+
+def main(directory):
+    root = Path(directory)
+    # Validate the complete supported source before writing any browser file.
+    changed = {name: transform(name, (root / name).read_text())
+               for name in ('app.js', 'signalling.js', 'webrtc.js')}
+    for name, text in changed.items():
+        (root / name).write_text(text)
+
+
+if __name__ == '__main__':
+    main(sys.argv[1])

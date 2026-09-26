@@ -1,0 +1,11 @@
+# Scoped browser-only candidate on the exact current production gaming image.
+FROM forcespt/dpadcloud-gaming@sha256:056eb3a0bd2ec139030519e17e2914ef5261aa1b267adee4be952b4389e2c3c2 AS runtime
+COPY scripts/dpad-patch-selkies-reconnect /opt/dpadcloud/dpad-patch-selkies-reconnect
+RUN python3 /opt/dpadcloud/dpad-patch-selkies-reconnect /opt/gst-web
+RUN python3 /opt/dpadcloud/patch_live_resolution.py
+FROM node:20-bookworm@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5 AS verify
+COPY --from=runtime /opt/gst-web /web
+COPY tests/test_selkies_reconnect.cjs /test.cjs
+RUN node /test.cjs /web && touch /reconnect-verified
+FROM runtime
+COPY --from=verify /reconnect-verified /opt/dpadcloud/reconnect-verified

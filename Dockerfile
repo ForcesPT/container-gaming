@@ -332,6 +332,10 @@ COPY scripts/patch_live_resolution.py /opt/dpadcloud/patch_live_resolution.py
 RUN chmod +x /opt/dpadcloud/patch_live_resolution.py \
     && /opt/dpadcloud/patch_live_resolution.py
 
+# Keep each media peer's reconnect lifecycle independent and bound retry rate.
+COPY scripts/dpad-patch-selkies-reconnect /opt/dpadcloud/dpad-patch-selkies-reconnect
+RUN python3 /opt/dpadcloud/dpad-patch-selkies-reconnect /opt/gst-web
+
 # --- 5. NVENC #1249 fix (libnvenc_fix.so from interposer-builder) ---
 # Fixes nvidia-container-toolkit #1249 on driver >=570 when only a slice of a
 # multi-GPU host is assigned (filters GET_ATTACHED_IDS to mounted GPUs).
