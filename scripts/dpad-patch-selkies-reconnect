@@ -6,6 +6,8 @@ import re
 import sys
 
 MARKER = '// DPAD_RECONNECT_V1'
+ASSET_VERSION = 'dpad-reconnect-20260926-v2'
+UPSTREAM_VERSION = '1723709107'
 SUPPORTED = {
     'signalling.js': '17829db232fc118ab9cac1b4463372bdcdd842e7bfa32f6140a7883639ef762d',
     'webrtc.js': '0352126179520df87f094d1db6907acb5bf0980c09dca8debee88365dc9a00b3',
@@ -27,6 +29,9 @@ def method(text, name, body):
 
 def transform(name, text):
     if MARKER in text:
+        if name == 'app.js' and './sw.js?ts=' + UPSTREAM_VERSION in text:
+            return replace_once(text, './sw.js?ts=' + UPSTREAM_VERSION,
+                                './sw.js?ts=' + ASSET_VERSION)
         return text
     if name in SUPPORTED and hashlib.sha256(text.encode()).hexdigest() != SUPPORTED[name]:
         raise ValueError('unsupported Selkies reconnect source hash: ' + name)
@@ -91,7 +96,19 @@ def transform(name, text):
                             '        const currentPeer = this.peerConnection;\n        this.peerConnection.onconnectionstatechange = () => {\n            if (this.peerConnection !== currentPeer) return;')
     else:
         raise ValueError('unsupported Selkies browser file')
+    if name == 'app.js':
+        text = replace_once(text, './sw.js?ts=' + UPSTREAM_VERSION,
+                            './sw.js?ts=' + ASSET_VERSION)
     return MARKER + '\n' + text
+
+
+def version_assets(name, text):
+    # The pinned PWA otherwise serves old client code after a normal reload.
+    if ASSET_VERSION in text and UPSTREAM_VERSION not in text:
+        return text
+    if UPSTREAM_VERSION not in text or ASSET_VERSION in text:
+        raise ValueError('unsupported Selkies cache version: ' + name)
+    return text.replace(UPSTREAM_VERSION, ASSET_VERSION)
 
 
 def main(directory):
@@ -99,6 +116,8 @@ def main(directory):
     # Validate the complete supported source before writing any browser file.
     changed = {name: transform(name, (root / name).read_text())
                for name in ('app.js', 'signalling.js', 'webrtc.js')}
+    for name in ('index.html', 'sw.js'):
+        changed[name] = version_assets(name, (root / name).read_text())
     for name, text in changed.items():
         (root / name).write_text(text)
 

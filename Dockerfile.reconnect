@@ -8,4 +8,6 @@ COPY --from=runtime /opt/gst-web /web
 COPY tests/test_selkies_reconnect.cjs /test.cjs
 RUN node /test.cjs /web && touch /reconnect-verified
 FROM runtime
+ARG DPAD_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION
 COPY --from=verify /reconnect-verified /opt/dpadcloud/reconnect-verified

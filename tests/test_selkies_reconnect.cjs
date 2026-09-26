@@ -74,4 +74,15 @@ rtc._send_channel=null;rtc.peerConnection={signalingState:'have-local-offer',clo
 rtc.connect=()=>connected++;
 rtc.reset();assert.equal(closed,1);assert.equal(connected,1,'unstable old negotiation adds no fixed reset delay');
 rtc.peerConnection=null;rtc.reset();assert.equal(connected,2,'initial null peer is safe');
-console.log('Selkies reconnect lifecycle: all checks passed');
+// All entry points must select new cache keys, including a previously installed PWA.
+const indexSource=fs.readFileSync(path.join(root,'index.html'),'utf8');
+const workerSource=fs.readFileSync(path.join(root,'sw.js'),'utf8');
+const assetVersion=workerSource.match(/const cacheVersion = "([^"]+)"/)[1];
+assert.notEqual(assetVersion,'1723709107');
+for(const asset of ['app.js','signalling.js','webrtc.js']) {
+ assert.ok(indexSource.includes(asset+'?ts='+assetVersion));
+ assert.ok(workerSource.includes(asset+'?ts='+assetVersion));
+}
+assert.ok(appSource.includes('./sw.js?ts='+assetVersion));
+for(const source of [indexSource,workerSource,appSource])assert.ok(!source.includes('1723709107'));
+console.log('Selkies reconnect lifecycle and cache version: all checks passed');

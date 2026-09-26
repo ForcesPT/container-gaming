@@ -42,3 +42,21 @@ Use a separately authorized bounded GPU canary to observe one certificate renewa
 record audio/video recovery time and check for a second disconnect. End the session
 and confirm the provider VM and boot volume are absent. Local lifecycle checks
 do not prove GPU recovery or game launch.
+
+## 2026-09-26 cache delivery correction
+
+The gateway reload canary applied a browser patch inside its disposable container,
+but a normal reload retained the original retry logs. The pinned PWA cache uses
+`1723709107` for its namespace, cached scripts, HTML script URLs and worker
+registration. The patch now advances all of these entry points together to
+`dpad-reconnect-20260926-v2`, so a cached old script cannot match a new request.
+Source validation for HTML and the service worker occurs before any file write.
+The Python suite checks matching versions, repeated application and rejection of
+unknown cache source without partial writes. Node image gates verify all script
+URLs and worker registration agree with the new cache namespace.
+
+The current paid test ended at 03:52:54 UTC. Server and boot volume both returned
+404 at 03:53:47 UTC. Its three renewals proved stable gateway PID/start time;
+client interruptions were 41, 9 and 9 seconds. The third renewal cannot qualify
+the patched client because the PWA still delivered old retry behavior. A new
+immutable-image canary is required before claiming combined live acceptance.
