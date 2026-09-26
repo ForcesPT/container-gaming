@@ -90,3 +90,9 @@ The earlier in-place file patch was also inconclusive because Selkies preloads
 web files at server startup. PWA caching is a separate stale-code mechanism;
 it was not uniquely proven to cause that failed reload. Use a fresh container
 and verify versioned browser URLs for future acceptance.
+
+Published async retry artifact:
+`forcespt/dpadcloud-gaming@sha256:974bd4fc8cac1c4fbada479b46da8d723cad05d38526289b07810813ebbf662d`
+(tag `instant-async-retry-20260926-f0e88dc`, source f0e88dc). Both callback
+behavior and exact-source tests passed in the scoped build. Control-plane
+override and rollback are prepared without switching gaming references.
