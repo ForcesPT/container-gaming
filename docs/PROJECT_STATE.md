@@ -1,5 +1,18 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-25 Instant ABZÛ canary — gameplay blocked.** The live Paris L4
+> session streamed the desktop and Heroic, and Epic sign-in exposed ABZÛ as
+> installed from the shared game path. Its first launch stopped at a DirectX 11
+> feature-level dialog. Heroic's game log showed DXVK v3.1.1 finding no Vulkan
+> adapters through `winevulkan.dll`, despite `vulkaninfo` seeing the NVIDIA L4
+> with Vulkan 1.4 in the same container. Heroic offered only Ubuntu Wine 9.0;
+> the pre-baked GE-Proton11-3 under Steam's compatibility directory was absent
+> from Heroic's runner dropdown. Source commit `63fb76a` exposes that existing
+> checked runner through Heroic's tools/proton path. This is a discoverability
+> candidate, not a proven DXVK fix: rebuild and verify the exact image locally,
+> then inspect Heroic runner selection and adapter enumeration on one separately
+> authorized GPU canary. No new image was built or deployed for this change.
+>
 > **Instant Play shared-release registration — SOURCE ONLY, NOT DEPLOYED.**
 > The maintained host launcher passes a validated pinned installation descriptor.
 > `launcher-shell` prepares private Heroic/Legendary inventory before any GUI starts;
