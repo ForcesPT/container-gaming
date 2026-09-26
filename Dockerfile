@@ -737,7 +737,9 @@ RUN chmod +x /opt/dpadcloud/launcher/dpad-launcher
 #        the DualSense haptics/hotplug work. All Windows launchers run via
 #        Xwayland (PROTON_ENABLE_WAYLAND unset) — STORES-PLAN §4/§5. SHA-pinned
 #        via the GE_PROTON_SHA256 default. Version and checksum must be bumped
-#        together when upgrading the runner.
+#        together when upgrading the runner. Heroic scans its own tools/proton
+#        directory but did not discover this Steam path in the Instant canary;
+#        expose the same checked runner there without duplicating its payload.
 ARG GE_PROTON_VERSION=GE-Proton11-3
 ARG GE_PROTON_SHA256=861c2edc8d40d051fb1e7a692deb953be52bd339c46d90f2b7dde50ddad91266
 RUN set -e; \
@@ -750,7 +752,11 @@ RUN set -e; \
     && tar -xzf /tmp/ge-proton.tar.gz -C "${GP_DIR}" --strip-components=1 \
     && rm -f /tmp/ge-proton.tar.gz \
     && chown -R ${USERNAME}:${USERNAME} "${GP_DIR}" \
-    && test -x "${GP_DIR}/proton"  # sanity: the runner binary is present + executable
+    && test -x "${GP_DIR}/proton" \
+    && mkdir -p "${HOME}/.config/heroic/tools/proton" \
+    && ln -s "${GP_DIR}" "${HOME}/.config/heroic/tools/proton/${GE_PROTON_VERSION}" \
+    && chown -R ${USERNAME}:${USERNAME} "${HOME}/.config/heroic/tools" \
+    && test -x "${HOME}/.config/heroic/tools/proton/${GE_PROTON_VERSION}/proton"
 
 #    (d) libSDL3 for dpad-launcher's gamepad input (koffi FFI dlopen). SDL3
 #        is NOT in Noble repos; the oracular libsdl3-0 .deb churns the pinned
