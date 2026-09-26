@@ -60,3 +60,33 @@ The current paid test ended at 03:52:54 UTC. Server and boot volume both returne
 client interruptions were 41, 9 and 9 seconds. The third renewal cannot qualify
 the patched client because the PWA still delivered old retry behavior. A new
 immutable-image canary is required before claiming combined live acceptance.
+
+## 2026-09-26 shared server event loop repair
+
+The corrected immutable browser canary recovered after three rotations in
+8/8/9 seconds. It ended at 04:17:31 UTC; server and boot volume were confirmed
+absent at 04:24:32 UTC. Gaming references were restored; no unconditional
+brief-rotation or connection-stability acceptance is claimed.
+
+The CPU-only pinned standalone signalling server registered both channels in
+under the same logged second and recovered from a forced restart in about one
+second with visible 250/500 ms client retries. Inspection of the combined
+Selkies process found `time.sleep(2)` inside both async missing-peer handlers.
+Both handlers share the event loop with the signalling server, so these waits
+block new WebSocket handshakes and HELLO responses while waiting for peers.
+
+`dpad-patch-selkies-async-retry` replaces exactly those two waits with
+`await asyncio.sleep(2)`, preserving retry cadence and unrelated error handling.
+It pins original and transformed source hashes, rejects unknown changes, and
+is idempotent only for the exact output. Behavioral tests execute the actual
+extracted callback AST and prove handshakes can proceed while both retries are
+pending, then prove both setup calls execute after the waits complete.
+
+`Dockerfile.async-retry` extends the exact published browser-only a8ae8f80 image
+with this correction. It excludes pending launcher/runner changes. Live latency
+qualification requires a newly authorized bounded immutable-image canary.
+
+The earlier in-place file patch was also inconclusive because Selkies preloads
+web files at server startup. PWA caching is a separate stale-code mechanism;
+it was not uniquely proven to cause that failed reload. Use a fresh container
+and verify versioned browser URLs for future acceptance.

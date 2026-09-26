@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""Keep missing-peer retries from blocking the shared signalling event loop."""
+import ast
+import hashlib
+from pathlib import Path
+import sys
+
+SOURCE_SHA = '714b3b2204d486ec26af882150c8631412d9d92091d14a2d4594f2d12f750843'
+PATCHED_SHA = 'a1971728d06d771a0264f4155174971767d710d065680753e2ed022ec1360ac8'
+
+def transform(source):
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    if digest == PATCHED_SHA:
+        return source
+    if digest != SOURCE_SHA:
+        raise ValueError('unsupported Selkies async retry source')
+    old = '           time.sleep(2)'
+    if source.count(old) != 2:
+        raise ValueError('unsupported Selkies async retry callbacks')
+    changed = '# DPAD_ASYNC_RETRY_V1\n' + source.replace(old, '           await asyncio.sleep(2)')
+    ast.parse(changed)
+    if hashlib.sha256(changed.encode()).hexdigest() != PATCHED_SHA:
+        raise ValueError('unexpected Selkies async retry output')
+    return changed
+
+if __name__ == '__main__':
+    path = Path(sys.argv[1])
+    path.write_text(transform(path.read_text()))

@@ -1,0 +1,9 @@
+# Browser cache/reconnect repair plus only the server's blocking-wait correction.
+FROM forcespt/dpadcloud-gaming@sha256:a8ae8f806a7919d164c9092011a0cce49b152e3de0373baec42b04aea303618e
+COPY scripts/dpad-patch-selkies-async-retry /opt/dpadcloud/dpad-patch-selkies-async-retry
+COPY tests/test_selkies_async_retry.py /tmp/test_selkies_async_retry.py
+RUN DPAD_ASYNC_RETRY_PATCHER=/opt/dpadcloud/dpad-patch-selkies-async-retry python3 /tmp/test_selkies_async_retry.py /usr/local/lib/python3.12/dist-packages/selkies_gstreamer/__main__.py \
+    && python3 /opt/dpadcloud/dpad-patch-selkies-async-retry /usr/local/lib/python3.12/dist-packages/selkies_gstreamer/__main__.py \
+    && rm /tmp/test_selkies_async_retry.py
+ARG DPAD_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION
