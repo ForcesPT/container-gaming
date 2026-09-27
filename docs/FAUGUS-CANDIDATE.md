@@ -7,6 +7,12 @@ Separate Dockerfile.faugus extends the exact accepted gaming runtime digest
 This is a local candidate, not a production replacement or gameplay qualification.
 No cloud VM was started for this work.
 
+Candidate source was published on `feat/faugus-epic-candidate` at `f4c70bf`.
+The separate Docker Hub canary tag is
+`forcespt/dpadcloud-gaming:faugus-epic-candidate-f4c70bf`, digest
+`sha256:93f22c02dffdd84cd72f3bb776dafef760adb9e020244ae6c1010ac9818af847`.
+Use the digest for any canary binding. No production binding was changed.
+
 The existing Epic picker card invokes epic-launch. DPAD_EPIC_BACKEND=faugus
 routes that wrapper to Faugus and the official Windows Epic Games Launcher.
 The default backend in the existing images remains heroic. Provider adapters do
@@ -94,8 +100,8 @@ window WM_CLASS/focus still needs confirmation on the GPU session.
 5. Confirm official Epic window class and picker resume/focus on a GPU. The
    packaged selector and native dependency tests pass locally.
 6. Validate fullscreen/taskbar behaviour and stream recovery with the real game.
-7. Publish an immutable candidate image, register it as a canary profile and
-   promote only after the above results. No live profile was switched here.
+7. Register the published immutable image as a canary profile and promote only
+   after the above results. No live profile was switched here.
 
 Until official import is qualified, launcher-shell refuses Instant sessions
 when the Faugus backend is selected. Cloud Compute is the initial test target.
