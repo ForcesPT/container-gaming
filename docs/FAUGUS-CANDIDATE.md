@@ -4,14 +4,12 @@
 
 Separate Dockerfile.faugus extends the exact accepted gaming runtime digest
 59c8efe85c30224c5e9e878c577b78d3b9563cdecf0763665eb297a50d837d20.
-This is a local candidate, not a production replacement or gameplay qualification.
-No cloud VM was started for this work.
+This is a scoped candidate, not a production replacement or gameplay qualification.
 
-Candidate source was published on `feat/faugus-epic-candidate` at `f4c70bf`.
-The separate Docker Hub canary tag is
-`forcespt/dpadcloud-gaming:faugus-epic-candidate-f4c70bf`, digest
-`sha256:93f22c02dffdd84cd72f3bb776dafef760adb9e020244ae6c1010ac9818af847`.
-Use the digest for any canary binding. No production binding was changed.
+Candidate source was published on `feat/faugus-epic-candidate` at `77d1aaf`.
+The separate admin canary image is
+`forcespt/dpadcloud-gaming@sha256:53bb9c50d12a49c461d5d445e49fe761b32cd0c9bc6674a41085019fe2dd1f49`.
+No public production image binding was changed.
 
 The existing Epic picker card invokes epic-launch. DPAD_EPIC_BACKEND=faugus
 routes that wrapper to Faugus and the official Windows Epic Games Launcher.
@@ -128,3 +126,24 @@ admin test route. Public `/api/sessions` continues to use `INSTANT_PLAY_IMAGE_RE
 The override accepts only immutable `forcespt/dpadcloud-gaming@sha256:` references;
 an invalid test value fails closed. This is an image-selection route for the
 bounded canary, not a general provider or release promotion.
+
+## First GPU canary — 2026-09-27
+
+One user-approved Paris L4 admin test launched session
+`705a7a3d-5877-4a3f-b9f2-17aeb2fb695f` with the exact digest above. The
+VM bootstrapped, the session reached ready, and the embedded Selkies player
+rendered the DpadPlay picker with the Epic Games card. Video and audio WebRTC
+channels connected in that embedded player. A simultaneous direct player tab
+repeatedly had its signaling connection closed; this test did not establish
+whether single-player navigation can reconnect cleanly after its prior peer
+closes. The official Epic installer, login and ABZÛ were not exercised in this
+GPU run, so the launcher's GPU compatibility and shared game import remain
+unqualified.
+
+The session ended at 23:13:49 UTC and billed $1.29. The exact Scaleway server
+`18670c9d-e7e7-478e-9716-e748eaf3341f` and its verified SBS boot volume
+`3fb9e8aa-c01c-4902-b551-e919effcd8a0` were destroyed; both native GETs
+returned 404. The API test selector was cleared and the previous API image
+`sha256:1d107049e195522665afb1f9a018a763934ec3048eb29165e4ac750c606a96e6`
+was restored with public health HTTP 200. A fresh paid test requires a new
+authorization.
