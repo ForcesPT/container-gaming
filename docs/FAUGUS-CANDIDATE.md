@@ -113,3 +113,18 @@ llvmpipe, so this does not qualify graphics or game performance.
 Until official import is qualified, launcher-shell refuses Instant sessions
 when the Faugus backend is selected. Cloud Compute is the initial test target.
 GOG, EA, Ubisoft and Battle.net remain separate future qualifications.
+
+## Admin client-only canary
+
+The candidate image has `DPAD_FAUGUS_CLIENT_ONLY_TEST=1` for the approved admin
+test. When launched with an Instant game descriptor, it deliberately skips the
+Heroic/Legendary registration and opens the normal DpadPlay picker. The official
+Epic client can then be installed and signed into on a real GPU. It does not claim
+ABZU is installed from the shared mount. No production image uses this opt-in.
+Removing the flag restores the refusal gate; the local contract test checks both.
+
+The control API has a separate `INSTANT_PLAY_TEST_IMAGE_REF` for the authenticated
+admin test route. Public `/api/sessions` continues to use `INSTANT_PLAY_IMAGE_REF`.
+The override accepts only immutable `forcespt/dpadcloud-gaming@sha256:` references;
+an invalid test value fails closed. This is an image-selection route for the
+bounded canary, not a general provider or release promotion.

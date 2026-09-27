@@ -19,11 +19,17 @@ timeout 30s runuser -u dpad -- dbus-run-session -- xvfb-run -a /usr/local/bin/fa
 grep -q FAUGUS_PINNED_RUNTIME_OK /tmp/faugus-smoke.log
 test ! -f /home/dpad/.local/share/faugus-launcher/umu-run
 echo 'Faugus actual runner passed with a stub UMU; no account or game launch tested.'
-if DPAD_INSTANT_APP=sample /opt/dpadcloud/launcher-shell >/tmp/instant-gate.log 2>&1; then
+mv /opt/dpadcloud/launcher/dpad-launcher /opt/dpadcloud/launcher/dpad-launcher.real
+printf '#!/bin/sh\nexit 0\n' > /opt/dpadcloud/launcher/dpad-launcher
+chmod +x /opt/dpadcloud/launcher/dpad-launcher
+DPAD_INSTANT_APP=sample /opt/dpadcloud/launcher-shell >/tmp/instant-gate.log 2>&1
+grep -q 'client-only canary; shared game import is not registered' /tmp/instant-gate.log
+if DPAD_FAUGUS_CLIENT_ONLY_TEST= DPAD_INSTANT_APP=sample /opt/dpadcloud/launcher-shell >/tmp/instant-gate-disabled.log 2>&1; then
     echo 'Instant qualification gate unexpectedly allowed launch' >&2
     exit 1
 fi
-grep -q 'official Epic Instant import is not qualified' /tmp/instant-gate.log
+grep -q 'official Epic Instant import is not qualified' /tmp/instant-gate-disabled.log
+mv /opt/dpadcloud/launcher/dpad-launcher.real /opt/dpadcloud/launcher/dpad-launcher
 
 # Exercise the real wrapper and XDG inventory using a private volume, twice.
 mkdir -m 700 /tmp/faugus-private-volume
