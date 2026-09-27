@@ -133,7 +133,7 @@ const STORES = [
 const STORE_WINDOW_CLASSES = {
   steam: 'steam',
   battlenet: 'Battle.net.exe',
-  epic: process.env.DPAD_EPIC_BACKEND === 'faugus' ? 'EpicGamesLauncher.exe' : 'heroic',
+  epic: 'heroic',
   gog: 'heroic',
   ea: 'EADesktop.exe',
   ubisoft: 'upc.exe',
@@ -283,6 +283,11 @@ function clearStoreVisibleTimer(storeId, owner = null) {
 }
 
 function focusStoreWindow(storeId) {
+  // Proton currently exposes official Epic as the generic steam_app_default
+  // class. Target its observed window title to avoid focusing another client.
+  if (storeId === 'epic' && process.env.DPAD_EPIC_BACKEND === 'faugus') {
+    return swaymsg('[title="Epic Games Launcher"] focus') !== null;
+  }
   const windowClass = STORE_WINDOW_CLASSES[storeId];
   if (!windowClass) {
     log(`focus-store ${storeId}: no window class configured`);

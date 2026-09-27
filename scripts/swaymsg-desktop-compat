@@ -51,6 +51,10 @@ if [ "$#" -eq 3 ] && [ "$1" = "[title=DpadPlay]" ] \
     exec "$WLRCTL" window maximize title:DpadPlay
 fi
 if [ "$#" -eq 2 ] && { [ "$2" = focus ] || [ "$2" = kill ]; }; then
+    if [ "$1" = '[title=Epic Games Launcher]' ]; then
+        [ "$2" = focus ] && exec "$WLRCTL" window focus 'title:Epic Games Launcher'
+        exec "$WLRCTL" window close 'title:Epic Games Launcher'
+    fi
     case "$1" in
         '[class=steam]') APP_ID=steam ;;
         '[class=Battle.net.exe]') APP_ID=steam_app_battlenet ;;

@@ -79,11 +79,18 @@ Faugus imports and command generation passed under Xvfb. The complete wrapper
 with the real Faugus runner and a stub UMU installed once and launched twice
 from the private volume, without downloading private UMU.
 
-The inherited picker archive is extracted, patched with an exact selector
+The inherited picker archive is extracted, patched with an exact focus-handler
 match, and repackaged using @electron/asar 3.2.17 in a pinned Node build stage.
-Only the Epic selector changes: official Epic for Faugus, Heroic otherwise.
-Packaged selector/title-detection and native koffi import checks passed. Actual
-window WM_CLASS/focus still needs confirmation on the GPU session.
+Local Xvfb/Proton launch of the installed official client observed window title
+`Epic Games Launcher` and generic WM_CLASS `steam_app_default`. The Faugus route
+now focuses by title; Heroic remains class-based. Sway and Labwc paths are both
+adapted. Packaged selector/title detection, native koffi import and Labwc
+translation checks passed. Real desktop focus still needs GPU stream confirmation.
+
+The official Epic MSI also completed a quiet local install through the actual
+Faugus/GE-Proton/UMU path. The executable appeared under the private volume.
+The local Docker GPU showed NVIDIA to `nvidia-smi` but Vulkan exposed only
+llvmpipe, so this does not qualify graphics or game performance.
 
 ## Required before promotion
 
@@ -97,8 +104,8 @@ window WM_CLASS/focus still needs confirmation on the GPU session.
    customer mutate the provider's shared master files.
 4. Confirm prefix/login persistence in real Dedicated/Shared profiles and volume
    attachment isolation across two accounts. Local volume tests pass.
-5. Confirm official Epic window class and picker resume/focus on a GPU. The
-   packaged selector and native dependency tests pass locally.
+5. Confirm picker resume/focus on a streamed GPU. Local observed title and
+   corrected Sway/Labwc selector tests pass.
 6. Validate fullscreen/taskbar behaviour and stream recovery with the real game.
 7. Register the published immutable image as a canary profile and promote only
    after the above results. No live profile was switched here.
