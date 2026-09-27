@@ -1,0 +1,13 @@
+FROM forcespt/dpadcloud-gaming@sha256:974bd4fc8cac1c4fbada479b46da8d723cad05d38526289b07810813ebbf662d AS runtime
+COPY scripts/dpad-patch-selkies-recovery /opt/dpadcloud/dpad-patch-selkies-recovery
+COPY tests/test_selkies_recovery.py /tmp/test_selkies_recovery.py
+RUN python3 /tmp/test_selkies_recovery.py && python3 /opt/dpadcloud/dpad-patch-selkies-recovery /usr/local/lib/python3.12/dist-packages/selkies_gstreamer/__main__.py /opt/gst-web/webrtc.js && rm /tmp/test_selkies_recovery.py
+FROM node:20-bookworm@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5 AS verify
+COPY --from=runtime /opt/gst-web /web
+COPY tests/test_selkies_recovery.cjs /test.cjs
+COPY tests/test_selkies_reconnect.cjs /reconnect.cjs
+RUN node /test.cjs /web/webrtc.js && node /reconnect.cjs /web && touch /recovery-verified
+FROM runtime
+ARG DPAD_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION
+COPY --from=verify /recovery-verified /opt/dpadcloud/recovery-verified

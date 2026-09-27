@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""Scoped recovery patch on the qualified async-retry image."""
+import ast
+import hashlib
+from pathlib import Path
+import sys
+
+PINS = {
+    'main': 'a1971728d06d771a0264f4155174971767d710d065680753e2ed022ec1360ac8',
+    'rtc': '5f3f35d40bbd4e61fcf3d36235e9046affe6b958d8855e9ef5da919bbd3227f7',
+}
+MARKER = 'DPAD_RECOVERY_V3'
+OLD_VERSION = 'dpad-reconnect-20260926-v2'
+VERSION = 'dpad-recovery-20260927-v3'
+ASSET_PINS = {
+    'app.js': '6071fd82deb20915beb4b6b0f94580d0ae9e04f70235ba8d4e53dff830ea1692',
+    'index.html': 'd494415c0f091ef524ce8c637f1da0863ccfaba21a22493bd47a1026dab80e0e',
+    'sw.js': 'a50d94a101ad7055b08ef02000af3bb34d3778832fe734ad1fb051edb8645f05',
+}
+
+def version_asset(name, text):
+    if hashlib.sha256(text.encode()).hexdigest() != ASSET_PINS[name] or OLD_VERSION not in text:
+        raise ValueError('unsupported recovery cache source: ' + name)
+    return text.replace(OLD_VERSION, VERSION)
+
+def once(text, old, new):
+    if text.count(old) != 1:
+        raise ValueError('unsupported recovery anchor')
+    return text.replace(old, new, 1)
+
+def transform(kind, text):
+    if hashlib.sha256(text.encode()).hexdigest() != PINS[kind]:
+        raise ValueError('unsupported recovery source: ' + kind)
+    if kind == 'main':
+        text = once(text, '    # Handle errors from the signalling server',
+                    '    # DPAD_RECOVERY_V3: independent bounded peer retries.\n'
+                    '    peer_retry_count = {}\n'
+                    '    async def wait_for_peer(peer):\n'
+                    '        key = str(peer)\n'
+                    '        attempt = peer_retry_count.get(key, 0)\n'
+                    '        peer_retry_count[key] = min(attempt + 1, 3)\n'
+                    '        await asyncio.sleep(min(2.0, 0.25 * (2 ** attempt)))\n\n'
+                    '    # Handle errors from the signalling server')
+        for channel, peer in [('signalling', 'peer_id'), ('audio_signalling', 'audio_peer_id')]:
+            text = once(text, '           # Waiting for peer to connect, retry in 2 seconds.\n'
+                        '           await asyncio.sleep(2)\n'
+                        f'           await {channel}.setup_call()',
+                        f'           await wait_for_peer({peer})\n'
+                        f'           await {channel}.setup_call()')
+        text = once(text, '    def on_session_handler(session_peer_id, meta=None):',
+                    '    def on_session_handler(session_peer_id, meta=None):\n'
+                    '        peer_retry_count.pop(str(session_peer_id), None)')
+        ast.parse(text)
+    else:
+        text = once(text, '    sendDataChannelMessage(message) {\n',
+                    '    sendDataChannelMessage(message) {\n'
+                    '        // DPAD_RECOVERY_V3: discard transient sends; never replay input.\n'
+                    '        if (!this._connected || this._send_channel === null || this._send_channel.readyState !== "open") return false;\n')
+        text = once(text, '    reset() {\n        this.cursor_cache',
+                    '    reset() {\n        this._connected = false;\n        this.cursor_cache')
+        text = once(text, '        if (this.peerConnection !== null) this.peerConnection.close();\n        this.connect();',
+                    '        this._send_channel = null;\n'
+                    '        if (this.peerConnection !== null) this.peerConnection.close();\n        this.connect();')
+    return text
+
+if __name__ == '__main__':
+    main, rtc = map(Path, sys.argv[1:])
+    # Validate both sources before changing either.
+    changed = [(main, transform('main', main.read_text())), (rtc, transform('rtc', rtc.read_text()))]
+    for name in ASSET_PINS:
+        path = rtc.parent / name
+        changed.append((path, version_asset(name, path.read_text())))
+    for path, text in changed:
+        path.write_text(text)

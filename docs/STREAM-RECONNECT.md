@@ -96,3 +96,24 @@ Published async retry artifact:
 (tag `instant-async-retry-20260926-f0e88dc`, source f0e88dc). Both callback
 behavior and exact-source tests passed in the scoped build. Control-plane
 override and rollback are prepared without switching gaming references.
+
+## 2026-09-27 bounded recovery follow-up
+
+Qualified async image974bd4f recovered three live certificate renewals in3/3/2s
+(previous8/8/9s), without manual refresh or gateway restart. Test ended and exact
+provider server/boot volume both GET404; USD1.29 charge. A brief interruption
+remains, so this is improvement rather than seamless acceptance.
+
+New scoped Dockerfile.recovery extends only974bd4f. Missing-peer retries are
+independent per peer, asynchronously back off250/500/1000/2000ms and cap at2s;
+SESSION_OK resets only the successful peer. Browser reset clears connected state
+and the old data channel before reconnect. Transient data-channel messages are
+discarded without error logs or a replay queue. Existing direct input already
+checked channel readiness; this extends safe dropping to other message callers.
+All browser entry/cache versions advance to dpad-recovery-20260927-v3.
+Exact five source hashes validate before any write. No launcher/runner changes.
+
+Scoped Docker build passed3 Python retry/concurrency/source/cache tests, Node
+input reset/drop tests and the existing reconnect/cache lifecycle checks.
+Local image only; live GPU recovery and actual input behavior remain unverified.
+No VM running and no new paid VM authorized by the previous completed test.
