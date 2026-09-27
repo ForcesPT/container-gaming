@@ -27,6 +27,10 @@ fi
 # Prepare inventory before any store GUI can cache its installed-game list.
 # Login, Wine setup and Play remain the customer's normal in-session store flow.
 if [ -n "${DPAD_INSTANT_APP:-}${DPAD_INSTANT_METADATA:-}" ]; then
+    if [ "${DPAD_EPIC_BACKEND:-heroic}" = faugus ]; then
+        echo 'launcher-shell: official Epic Instant import is not qualified; use a Cloud Compute candidate session' >&2
+        exit 1
+    fi
     if ! timeout 15s python3 -I "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/dpad_instant_register.py" >>/tmp/instant-registration.log 2>&1; then
         echo "launcher-shell: Instant registration refused" >&2
         exit 1

@@ -133,7 +133,7 @@ const STORES = [
 const STORE_WINDOW_CLASSES = {
   steam: 'steam',
   battlenet: 'Battle.net.exe',
-  epic: 'heroic',
+  epic: process.env.DPAD_EPIC_BACKEND === 'faugus' ? 'EpicGamesLauncher.exe' : 'heroic',
   gog: 'heroic',
   ea: 'EADesktop.exe',
   ubisoft: 'upc.exe',

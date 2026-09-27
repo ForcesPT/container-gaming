@@ -1,5 +1,24 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-27 Faugus candidate built locally.** See
+> [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md) for exact pins and promotion gates.
+> Separate Dockerfile.faugus routes Epic to Faugus 2.4.2 and official Epic with
+> image UMU/GE-Proton11-3. Eight contract tests, packaged picker/native dependency
+> checks and full wrapper stub dispatch passed. Private volume state now covers
+> prefix, config and inventory; the packaged Epic selector targets official Epic.
+> Official installer, login, window focus and gameplay remain unqualified;
+> Instant is explicitly refused until official shared-game import is qualified.
+> No production profile was switched and no cloud VM was launched for this work.
+>
+> The candidate base is accepted transport digest
+> `59c8efe85c30224c5e9e878c577b78d3b9563cdecf0763665eb297a50d837d20`.
+> The subsequent 2026-09-27 ABZU test with Heroic rendered successfully after
+> selecting GE-Proton11-3; the user confirmed controls/audio. A gameplay
+> certificate renewal resumed video/audio in approximately 1/2 seconds. The
+> fullscreen desktop bar issue remains open. That session and exact provider
+> VM/boot volume were ended/verified absent by 03:46:23 UTC. Older entries below
+> are historical results, not the latest runtime selection.
+
 > **2026-09-26 reconnect canary — SPEED ACCEPTANCE FAILED, REFERENCE RESTORED.**
 > The scoped `b01a785` browser image was published at digest
 > `252180a771f53c2df6f96be64366223b1ff91b328e9d5a28f302beb265ac557f` and tested

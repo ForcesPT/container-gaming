@@ -1,0 +1,34 @@
+#!/bin/bash
+# Candidate official Epic route. All mutable client state is private to the user.
+set -euo pipefail
+export FAUGUS_DISABLE_UPDATES=1
+export UMU_RUNTIME_UPDATE=0
+export PROTONPATH=/home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-3
+export PROTON_ENABLE_WAYLAND=0
+export WINEPREFIX="${HOME}/Faugus/epic-games"
+export GAMEID=umu-default
+unset XDG_DATA_HOME XDG_CONFIG_HOME XDG_STATE_HOME
+if [ -z "${DPAD_FAUGUS_STATE_ROOT:-}" ] && [ -n "${DPAD_VOLUME_MOUNT:-}" ]; then
+    test -d "$DPAD_VOLUME_MOUNT" || { echo 'Faugus volume is unavailable' >&2; exit 1; }
+    export DPAD_FAUGUS_STATE_ROOT="${DPAD_VOLUME_MOUNT}/faugus"
+fi
+if [ -n "${DPAD_FAUGUS_STATE_ROOT:-}" ]; then
+    export WINEPREFIX="${DPAD_FAUGUS_STATE_ROOT}/prefixes/epic-games"
+    export XDG_CONFIG_HOME="${DPAD_FAUGUS_STATE_ROOT}/config"
+    export XDG_DATA_HOME="${DPAD_FAUGUS_STATE_ROOT}/data"
+    export XDG_STATE_HOME="${DPAD_FAUGUS_STATE_ROOT}/state"
+fi
+script_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+python3 -I "${script_dir}/dpad_faugus_prepare.py" --lock-only
+exec 9<"${XDG_STATE_HOME:-${HOME}/.local/state}/faugus-launcher/dpad-epic.lock"
+flock -n 9 || { echo 'Epic is already starting or running' >&2; exit 1; }
+python3 -I "${script_dir}/dpad_faugus_prepare.py"
+epic_exe="${WINEPREFIX}/drive_c/Program Files/Epic Games/Launcher/Portal/Binaries/Win64/EpicGamesLauncher.exe"
+if [ ! -f "$epic_exe" ]; then
+    installer=/opt/dpadcloud/faugus/EpicGamesLauncherInstaller.msi
+    echo 'd55d79710edfeaa107a62f2ea007bec1eeeac8b715a43c2ba3858eec7bc60337  /opt/dpadcloud/faugus/EpicGamesLauncherInstaller.msi' | sha256sum -c -
+    # Show the official installer; the account owner completes its normal flow.
+    faugus-launcher --run "/usr/bin/umu-run msiexec /i ${installer}"
+    test -f "$epic_exe" || { echo 'Epic installation is not completed; reopen Epic to retry' >&2; exit 1; }
+fi
+exec faugus-launcher --game dpad-epic

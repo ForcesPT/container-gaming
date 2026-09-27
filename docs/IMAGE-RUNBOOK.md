@@ -1,5 +1,12 @@
 # DpadPlay Gaming Image Runbook
 
+> **2026-09-27 experimental store backend:** the separately built
+> [Faugus candidate](FAUGUS-CANDIDATE.md) uses the accepted transport digest,
+> official Epic and pinned GE-Proton11-3. Local preparation and runner smoke
+> checks pass. It is not deployed or gameplay-qualified. Read the candidate
+> acceptance gates before using it in any profile; Instant sessions are refused.
+> The release details below are historical.
+
 > **Current source architecture (2026-08-16): launcher-only desktop.** The image
 > has one production runtime: Selkies with `gst-wayland-display` as the compositor
 > and capture source, nested Sway as the default desktop/XWayland provider, and the

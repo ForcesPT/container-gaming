@@ -9,3 +9,4 @@ launcher/package-lock.json
 *.md
 .pi/
 .claude/
+test-results/

@@ -24,6 +24,12 @@
 # Logs: /tmp/epic-launch.log
 set -u
 
+case "${DPAD_EPIC_BACKEND:-heroic}" in
+    faugus) exec "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/faugus-epic-launch" ;;
+    heroic) ;;
+    *) echo 'epic-launch: unknown Epic backend' >&2; exit 1 ;;
+esac
+
 LOG=/tmp/epic-launch.log
 echo "[epic-launch] $(date -Is) start (HOME=${HOME:-} DISPLAY=${DISPLAY:-})" >> "$LOG"
 

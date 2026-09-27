@@ -1,0 +1,41 @@
+# Separate candidate; keeps the accepted transport runtime as its exact base.
+FROM forcespt/dpadcloud-gaming@sha256:59c8efe85c30224c5e9e878c577b78d3b9563cdecf0763665eb297a50d837d20 AS runtime-base
+FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS picker-adapter
+WORKDIR /work
+RUN npm install --no-audit --no-fund @electron/asar@3.2.17
+COPY --from=runtime-base /opt/dpadcloud/launcher/resources/ /work/resources/
+COPY scripts/dpad_patch_faugus_picker.cjs /work/patch.cjs
+RUN ./node_modules/.bin/asar extract resources/app.asar unpacked \
+    && node patch.cjs unpacked/src/main.js \
+    && node --check unpacked/src/main.js \
+    && ./node_modules/.bin/asar pack unpacked output/app.asar --unpack-dir node_modules
+FROM runtime-base
+USER root
+ARG DPAD_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
+      com.dpadplay.launcher.faugus.version="2.4.2" \
+      com.dpadplay.launcher.faugus.revision="7737a92c55b890381050c745801f1e463478de3d" \
+      com.dpadplay.launcher.qualification="candidate-not-gameplay-qualified"
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    python3-gi python3-requests python3-pil python3-vdf python3-psutil python3-dbus \
+    icoextract gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-manette-0.2 \
+    && rm -rf /var/lib/apt/lists/*
+COPY scripts/dpad_patch_faugus.py /tmp/dpad_patch_faugus.py
+RUN mkdir -p /opt/dpadcloud/faugus/source \
+    && curl -fLsS --retry 3 https://codeload.github.com/Faugus/faugus-launcher/tar.gz/7737a92c55b890381050c745801f1e463478de3d -o /tmp/faugus.tar.gz \
+    && echo '2de1b4df9e02ac3246369ccbb0db0cd3e037cf7b46ec07097a494affb1013168  /tmp/faugus.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/faugus.tar.gz -C /opt/dpadcloud/faugus/source --strip-components=1 \
+    && python3 /tmp/dpad_patch_faugus.py /opt/dpadcloud/faugus/source \
+    && chmod +x /opt/dpadcloud/faugus/source/faugus-launcher \
+    && curl -fLsS --retry 3 https://launcher-public-service-prod06.ol.epicgames.com/launcher/api/installer/download/EpicGamesLauncherInstaller.msi -o /opt/dpadcloud/faugus/EpicGamesLauncherInstaller.msi \
+    && echo 'd55d79710edfeaa107a62f2ea007bec1eeeac8b715a43c2ba3858eec7bc60337  /opt/dpadcloud/faugus/EpicGamesLauncherInstaller.msi' | sha256sum -c - \
+    && rm /tmp/faugus.tar.gz /tmp/dpad_patch_faugus.py
+COPY scripts/faugus-launcher /usr/local/bin/faugus-launcher
+COPY --from=picker-adapter /work/output/ /opt/dpadcloud/launcher/resources/
+COPY scripts/faugus-epic-launch scripts/dpad_faugus_prepare.py scripts/epic-launch scripts/launcher-shell /opt/dpadcloud/
+RUN sed -i 's/\r$//' /usr/local/bin/faugus-launcher /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/epic-launch /opt/dpadcloud/launcher-shell \
+    && chmod +x /usr/local/bin/faugus-launcher /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/epic-launch /opt/dpadcloud/launcher-shell \
+    && /usr/bin/python3 -c 'import gi, requests, PIL, vdf, psutil, dbus; gi.require_version("Gtk", "4.0"); gi.require_version("Adw", "1"); gi.require_version("Manette", "0.2"); from gi.repository import Gtk, Adw, Manette' \
+    && test -x /usr/bin/umu-run \
+    && test -x /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-3/proton
+ENV DPAD_EPIC_BACKEND=faugus FAUGUS_DISABLE_UPDATES=1
