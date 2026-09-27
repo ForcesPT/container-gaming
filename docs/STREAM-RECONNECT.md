@@ -117,3 +117,9 @@ Scoped Docker build passed3 Python retry/concurrency/source/cache tests, Node
 input reset/drop tests and the existing reconnect/cache lifecycle checks.
 Local image only; live GPU recovery and actual input behavior remain unverified.
 No VM running and no new paid VM authorized by the previous completed test.
+
+Published recovery candidate: source9aaa93bc28c992221ed2c23f870251e2148cbfaf,
+forcespt/dpadcloud-gaming@sha256:59c8efe85c30224c5e9e878c577b78d3b9563cdecf0763665eb297a50d837d20
+(tag instant-recovery-20260927-v3). Revision label and registry digest verified.
+Not switched to production; a new bounded VM approval is required for live
+qualification because the previous single-VM approval was completed.
