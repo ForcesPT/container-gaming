@@ -528,3 +528,13 @@ official MSI under Xvfb, but UMU stopped before starting Wine because the
 local Docker engine disallowed the user namespace required by pressure-vessel.
 It supplied no evidence about Epic's updater and the disposable container was
 removed.
+
+The canary also exposed a retry-timing bug: the wrapper only checked for a
+fresh `StartServiceFailed` log when Faugus exited within 30 seconds. Its new
+process handoff can wait 20 seconds after Epic's updater exits, pushing an
+otherwise short failure past that limit. A follow-up candidate increases the
+exact-log check window to 120 seconds and shows a startup error in the picker
+when the Faugus wrapper exits nonzero. A local stub test with a 31-second
+first launch passed, along with the immediate-failure and normal-exit cases;
+both edited JavaScript files passed `node --check`. This improves recovery and
+feedback but does not establish that the official updater can complete.

@@ -78,7 +78,7 @@ function showToast(msg, isError = false) {
   toast.classList.toggle('error', isError);
   toast.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), isError ? 8000 : 2600);
 }
 
 function statusPill(store) {

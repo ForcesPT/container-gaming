@@ -41,12 +41,14 @@ set -e
 
 # Epic's new self-updater runs as a Windows service. In the GPU canary it
 # returned StartServiceFailed and Faugus exited before showing a login window.
-# Retry only that exact fresh, short-lived failure; normal user exits must not
-# reopen the client.
-if [ "$(( $(date +%s) - launch_started_s ))" -lt 30 ]; then
+# Retry only that exact fresh failure. The guarded Faugus process handoff can
+# keep the wrapper alive for at least 20 seconds after Epic's updater exits,
+# so a 30-second limit can miss the failure observed on the GPU canary.
+# Normal user exits do not have a fresh StartServiceFailed log.
+if [ "$(( $(date +%s) - launch_started_s ))" -lt 120 ]; then
     sleep 2
 fi
-if [ "$(( $(date +%s) - launch_started_s ))" -lt 30 ] \
+if [ "$(( $(date +%s) - launch_started_s ))" -lt 120 ] \
    && python3 -I "${script_dir}/dpad_epic_updater_failed.py" "$WINEPREFIX" "$launch_started_ns"; then
     echo 'Epic updater service did not start; retrying the launcher once' >&2
     sleep 8

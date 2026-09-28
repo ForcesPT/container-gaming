@@ -451,6 +451,10 @@ ipcMain.handle('launch-store', (event, storeId) => {
       clearStoreVisibleTimer(storeId, child);
       if (activeStoreChildren.get(storeId) === child) activeStoreChildren.delete(storeId);
       launcherRestoreReconciler.request();
+      if (storeId === 'epic' && process.env.DPAD_EPIC_BACKEND === 'faugus' && code !== null && code !== 0) {
+        if (mainWindow) mainWindow.webContents.send('store-launch-failed', storeId,
+          'Epic could not complete startup. Please try again or contact support.');
+      }
       // Notify renderer to dismiss any lingering overlay
       if (mainWindow) mainWindow.webContents.send('store-exited', storeId);
     });
