@@ -474,5 +474,9 @@ the **actual patched Faugus runner** and a stub UMU that spawned a marked
 five-second work; Faugus logged the handoff and finalized after a quiet period,
 and the wrapper returned successfully after 30 seconds. This is stronger than
 the helper unit test because it exercises Faugus's real process-exit callback.
+The same smoke was repeated in a disposable container with upstream 2.4.2's
+unpatched `runner.py`: the marked child started but was terminated before it
+could finish. This negative control confirms that the smoke distinguishes the
+specific premature-cleanup behavior the adapter changes.
 It does not authenticate to Epic or establish the cause of the previous
 post-login `SignedIn=1` to `SignedIn=0` transition.
