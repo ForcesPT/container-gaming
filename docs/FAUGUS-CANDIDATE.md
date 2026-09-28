@@ -220,3 +220,31 @@ this separate canary tag at
 from source revision `83c8a1dec18c3c332c79f5b13704fa9af794ee79`. No provider binding
 or public image was changed. A new bounded GPU run is required to learn whether
 the retry resolves the VM-specific failure.
+
+## Epic updater retry GPU canary — 2026-09-28
+
+One separately approved Paris L4 admin test launched session
+`677cb50a-3017-4397-8d1d-adc282f14887` with the exact updater-retry digest
+`sha256:67e89b9ee19cdfe862015186ad4471fb99b09a8502468d9e3af8772b3622fb6f`.
+The session reached ready at 01:59:08 UTC; the embedded Selkies player rendered
+the DpadPlay store picker. The owner opened Epic, completed the official MSI,
+and the launcher downloaded its update. It then closed instead of showing
+sign-in. A second owner-triggered launch also closed. Updater logs from both
+launches repeatedly reported code 8 `StartServiceFailed`, with the service
+reaching `SERVICE_START_PENDING` but not `SERVICE_RUNNING`. The wrapper's
+short-exit retry did not trigger during the longer first update, and the second
+manual launch shows that another attempt alone did not resolve the failure.
+
+This canary does not qualify official Epic login, ABZÛ installation or gameplay.
+Keep Heroic as the public Instant Epic route; the Faugus image remains an
+admin-only candidate. Investigate why Epic's updater service cannot reach the
+running state on the GPU VM before another billed test. The session ended at
+02:08:47 UTC after 579 billed GPU seconds; billing finalized at 02:08:50 UTC
+with the $1.29 minimum. The exact native VM was
+`4b7754ef-6a22-4527-ba78-0cc18a06012a` and its attached SBS volume was
+`3e92c27f-0d6e-4321-93cc-b1a225feeabd`. The scheduler destroyed the VM
+after the normal drain grace; direct Scaleway GETs for both the server and SBS
+volume returned 404 at 02:20 UTC. The bounded fallback teardown timer was then
+disabled. The scoped API selector was rolled back to its prior image with a
+persistent Compose rollback overlay, its rollback timer was disabled, and
+public API health returned OK.

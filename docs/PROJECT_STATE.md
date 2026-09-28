@@ -1,5 +1,15 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-28 Epic retry GPU canary:** The separately published retry image
+> reached the picker and installed official Epic on a Paris L4 VM. Epic
+> downloaded an update but closed before sign-in on two launches. Its updater
+> repeatedly reported `StartServiceFailed` (code 8); the short-exit retry did
+> not fire during the longer update, and another launch did not resolve it.
+> The session ended with 579 billed GPU seconds and the $1.29 minimum; the
+> exact Scaleway VM and volume both returned 404 after drain. The scoped API
+> selector was rolled back and public Instant remains on Heroic. See
+> [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md).
+
 > **2026-09-28 Epic updater follow-up:** Three fresh local prefixes, including
 > one launched through the exact Faugus wrapper, completed Epic's service
 > update and kept the client alive for 150 seconds. The GPU canary's
