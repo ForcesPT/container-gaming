@@ -603,7 +603,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         wireplumber libeis-dev gstreamer1.0-pipewire \
         gstreamer1.0-tools gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
         gstreamer1.0-x gstreamer1.0-plugins-base pulseaudio-utils \
-        sway labwc waybar wayland-utils wlrctl wlr-randr xwayland util-linux \
+        sway labwc waybar wayland-utils wlrctl wlr-randr xwayland util-linux gir1.2-gtk-3.0 \
     && command -v sway \
     && sway --version \
     && command -v labwc \
@@ -880,6 +880,7 @@ COPY scripts/dpad-labwc-set-output-mode /opt/dpadcloud/dpad-labwc-set-output-mod
 COPY scripts/dpad-publish-desktop-config /opt/dpadcloud/dpad-publish-desktop-config
 COPY scripts/dpad-waybar /opt/dpadcloud/dpad-waybar
 COPY scripts/dpad-waybar-state-check /opt/dpadcloud/dpad-waybar-state-check
+COPY scripts/dpad-keyboard-layout /opt/dpadcloud/dpad-keyboard-layout
 COPY scripts/swaymsg-desktop-compat /usr/local/bin/swaymsg
 COPY scripts/battlenet-launch /opt/dpadcloud/battlenet-launch
 COPY scripts/ea-launch /opt/dpadcloud/ea-launch
@@ -897,7 +898,7 @@ RUN set -e; \
     && chmod +x \
       /usr/local/bin/steam \
       /usr/local/bin/swaymsg \
-      /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/dpad-labwc-set-output-mode /opt/dpadcloud/dpad-publish-desktop-config /opt/dpadcloud/dpad-waybar /opt/dpadcloud/dpad-waybar-state-check \
+      /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/dpad-labwc-set-output-mode /opt/dpadcloud/dpad-publish-desktop-config /opt/dpadcloud/dpad-waybar /opt/dpadcloud/dpad-waybar-state-check /opt/dpadcloud/dpad-keyboard-layout \
       /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
       /opt/dpadcloud/dpad-open-url /opt/dpadcloud/epic-launch /opt/dpadcloud/gog-launch \
     && ln -sf /opt/dpadcloud/battlenet-launch /usr/local/bin/battlenet-launch \

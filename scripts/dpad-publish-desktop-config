@@ -41,6 +41,11 @@ SWAYCFG
     chmod 0644 "$tmp"
     mv -fT "$tmp" "$RUNTIME_DIR/sway.config"
 else
+    # Production publishes desktop config as root before Labwc starts. Create
+    # the private layout file as the session user so Labwc can read it on boot.
+    if [ "$EUID" -eq 0 ]; then
+        runuser -u dpad -- env HOME=/home/dpad /opt/dpadcloud/dpad-keyboard-layout init
+    fi
     generation="$(mktemp -d "$RUNTIME_DIR/labwc.gen.XXXXXX")"
     link_tmp="$RUNTIME_DIR/labwc-current.tmp.$$"
     cleanup_labwc_generation() {
@@ -75,13 +80,19 @@ LABWCRC
   "height": 46,
   "spacing": 6,
   "modules-left": ["wlr/taskbar"],
-  "modules-right": ["clock"],
+  "modules-right": ["custom/keyboard", "clock"],
   "wlr/taskbar": {
     "format": "{icon}  {title}",
     "icon-size": 24,
     "max-length": 48,
     "tooltip-format": "{title}",
     "on-click": "activate"
+  },
+  "custom/keyboard": {
+    "exec": "/opt/dpadcloud/dpad-keyboard-layout label",
+    "interval": 2,
+    "on-click": "/opt/dpadcloud/dpad-keyboard-layout picker",
+    "tooltip": "Search and change keyboard layout"
   },
   "clock": {
     "format": "{:%H:%M}"
@@ -120,6 +131,17 @@ window#waybar {
   background: #2d5cff;
   color: #ffffff;
 }
+#custom-keyboard {
+  margin: 5px 2px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: #151a24;
+  color: #dce4f2;
+}
+#custom-keyboard:hover {
+  background: #2d5cff;
+  color: #ffffff;
+}
 #clock {
   margin: 5px 9px;
   padding: 0 12px;
@@ -128,6 +150,7 @@ window#waybar {
   color: #dce4f2;
 }
 WAYBARCSS
+    ln -s /home/dpad/.config/dpadplay/keyboard.env "$generation/environment"
     cat > "$generation/autostart" <<AUTOSTART
 /opt/dpadcloud/dpad-labwc-set-output-mode ${WIDTH} ${HEIGHT} || exit 1
 /opt/dpadcloud/dpad-waybar --config "${generation}/waybar.json" --style "${generation}/waybar.css" &

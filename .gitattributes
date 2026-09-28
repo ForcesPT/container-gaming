@@ -3,6 +3,7 @@
 # directory"). This overrides core.autocrlf on Windows checkouts.
 *.sh           text eol=lf
 Dockerfile     text eol=lf
+Dockerfile.*   text eol=lf
 *.dockerfile   text eol=lf
 docker-compose.yml text eol=lf
 deploy.sh      text eol=lf

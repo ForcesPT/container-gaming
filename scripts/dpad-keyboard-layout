@@ -1,0 +1,181 @@
+#!/usr/bin/python3
+"""Search and select the session keyboard layout from the Labwc taskbar."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+
+RULES = Path(os.environ.get("DPAD_XKB_RULES", "/usr/share/X11/xkb/rules/evdev.lst"))
+CONFIG = Path(os.environ.get("DPAD_KEYBOARD_CONFIG", str(Path.home() / ".config/dpadplay/keyboard.env")))
+LAYOUT_RE = re.compile(r"^[a-z0-9_+-]+$")
+DISPLAY_NAMES = {
+    "pt": "Portuguese (Portugal)",
+    "br": "Portuguese (Brazil)",
+    "us": "English (United States)",
+    "gb": "English (United Kingdom)",
+}
+
+
+def layouts() -> dict[str, str]:
+    found: dict[str, str] = {}
+    section = ""
+    for line in RULES.read_text(encoding="utf-8").splitlines():
+        if line.startswith("! "):
+            section = line[2:].strip()
+            continue
+        if section != "layout" or not line.strip():
+            continue
+        parts = line.split(None, 1)
+        if len(parts) == 2 and LAYOUT_RE.fullmatch(parts[0]):
+            found[parts[0]] = parts[1].strip()
+    if "us" not in found:
+        raise ValueError("XKB rules have no US layout")
+    return found
+
+
+def current(available: dict[str, str]) -> str:
+    try:
+        info = CONFIG.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_nlink != 1 or info.st_size > 128 or info.st_mode & 0o022):
+            return "us"
+        lines = CONFIG.read_text(encoding="ascii").splitlines()
+        if len(lines) != 1 or not lines[0].startswith("XKB_DEFAULT_LAYOUT="):
+            return "us"
+        code = lines[0].split("=", 1)[1]
+        return code if code in available else "us"
+    except (OSError, UnicodeError):
+        return "us"
+
+
+def trusted_parent() -> Path:
+    parent = CONFIG.parent
+    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    parent_info = parent.lstat()
+    if (not stat.S_ISDIR(parent_info.st_mode) or parent_info.st_uid != os.geteuid()
+            or parent_info.st_mode & 0o022):
+        raise ValueError("keyboard configuration directory is untrusted")
+    if CONFIG.exists() or CONFIG.is_symlink():
+        info = CONFIG.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_nlink != 1 or info.st_size > 128 or info.st_mode & 0o022):
+            raise ValueError("keyboard configuration file is untrusted")
+    return parent
+
+
+def initialize() -> None:
+    trusted_parent()
+    if not CONFIG.exists():
+        fd = os.open(CONFIG, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as stream:
+            stream.write("XKB_DEFAULT_LAYOUT=us\n")
+
+
+def apply(code: str, available: dict[str, str]) -> None:
+    if code not in available:
+        raise ValueError("unsupported keyboard layout")
+    if os.environ.get("DPAD_DESKTOP_CLIENT", "labwc") != "labwc":
+        raise ValueError("live keyboard switching requires the Labwc desktop")
+    if not os.environ.get("LABWC_PID", "").isdigit():
+        raise ValueError("Labwc session is unavailable")
+    parent = trusted_parent()
+    old = CONFIG.read_bytes() if CONFIG.exists() else None
+    fd, name = tempfile.mkstemp(prefix=".keyboard-", dir=parent)
+    try:
+        with os.fdopen(fd, "w", encoding="ascii") as stream:
+            stream.write(f"XKB_DEFAULT_LAYOUT={code}\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, CONFIG)
+        name = ""
+        result = subprocess.run(["labwc", "--reconfigure"], capture_output=True, text=True, timeout=5)
+        if result.returncode:
+            if old is None:
+                CONFIG.unlink()
+            else:
+                CONFIG.write_bytes(old)
+            raise RuntimeError("Labwc refused the keyboard layout")
+    finally:
+        if name and os.path.exists(name):
+            os.unlink(name)
+
+
+def picker(available: dict[str, str]) -> None:
+    import gi
+
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gtk
+
+    dialog = Gtk.Dialog(title="Keyboard layout", flags=Gtk.DialogFlags.MODAL)
+    dialog.set_default_size(500, 470)
+    dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+    box = dialog.get_content_area()
+    box.set_spacing(8)
+    box.set_border_width(14)
+    box.pack_start(Gtk.Label(label="Search by country, language, or layout code"), False, False, 0)
+    search = Gtk.SearchEntry()
+    box.pack_start(search, False, False, 0)
+    scroller = Gtk.ScrolledWindow()
+    scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    box.pack_start(scroller, True, True, 0)
+    listing = Gtk.ListBox()
+    listing.set_activate_on_single_click(True)
+    scroller.add(listing)
+    chosen = current(available)
+    for code, name in sorted(available.items(), key=lambda item: item[1].casefold()):
+        row = Gtk.ListBoxRow()
+        row.set_name(code)
+        label = DISPLAY_NAMES.get(code, name)
+        row.add(Gtk.Label(label=f"{label} ({code})" + ("  • Current" if code == chosen else ""), xalign=0))
+        listing.add(row)
+
+    def matches(row):
+        return search.get_text().casefold() in row.get_child().get_text().casefold()
+
+    search.connect("search-changed", lambda *_: listing.invalidate_filter())
+    listing.set_filter_func(matches)
+    selection = [None]
+
+    def select(_list, row):
+        selection[0] = row.get_name()
+        dialog.response(Gtk.ResponseType.OK)
+
+    listing.connect("row-activated", select)
+    dialog.show_all()
+    search.grab_focus()
+    try:
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK and selection[0] in available:
+            apply(selection[0], available)
+    finally:
+        dialog.destroy()
+
+
+def main() -> None:
+    available = layouts()
+    command = sys.argv[1:] or ["label"]
+    if command == ["label"]:
+        code = current(available)
+        print(f"⌨ {code.upper()}")
+    elif command == ["picker"]:
+        picker(available)
+    elif command == ["init"]:
+        initialize()
+    elif len(command) == 2 and command[0] == "apply":
+        apply(command[1], available)
+    else:
+        raise ValueError("usage: dpad-keyboard-layout [label|picker|apply CODE]")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+        print(f"Keyboard layout: {error}", file=sys.stderr)
+        raise SystemExit(1)

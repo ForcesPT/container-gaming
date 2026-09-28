@@ -38,13 +38,19 @@ with tempfile.TemporaryDirectory() as tmp:
         "height": 46,
         "spacing": 6,
         "modules-left": ["wlr/taskbar"],
-        "modules-right": ["clock"],
+        "modules-right": ["custom/keyboard", "clock"],
         "wlr/taskbar": {
             "format": "{icon}  {title}",
             "icon-size": 24,
             "max-length": 48,
             "tooltip-format": "{title}",
             "on-click": "activate",
+        },
+        "custom/keyboard": {
+            "exec": "/opt/dpadcloud/dpad-keyboard-layout label",
+            "interval": 2,
+            "on-click": "/opt/dpadcloud/dpad-keyboard-layout picker",
+            "tooltip": "Search and change keyboard layout",
         },
         "clock": {"format": "{:%H:%M}"},
     }

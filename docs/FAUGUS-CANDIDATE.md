@@ -395,3 +395,40 @@ updater. Do not select the published prerequisite canary for another VM test.
 Further work should isolate the updater service child process and
 Wine graphics/registry behavior before another billed test. An EOS install
 success alone does not qualify Epic login, library access, or ABZÛ gameplay.
+
+## Epic process handoff and keyboard selector candidate — 2026-09-28
+
+Pinned Faugus 2.4.2 source review found an Epic process-lifecycle risk:
+`runner.py` invokes `kill_by_faugusid(gameid)` and kills the UMU process group
+immediately when the watched parent exits. Epic's updater and client can restart
+as Windows child processes while that parent exits. The normal Faugus cleanup
+can therefore terminate a still-running updater or newly relaunched client.
+This is a concrete mechanism for the return to the store picker; it is **not
+yet proof** that it caused the observed post-login `SignedIn=1` to `SignedIn=0`
+transition. The earlier `GenerateDpop failed to parse public key` log still
+needs a fresh, sanitized trace after the process handoff is protected.
+
+The new exact-source adapter changes Faugus only for the managed `dpad-epic`
+entry. After its UMU parent exits, it watches marked Epic launcher/updater
+processes and waits for a continuous 20-second quiet period before Faugus's
+usual cleanup. Other Faugus entries retain upstream behavior. Local tests
+cover an updater/client handoff, unrelated processes, a real marked Linux
+process, and patching the pinned 2.4.2 source. A disposable container test of
+the built image passed one stub install and two launches against one private
+prefix. This has no account or GPU acceptance yet.
+
+Labwc's bottom Waybar now has a keyboard button that opens a searchable layout
+selector. It reads installed XKB layouts, displays clear country names such as
+Portuguese (Portugal), stores the user's choice in a private file, and asks
+Labwc to reconfigure the Wayland seat. The published Labwc `environment`
+symlink points to that file. A failed reconfigure restores the previous layout.
+The popup opened under Xvfb, local selector tests passed, and a headless Labwc
+instance accepted a live switch to `pt`. Sway remains the public default and
+has no bottom Waybar; the browser-to-guest symbol mapping and actual in-game
+typing still require a GPU/browser check.
+
+This candidate is local only. It has not been published, selected for admin
+testing, or tested with an Epic account. A new bounded admin **Test game** VM
+should verify the exact image digest, Epic updater handoff, one owner sign-in,
+library persistence after closing/reopening Epic, Portuguese `@` and `=` input,
+and then ABZÛ before any promotion. Preserve Heroic as the public route.
