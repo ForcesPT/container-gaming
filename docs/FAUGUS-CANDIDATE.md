@@ -154,17 +154,12 @@ The concurrent direct-tab failure is addressed in control repo commit `8832e61`
 on `ops/maintained-web-release`: clicking New tab synchronously unmounts the
 embedded Selkies iframe before opening the direct player, and Resume here is
 available after the direct tab closes. Its focused Playwright handoff test passed.
-This website change is pushed but not deployed, so the live GPU behavior remains
-unverified.
-
-Read-only production inspection found the current web image is
-`sha256:a8a580343e7e88f5537014517dbefdb100c6e34b7c58718626accb08dc223f1f`.
-All 367 tracked `apps/web` files in the live container match control revision
-`f7ec359d095c964d802e64d55f47a2967fbba401`. The image's revision label is
-only `f7ec359`, however, and its source-tree label identifies an older whole-repo
-tree. The live Compose label contains many newer scoped worker/API/runtime
-overlays beyond the maintained website release command's historical allowlist.
-That command's source classifier also treats the exact player page as full-project
-scope. Its read-only preflight therefore fails closed. Reconcile the live chain
-and provenance in the maintained release workflow with tests before any website
-cutover; do not bypass those checks with a manual Compose replacement.
+The owner approved the website-only release of control revision
+`2634c6fda17c0ca081c7e5f1c11d0df2012a15f0` on 2026-09-28. The maintained
+release command accepted it after the guarded web cutover and live HTTP/asset
+checks (receipt `run-3a970b7edbc9447caecaebf48848b7ff`). The live web container
+was independently observed healthy on image
+`sha256:b8eb1e3f5383d2bd8d90faf2e6c11e88e7968fcca7455cf271908652e598695d`.
+The release did not start a gaming VM or promote the Faugus image. Real direct-tab
+reconnection, official Epic installation/sign-in, and ABZÛ gameplay still require
+a separately authorized bounded GPU canary.
