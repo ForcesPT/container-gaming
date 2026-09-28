@@ -1,12 +1,21 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-28 Faugus GPU canary:** One approved Paris L4 session qualified
+> embedded/direct Selkies handoff and three brief reconnects. The official Epic
+> MSI installed and self-updated, but the launcher returned to the picker;
+> its updater reported `StartServiceFailed` (exit code 8). Epic login and ABZÛ
+> gameplay remain unqualified. The session was ended, billing finalized, and
+> the exact server and volume verified absent. Public image selection was
+> unchanged. See [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md) for the full record.
+
 > **2026-09-27 Faugus candidate built locally.** See
 > [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md) for exact pins and promotion gates.
 > Separate Dockerfile.faugus routes Epic to Faugus 2.4.2 and official Epic with
 > image UMU/GE-Proton11-3. Eight contract tests, packaged picker/native dependency
 > checks and full wrapper stub dispatch passed. Private volume state now covers
 > prefix, config and inventory; the packaged Epic selector targets official Epic.
-> Official installer, login, window focus and gameplay remain unqualified;
+> At build time, official installer, login, window focus and gameplay were
+> unqualified;
 > Instant is explicitly refused until official shared-game import is qualified.
 > No production profile was switched and no cloud VM was launched for this work.
 >

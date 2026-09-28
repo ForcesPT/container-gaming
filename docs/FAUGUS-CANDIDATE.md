@@ -163,3 +163,36 @@ was independently observed healthy on image
 The release did not start a gaming VM or promote the Faugus image. Real direct-tab
 reconnection, official Epic installation/sign-in, and ABZÛ gameplay still require
 a separately authorized bounded GPU canary.
+
+## Second GPU canary — 2026-09-28
+
+One separately approved Paris L4 admin test launched session
+`3baa89c6-92e3-4a94-9337-07fbe814045a` on the exact Faugus image digest
+above. It reached ready at 00:45:13 UTC. The embedded Selkies player rendered
+the picker with hardware H.264. New tab removed the embedded player and the
+direct tab connected immediately; after closing it, Resume here restored the
+embedded player. Three direct-player signaling closures at 00:49, 00:53 and
+00:57 UTC recovered video and audio within about two seconds. The owner clicked
+START and confirmed the picture appeared. This qualifies the handoff and brief
+reconnect for this browser/VM run, but does not qualify game playback.
+
+The Epic card launched the official Windows Epic MSI in Faugus/UMU/GE-Proton.
+The installer completed, and Epic's own log reported a successful self-update.
+The installed launcher then returned to the picker rather than displaying a
+login window. Its updater log reported `StartServiceFailed` (exit code 8).
+Repeated Epic launches also returned to the picker. Adding `-opengl` to the
+disposable running container's managed launch command did not resolve it; that
+change was not made to the source image or any production profile. Official
+Epic login, ABZÛ ownership/import and gameplay remain unqualified. Investigate
+the updater's service startup path under this Proton runner before another
+billed GPU test.
+
+The session ended at 00:59:38 UTC after 865 billed GPU seconds, with the $1.29
+minimum charge and billing finalized at 00:59:42 UTC. The exact VM was
+`f357058e-ade7-44fc-93a3-bab6afd02610`, with attached SBS volume
+`e558c41e-41a5-4796-b0d3-ac0322cdd63b`. The scheduler destroyed it after
+the normal drain grace; both native GETs returned 404 at 01:11 UTC. The bounded
+fallback teardown timer was then disabled. The separate admin API test image
+selector was cleared, the previous API image restored, and public API health
+returned HTTP 200; the public Instant image selection stayed unchanged
+throughout.
