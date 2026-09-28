@@ -565,8 +565,13 @@ detector. Its admin-only `DPAD_EPIC_DIAGNOSTICS=1` mode asks Faugus for
 UMU/Proton logs in the private Faugus data root and captures Wine error and
 SEH warning lines without the very large full trace. The regular wrapper path
 does not enable logging. A focused fault test covers the opt-in arguments and
-the prior one-retry behavior. This diagnostic image remains local source until
-an exact image build and a separately authorized bounded GPU test. The next
-test should stop before account sign-in, inspect the crashing commandlet's
+the prior one-retry behavior. The diagnostic image built locally from source
+commit `9be5e843e212806e13f78b3066a888d6c0bc0d48` at image ID
+`sha256:bba1dbff12fc7ab610216badf3476e8f996361b841f528194970223fc25fe33b`.
+The packaged shell and Python syntax checks passed in a network-isolated
+container; the focused delayed-failure, two-failure, normal-exit, and
+diagnostic-mode test passed. This image has not been published or selected for
+any provider. The next separately authorized bounded GPU test should stop
+before account sign-in, inspect the crashing commandlet's
 Wine/Proton trace and Epic updater log, and avoid copying raw logs containing
 account data to the control plane.
