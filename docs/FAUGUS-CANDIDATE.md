@@ -20,7 +20,8 @@ not participate in this choice: the image/profile selects the backend.
 
 - Faugus 2.4.2, commit 7737a92c55b890381050c745801f1e463478de3d.
 - Source archive SHA256 2de1b4df9e02ac3246369ccbb0db0cd3e037cf7b46ec07097a494affb1013168.
-- Existing image UMU and GE-Proton11-3; no Faugus component/runner auto-update.
+- Existing image UMU and GE-Proton11-3. The newer diagnostic candidate adds
+  pinned GE-Proton10-34 for Epic; no Faugus component/runner auto-update.
 - Official Epic MSI SHA256 d55d79710edfeaa107a62f2ea007bec1eeeac8b715a43c2ba3858eec7bc60337.
 
 Epic's installer URL is mutable. A changed download deliberately fails the build;
@@ -248,3 +249,41 @@ volume returned 404 at 02:20 UTC. The bounded fallback teardown timer was then
 disabled. The scoped API selector was rolled back to its prior image with a
 persistent Compose rollback overlay, its rollback timer was disabled, and
 public API health returned OK.
+
+## Epic updater service diagnostic — 2026-09-28
+
+One separately approved Paris L4 admin test launched session
+`ebede43f-e181-4703-8745-c1499826b67e` on the retry canary. The official
+Epic installer completed, but the updater again reported service state
+`SERVICE_START_PENDING` followed by code 8 `StartServiceFailed`. A verified
+GE-Proton10-34 release (SHA512
+`9fd0b2cfbd501c0b5c892239c392c7283a029b5e5d5a77d3f85b0ce190d555456241a18eebca16b53f094b403499201c13550a3f0b9b365e1a5eb5737cbb7303`)
+alone reproduced the same failure on this VM.
+
+An opt-in Wine service trace identified the cause on this VM: DXVK could not
+create a Vulkan instance (`VK_ERROR_EXTENSION_NOT_PRESENT`) in Epic's updater
+startup path, and `EpicGamesLauncher.exe` then raised an access violation.
+The session user's normal Vulkan probe still saw the NVIDIA L4 and X11 surface
+extensions, so the failure is narrower than a missing GPU device. Setting
+`PROTON_USE_WINED3D=1` in the Epic-only Faugus wrapper bypassed the DXVK
+failure and rendered the official Epic sign-in window. The owner is testing
+account login in the diagnostic stream. This setting may also affect games
+started as children of Epic; game graphics and performance remain to be
+measured before public Instant Play qualification.
+
+Source revision `1c3ef28601ecc8732af966f7e4e719fde478ad34` packages that
+observed combination in a separate candidate: GE-Proton10-34 for the Faugus
+Epic record, `PROTON_USE_WINED3D=1` for its wrapper, and an explicit migration
+from the earlier managed GE-Proton11-3 record without losing playtime. Nine
+Linux preparation tests pass. A disposable container smoke test confirms the
+new image's actual Faugus dispatch, pinned UMU runner and private-volume
+wrapper path. The local image ID is
+`sha256:b6fa168ca28eea0aed0c74d3943a5473e864b4e37cdc4ee7e3df3a051b09621e`.
+Registry publication was blocked by automatic approval review pending exact
+owner authorization; no production image selector was changed.
+
+The guest Xwayland keyboard started with US layout. Switching it to `pt`
+fixed `@` for the owner's Portuguese (Portugal) keyboard, but the Selkies
+path still mapped Shift+0 to `>` instead of `=`. On-screen keyboard clicks
+stole focus from Epic, so the diagnostic used a focused XTest insertion for
+two requested `=` characters. Keyboard mapping needs a separate product fix.

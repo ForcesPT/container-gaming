@@ -6,13 +6,13 @@ export HOME=/home/dpad
 runuser -u dpad -- /usr/bin/python3 /opt/dpadcloud/dpad_faugus_prepare.py
 cat >/usr/bin/umu-run <<'STUB'
 #!/bin/sh
-test "$PROTONPATH" = /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-3 || exit 21
+test "$PROTONPATH" = /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34 || exit 21
 test "$UMU_RUNTIME_UPDATE" = 0 || exit 22
 test "$WINEPREFIX" = /home/dpad/Faugus/epic-games || exit 23
 echo FAUGUS_PINNED_RUNTIME_OK
 STUB
 chmod +x /usr/bin/umu-run
-export PROTONPATH=/home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-3
+export PROTONPATH=/home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34
 export WINEPREFIX=/home/dpad/Faugus/epic-games
 export UMU_RUNTIME_UPDATE=0 FAUGUS_DISABLE_UPDATES=1
 timeout 30s runuser -u dpad -- dbus-run-session -- xvfb-run -a /usr/local/bin/faugus-launcher --run '/usr/bin/umu-run /tmp/no-game.exe' > /tmp/faugus-smoke.log 2>&1
@@ -37,7 +37,8 @@ chown dpad:dpad /tmp/faugus-private-volume
 cat >/usr/bin/umu-run <<'STUB'
 #!/bin/sh
 set -eu
-test "$PROTONPATH" = /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-3
+test "$PROTONPATH" = /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34
+test "$PROTON_USE_WINED3D" = 1
 test "$UMU_RUNTIME_UPDATE" = 0
 test "$WINEPREFIX" = /tmp/faugus-private-volume/faugus/prefixes/epic-games
 test "$XDG_DATA_HOME" = /tmp/faugus-private-volume/faugus/data
