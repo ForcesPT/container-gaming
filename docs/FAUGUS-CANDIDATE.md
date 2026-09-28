@@ -315,7 +315,7 @@ selector was rolled back to its previous image, its test image ref is empty,
 and public API health returned HTTP 200. Both bounded fallback timers were
 disabled after cleanup. Heroic remains the public Instant Epic route.
 
-## Next prerequisite candidate — 2026-09-28
+## Prerequisite candidate (failed on GPU VM) — 2026-09-28
 
 The managed Faugus Epic record passed `-SkipBuildPatchPrereq`, while Faugus's
 own Epic record leaves the game arguments empty. [Epic describes that flag](https://www.epicgames.com/help/c-32735058/c-37477814/a19481967?lang=en-US)
@@ -323,9 +323,9 @@ as a workaround for failed prerequisite installation, and [separately states](ht
 that the current launcher requires a local Online Services component. Removing the
 flag may allow that component to install during the normal launcher flow;
 the current logs do not establish that the flag caused this login loop.
-The next candidate clears the flag from both new and existing managed records
-while retaining their private prefix and playtime. It requires a new bounded
-GPU test before any claim about signed-in library access or gameplay.
+That candidate cleared the flag from both new and existing managed records
+while retaining their private prefix and playtime. A bounded GPU test was
+required before any claim about signed-in library access or gameplay.
 Ten Linux preparation tests pass, including migration of an existing managed
 record away from the skip flag. A local network-isolated diagnostic image was
 built from the published WineD3D canary using `Dockerfile.faugus-prereqs`;
@@ -333,4 +333,65 @@ its image ID is
 `sha256:4fe701debcd9ac311155b59257e52224aa23da9294a310d7c6adc1e83190920f`.
 The packaged preparation script hash matches the tested source
 (`sha256:de9b77b0b2bd7f2eaa8dfe1797713ac4c3a6338fbfed7f6c4c48fd0d4afdafe4`).
-No registry push or VM test has been done for this revision.
+At that point no registry push or VM test had been done for this revision.
+
+The owner then approved publication of this exact image to
+`forcespt/dpadcloud-gaming:faugus-epic-prereqs-canary-20260928-5171244`;
+Docker Hub reported the same `sha256:4fe701de…90920f` digest. The ordinary
+customer `Play game` route was mistakenly used for the first bounded VM after
+that publication. Its live slot inspection showed the public Heroic image
+`sha256:59c8efe…37d20`, so it provided no evidence about the prerequisite
+candidate. The session was ended after 200 billed GPU seconds (the $1.29
+minimum). The admin test image selector applies only to the admin **Test game**
+flow; it is intentionally ignored by the ordinary customer launch route.
+Future Faugus tests must enter through ABZÛ’s **Test game** in Instant Play
+administration, then verify the live slot digest before asking the owner to
+sign in.
+The mistaken session ended at 03:53:54 UTC. Its native Scaleway VM
+`c5106eb7-4614-4c66-87f6-a46c6aec035e` and SBS volume
+`d9ea1d32-93d2-441d-8cd8-970d5b1e54d4` both returned 404 at 04:05 UTC.
+The first scoped API selector was restored, its fallback timers disabled, and
+public API health returned HTTP 200 before the corrected admin-only selector
+was staged.
+
+## Prerequisite canary result — 2026-09-28
+
+The corrected admin **Test game** route launched one Paris L4 VM for session
+`0ffd18c2-3fe3-42ca-b2f1-add676b43e47`. A bound worker inspection proved
+slot `dpad-slot-0` ran the intended Faugus prerequisite image at digest
+`sha256:4fe701debcd9ac311155b59257e52224aa23da9294a310d7c6adc1e83190920f`.
+The embedded Selkies stream connected and showed the DpadPlay store picker.
+The official Epic MSI and update ran, but the launcher returned to the picker
+before sign-in. A second launch again logged updater code 8
+`StartServiceFailed`: the service reached `SERVICE_START_PENDING`, briefly
+reported `SERVICE_RUNNING` in some attempts, then stopped. This disproves the
+prerequisite-skip removal as a fix for this VM.
+
+For diagnosis only, the VM's preparation script was changed back to
+`-SkipBuildPatchPrereq` with a pinned source hash check. Epic's update service
+then reported success, but its client remained in an indeterminate
+"Installing Updates" window. Epic's bundled `EpicOnlineServicesInstaller.exe`
+was run in the same private Wine prefix; its MSI and setup logs reported
+success and installed `EpicOnlineServicesHost.exe`. A subsequent launcher
+attempt still failed to reach sign-in. The first failed update could have
+damaged that prefix, so the test preserved it under a diagnostic backup path,
+prepared a fresh prefix, installed the same verified Epic MSI, and repeated
+the launch with `-SkipBuildPatchPrereq` from the beginning. The updater briefly
+showed "Completed Update" then returned to the picker with code 8 again.
+Installing the bundled Online Services component in the fresh prefix did not
+resolve the updater failure. No account sign-in or game launch was attempted
+in this VM.
+
+The session was ended at 04:41:41 UTC with 1,799 billed GPU seconds and the
+$1.29 minimum charge. Its native VM is
+`16cc1dda-7acc-4d34-8830-a60a423c4fc8` and SBS volume
+`dea90aac-4372-4cff-b067-054df11a33cc`; direct Scaleway GETs for both
+returned 404 at 04:53 UTC, and the VM database record became `destroyed`.
+The admin-only API selector was restored to the prior image, its test image
+reference is empty, public API health returned HTTP 200, and both fallback
+timers were disabled. The public Heroic image remained unchanged. The candidate
+source restores `-SkipBuildPatchPrereq` because removing it regressed the
+updater. Do not select the published prerequisite canary for another VM test.
+Further work should isolate the updater service child process and
+Wine graphics/registry behavior before another billed test. An EOS install
+success alone does not qualify Epic login, library access, or ABZÛ gameplay.
