@@ -33,7 +33,7 @@ RUN mkdir -p /opt/dpadcloud/faugus/source \
 COPY scripts/faugus-launcher /usr/local/bin/faugus-launcher
 COPY --from=picker-adapter /work/output/ /opt/dpadcloud/launcher/resources/
 COPY scripts/swaymsg-desktop-compat /usr/local/bin/swaymsg
-COPY scripts/faugus-epic-launch scripts/dpad_faugus_prepare.py scripts/epic-launch scripts/launcher-shell /opt/dpadcloud/
+COPY scripts/faugus-epic-launch scripts/dpad_faugus_prepare.py scripts/dpad_epic_updater_failed.py scripts/epic-launch scripts/launcher-shell /opt/dpadcloud/
 RUN sed -i 's/\r$//' /usr/local/bin/swaymsg /usr/local/bin/faugus-launcher /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/epic-launch /opt/dpadcloud/launcher-shell \
     && chmod +x /usr/local/bin/swaymsg /usr/local/bin/faugus-launcher /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/epic-launch /opt/dpadcloud/launcher-shell \
     && /usr/bin/python3 -c 'import gi, requests, PIL, vdf, psutil, dbus; gi.require_version("Gtk", "4.0"); gi.require_version("Adw", "1"); gi.require_version("Manette", "0.2"); from gi.repository import Gtk, Adw, Manette' \

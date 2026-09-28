@@ -1,5 +1,13 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-28 Epic updater follow-up:** Three fresh local prefixes, including
+> one launched through the exact Faugus wrapper, completed Epic's service
+> update and kept the client alive for 150 seconds. The GPU canary's
+> `StartServiceFailed` did not reproduce locally. A separate local canary image
+> now retries once only after that fresh, short-lived updater error; focused
+> fault tests pass. No live image selection changed. See
+> [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md) for the remaining GPU gate.
+
 > **2026-09-28 Faugus GPU canary:** One approved Paris L4 session qualified
 > embedded/direct Selkies handoff and three brief reconnects. The official Epic
 > MSI installed and self-updated, but the launcher returned to the picker;

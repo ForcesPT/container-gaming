@@ -196,3 +196,24 @@ fallback teardown timer was then disabled. The separate admin API test image
 selector was cleared, the previous API image restored, and public API health
 returned HTTP 200; the public Instant image selection stayed unchanged
 throughout.
+
+## Epic updater follow-up — 2026-09-28
+
+The official Epic MSI was installed into three separate local prefixes using
+the exact published Faugus canary image. First launch through direct UMU, direct
+UMU with Faugus's extra environment, and the complete Faugus wrapper all kept
+the client process alive for the bounded 150-second observation. In each case,
+the updater service reached `SERVICE_RUNNING`; the service self-update
+commandlet finished with exit code 0. The GPU-only `StartServiceFailed` result
+therefore did not reproduce locally. This does not establish what failed on the
+Paris VM or qualify its graphics/login path.
+
+A separate local image, `dpadplay-faugus-candidate:epic-updater-retry`, now has
+a one-time recovery for exactly this updater failure. If Faugus exits within
+30 seconds and an updater log written during that launch reports code 8
+`StartServiceFailed`, the wrapper waits eight seconds and launches once more.
+A second occurrence exits with an explicit error. Normal exits and old logs do
+not trigger a retry. Focused log-detection tests and wrapper fault injection
+passed, including the two-failure limit. The image is local only; no provider
+binding or public image was changed. A new bounded GPU run is required to learn
+whether the retry resolves the VM-specific failure.

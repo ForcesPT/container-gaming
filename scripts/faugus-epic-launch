@@ -31,4 +31,33 @@ if [ ! -f "$epic_exe" ]; then
     faugus-launcher --run "/usr/bin/umu-run msiexec /i ${installer}"
     test -f "$epic_exe" || { echo 'Epic installation is not completed; reopen Epic to retry' >&2; exit 1; }
 fi
-exec faugus-launcher --game dpad-epic
+launch_started_ns="$(date +%s%N)"
+launch_started_s="$(date +%s)"
+set +e
+faugus-launcher --game dpad-epic
+launch_status=$?
+set -e
+
+# Epic's new self-updater runs as a Windows service. In the GPU canary it
+# returned StartServiceFailed and Faugus exited before showing a login window.
+# Retry only that exact fresh, short-lived failure; normal user exits must not
+# reopen the client.
+if [ "$(( $(date +%s) - launch_started_s ))" -lt 30 ]; then
+    sleep 2
+fi
+if [ "$(( $(date +%s) - launch_started_s ))" -lt 30 ] \
+   && python3 -I "${script_dir}/dpad_epic_updater_failed.py" "$WINEPREFIX" "$launch_started_ns"; then
+    echo 'Epic updater service did not start; retrying the launcher once' >&2
+    sleep 8
+    retry_started_ns="$(date +%s%N)"
+    set +e
+    faugus-launcher --game dpad-epic
+    retry_status=$?
+    set -e
+    if python3 -I "${script_dir}/dpad_epic_updater_failed.py" "$WINEPREFIX" "$retry_started_ns"; then
+        echo 'Epic updater service failed again; inspect EpicGamesUpdater logs' >&2
+        exit 1
+    fi
+    exit "$retry_status"
+fi
+exit "$launch_status"
