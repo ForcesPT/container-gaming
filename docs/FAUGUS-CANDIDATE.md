@@ -314,3 +314,23 @@ finalized at 03:22:05 UTC. The scheduled cleanup destroyed native Scaleway VM
 selector was rolled back to its previous image, its test image ref is empty,
 and public API health returned HTTP 200. Both bounded fallback timers were
 disabled after cleanup. Heroic remains the public Instant Epic route.
+
+## Next prerequisite candidate — 2026-09-28
+
+The managed Faugus Epic record passed `-SkipBuildPatchPrereq`, while Faugus's
+own Epic record leaves the game arguments empty. [Epic describes that flag](https://www.epicgames.com/help/c-32735058/c-37477814/a19481967?lang=en-US)
+as a workaround for failed prerequisite installation, and [separately states](https://www.epicgames.com/help/en-US/epic-games-store-c5719341124379/launcher-support-c5719357217435/epic-online-services-and-epic-games-launcher-14-2-0-update-a5720351763099)
+that the current launcher requires a local Online Services component. Removing the
+flag may allow that component to install during the normal launcher flow;
+the current logs do not establish that the flag caused this login loop.
+The next candidate clears the flag from both new and existing managed records
+while retaining their private prefix and playtime. It requires a new bounded
+GPU test before any claim about signed-in library access or gameplay.
+Ten Linux preparation tests pass, including migration of an existing managed
+record away from the skip flag. A local network-isolated diagnostic image was
+built from the published WineD3D canary using `Dockerfile.faugus-prereqs`;
+its image ID is
+`sha256:4fe701debcd9ac311155b59257e52224aa23da9294a310d7c6adc1e83190920f`.
+The packaged preparation script hash matches the tested source
+(`sha256:de9b77b0b2bd7f2eaa8dfe1797713ac4c3a6338fbfed7f6c4c48fd0d4afdafe4`).
+No registry push or VM test has been done for this revision.

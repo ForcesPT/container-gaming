@@ -85,7 +85,7 @@ def prepare(home, runner=RUNNER, umu='/usr/bin/umu-run', state_root=None):
     executable = prefix / 'drive_c/Program Files/Epic Games/Launcher/Portal/Binaries/Win64/EpicGamesLauncher.exe'
     entry = {'gameid': 'dpad-epic', 'title': 'Epic Games', 'path': str(executable),
              'prefix': str(prefix), 'runner': runner, 'protonfix': 'umu-default',
-             'launch_arguments': 'PROTON_ENABLE_WAYLAND=0', 'game_arguments': '-SkipBuildPatchPrereq',
+             'launch_arguments': 'PROTON_ENABLE_WAYLAND=0', 'game_arguments': '',
              'playtime': 0}
     games_path = data_dir / 'games.json'
     games = read_json(games_path, [])

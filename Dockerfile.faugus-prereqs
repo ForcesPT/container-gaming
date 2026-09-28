@@ -1,0 +1,5 @@
+# Small diagnostic canary layered on the exact published WineD3D candidate.
+# The normal Faugus build remains Dockerfile.faugus.
+FROM forcespt/dpadcloud-gaming@sha256:b6fa168ca28eea0aed0c74d3943a5473e864b4e37cdc4ee7e3df3a051b09621e
+LABEL com.dpadplay.launcher.qualification="candidate-not-gameplay-qualified"
+COPY scripts/dpad_faugus_prepare.py /opt/dpadcloud/dpad_faugus_prepare.py

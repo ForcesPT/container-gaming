@@ -44,6 +44,14 @@ class PreparationTests(unittest.TestCase):
         self.assertNotIn('pre_launch', result[0])
         self.assertEqual(result[1], games[1])
 
+    def test_managed_epic_record_allows_prerequisites(self):
+        self.prep()
+        games = json.loads(self.inventory().read_text())
+        games[0]['game_arguments'] = '-SkipBuildPatchPrereq'
+        self.inventory().write_text(json.dumps(games))
+        self.prep()
+        self.assertEqual(json.loads(self.inventory().read_text())[0]['game_arguments'], '')
+
     def test_conflicting_managed_record_is_refused(self):
         self.prep()
         games = json.loads(self.inventory().read_text())
