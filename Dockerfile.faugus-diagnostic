@@ -1,0 +1,11 @@
+# Pre-login Epic updater diagnostics on the published handoff/keyboard canary.
+# This image is only for an admin Test game VM; public Instant remains Heroic.
+FROM forcespt/dpadcloud-gaming@sha256:0dc089aa168d8ffabecd1367a84d7c18c27dcc228b6cf5d8c324f3a526431b00
+USER root
+ARG DPAD_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
+      com.dpadplay.launcher.qualification="epic-updater-diagnostic-only"
+COPY scripts/faugus-epic-launch scripts/dpad_epic_updater_failed.py /opt/dpadcloud/
+RUN sed -i 's/\r$//' /opt/dpadcloud/faugus-epic-launch \
+    && chmod +x /opt/dpadcloud/faugus-epic-launch
+ENV DPAD_EPIC_DIAGNOSTICS=1

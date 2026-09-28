@@ -1,5 +1,14 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-28 Epic updater diagnosis — LOCAL ONLY.** Epic's documented
+> `777006` means `CrashDuringStaticInit`; the GPU service's failing child needs
+> a Wine/Proton stack trace. An unpaid local reproduction got updater service
+> success despite the same missing registry key, while Xvfb's lack of an
+> OpenGL pixel format prevented GUI qualification. An opt-in admin-only
+> diagnostic wrapper and pinned-base Dockerfile are prepared for a separately
+> authorized GPU test; no account login, image publication, or cloud VM was
+> performed in this follow-up. See [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md).
+
 > **2026-09-28 Faugus handoff and keyboard menu — PUBLISHED CANARY, GPU PENDING.** Pinned
 > Faugus 2.4.2 kills marked Epic child processes as soon as the watched UMU
 > parent exits. An Epic-only adapter now waits through updater/client handoffs

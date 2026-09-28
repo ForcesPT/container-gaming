@@ -538,3 +538,35 @@ when the Faugus wrapper exits nonzero. A local stub test with a 31-second
 first launch passed, along with the immediate-failure and normal-exit cases;
 both edited JavaScript files passed `node --check`. This improves recovery and
 feedback but does not establish that the official updater can complete.
+
+## Updater crash diagnosis prepared — 2026-09-28
+
+[Epic's Unreal Engine exit-code reference](https://dev.epicgames.com/documentation/unreal-engine/API/Runtime/Core/ECrashExitCodes)
+names `777006` `CrashDuringStaticInit`. The GPU updater's `selfupdateinstall`
+child returned that number; this points to an early crash, but the available
+service log has no stack and does not identify the failing library.
+
+An unpaid Docker Desktop reproduction used the published handoff image with
+the documented UMU container permissions, its bundled official Epic MSI, and
+the managed Faugus entry. The MSI installed and the client ran for the bounded
+150-second observation. Six local updater controller logs reported
+`SERVICE_RUNNING` and exit code 0. They *also* reported the same missing
+`HKLM\\SOFTWARE\\WOW6432Node\\EpicGames\\Epic Games Updater` key seen on the GPU
+VM, then constructed the correct launcher path, so that registry message alone
+cannot explain the GPU updater crash. The local GUI repeatedly failed with
+`wined3d_caps_gl_ctx_create Failed to find a suitable pixel format` and an
+access violation under Xvfb, which has no representative GPU OpenGL context.
+It did not reach sign-in and does not qualify the VM graphics path. The
+disposable container was removed; no cloud resource was created.
+
+`Dockerfile.faugus-diagnostic` now derives from the immutable published
+handoff image and replaces only the Epic wrapper plus its exact failure
+detector. Its admin-only `DPAD_EPIC_DIAGNOSTICS=1` mode asks Faugus for
+UMU/Proton logs in the private Faugus data root and captures Wine error and
+SEH warning lines without the very large full trace. The regular wrapper path
+does not enable logging. A focused fault test covers the opt-in arguments and
+the prior one-retry behavior. This diagnostic image remains local source until
+an exact image build and a separately authorized bounded GPU test. The next
+test should stop before account sign-in, inspect the crashing commandlet's
+Wine/Proton trace and Epic updater log, and avoid copying raw logs containing
+account data to the control plane.

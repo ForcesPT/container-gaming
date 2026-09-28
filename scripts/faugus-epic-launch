@@ -34,8 +34,15 @@ if [ ! -f "$epic_exe" ]; then
 fi
 launch_started_ns="$(date +%s%N)"
 launch_started_s="$(date +%s)"
+faugus_args=(--game dpad-epic)
+if [ "${DPAD_EPIC_DIAGNOSTICS:-0}" = 1 ]; then
+    # Admin canary only: keep UMU/Proton logs in the private Faugus data root
+    # and capture Wine's early exception/service path before any account login.
+    export WINEDEBUG="${WINEDEBUG:--all,err+all,warn+seh}"
+    faugus_args+=(--logs)
+fi
 set +e
-faugus-launcher --game dpad-epic
+faugus-launcher "${faugus_args[@]}"
 launch_status=$?
 set -e
 
@@ -54,7 +61,7 @@ if [ "$(( $(date +%s) - launch_started_s ))" -lt 120 ] \
     sleep 8
     retry_started_ns="$(date +%s%N)"
     set +e
-    faugus-launcher --game dpad-epic
+    faugus-launcher "${faugus_args[@]}"
     retry_status=$?
     set -e
     if python3 -I "${script_dir}/dpad_epic_updater_failed.py" "$WINEPREFIX" "$retry_started_ns"; then

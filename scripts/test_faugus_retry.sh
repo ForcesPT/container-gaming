@@ -15,6 +15,8 @@ count=0
 if [ -f "$FAUGUS_TEST_COUNT" ]; then count="$(cat "$FAUGUS_TEST_COUNT")"; fi
 count=$((count + 1))
 echo "$count" > "$FAUGUS_TEST_COUNT"
+printf '%s\n' "$*" > "$FAUGUS_TEST_LAST_ARGS"
+printf '%s\n' "${WINEDEBUG:-}" > "$FAUGUS_TEST_LAST_WINEDEBUG"
 if { [ "$FAUGUS_TEST_MODE" = fail-first ] && [ "$count" -eq 1 ]; } \
    || { [ "$FAUGUS_TEST_MODE" = fail-delayed-first ] && [ "$count" -eq 1 ]; } \
    || [ "$FAUGUS_TEST_MODE" = fail-always ]; then
@@ -29,6 +31,7 @@ STUB
 chmod +x "$tmp/bin/faugus-launcher"
 export HOME="$tmp/home" DPAD_FAUGUS_STATE_ROOT="$tmp/private"
 export PATH="$tmp/bin:$PATH" FAUGUS_TEST_COUNT="$tmp/count"
+export FAUGUS_TEST_LAST_ARGS="$tmp/last-args" FAUGUS_TEST_LAST_WINEDEBUG="$tmp/last-winedebug"
 exe="$tmp/private/prefixes/epic-games/drive_c/Program Files/Epic Games/Launcher/Portal/Binaries/Win64/EpicGamesLauncher.exe"
 mkdir -p "$(dirname "$exe")"
 touch "$exe"
@@ -46,6 +49,7 @@ export FAUGUS_TEST_MODE=normal
 "$tmp/scripts/faugus-epic-launch" >"$tmp/normal.log" 2>&1
 test "$(cat "$tmp/count")" = 1
 ! grep -q 'retrying the launcher once' "$tmp/normal.log"
+! grep -q -- '--logs' "$tmp/last-args"
 rm "$tmp/count"
 export FAUGUS_TEST_MODE=fail-always
 if "$tmp/scripts/faugus-epic-launch" >"$tmp/fail-always.log" 2>&1; then
@@ -54,4 +58,10 @@ if "$tmp/scripts/faugus-epic-launch" >"$tmp/fail-always.log" 2>&1; then
 fi
 test "$(cat "$tmp/count")" = 2
 grep -q 'Epic updater service failed again' "$tmp/fail-always.log"
+rm "$tmp/count"
+export FAUGUS_TEST_MODE=normal DPAD_EPIC_DIAGNOSTICS=1
+"$tmp/scripts/faugus-epic-launch" >"$tmp/diagnostic.log" 2>&1
+test "$(cat "$tmp/count")" = 1
+grep -q -- '--game dpad-epic --logs' "$tmp/last-args"
+grep -q -- '-all,err+all,warn+seh' "$tmp/last-winedebug"
 echo FAUGUS_RETRY_TEST_OK
