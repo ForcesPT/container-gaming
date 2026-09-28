@@ -432,3 +432,29 @@ testing, or tested with an Epic account. A new bounded admin **Test game** VM
 should verify the exact image digest, Epic updater handoff, one owner sign-in,
 library persistence after closing/reopening Epic, Portuguese `@` and `=` input,
 and then ABZÛ before any promotion. Preserve Heroic as the public route.
+
+## Handoff/keyboard canary publication — 2026-09-28
+
+The paragraph above records the pre-publication state. Source revision
+`c277a8323d344ea3d89a2eb7dc94f947d649a93d` was subsequently published,
+with the owner's approval, only as the separate Docker Hub canary
+`forcespt/dpadcloud-gaming:faugus-handoff-keyboard-canary-20260928-c277a83`.
+Docker Hub independently reported immutable index digest
+`sha256:0dc089aa168d8ffabecd1367a84d7c18c27dcc228b6cf5d8c324f3a526431b00`,
+matching the local image ID. This does not promote the image to customers.
+
+The previously verified admin-test API artifact
+`sha256:9a756e190ccb8d8e031c41fa3d0dfc52a7dc3827e1efff9c25e1ce4116d91ba8`
+is temporarily selected on the production API with
+`INSTANT_PLAY_TEST_IMAGE_REF` set to the exact digest above and deadline
+`2026-09-28T19:00:00Z`. An active systemd timer restores API baseline
+`sha256:1d107049e195522665afb1f9a018a763934ec3048eb29165e4ac750c606a96e6`
+at that deadline. The public image remains the accepted Heroic digest
+`sha256:59c8efe85c30224c5e9e878c577b78d3b9563cdecf0763665eb297a50d837d20`;
+the live API health check passed after the scoped cutover.
+
+At this checkpoint, **no GPU VM has been launched**. The browser admin flow
+requires the owner to sign in. A verified one-session teardown guard is staged
+but is armed only after an exact admin Test game session is created. The owner
+approved at most one Paris L4 VM, an $8 infrastructure cap, and teardown within
+one hour; the test must verify the slot's exact digest before Epic sign-in.
