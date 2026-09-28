@@ -1,5 +1,18 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-28 latest Faugus diagnostic GPU result.** The separate admin
+> image `sha256:bba1dbff…25fe33b` ran on one Paris L4 VM. Epic's official
+> updater initially returned to the picker: its `selfupdateinstall` child
+> exited `777006`, followed by `StartServiceFailed`. A later launch reached
+> the official Epic sign-in screen; no account login was attempted, so login
+> persistence and ABZÛ remain unverified. The session ended after 790 billed
+> GPU seconds. The admin-only selector was rolled back and public Heroic was
+> unchanged; provider drain cleanup was pending at the time of this note.
+> The diagnostic image did not capture Proton logs because pinned Faugus's
+> `--game` shell shortcut dropped `--logs`. An exact-source patch now forwards
+> the flag in a new local-only diagnostic image, with a real container CLI
+> forwarding check passed. See [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md).
+
 > **2026-09-28 Epic updater diagnosis — LOCAL ONLY.** Epic's documented
 > `777006` means `CrashDuringStaticInit`; the GPU service's failing child needs
 > a Wine/Proton stack trace. An unpaid local reproduction got updater service

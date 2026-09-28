@@ -570,8 +570,39 @@ commit `9be5e843e212806e13f78b3066a888d6c0bc0d48` at image ID
 `sha256:bba1dbff12fc7ab610216badf3476e8f996361b841f528194970223fc25fe33b`.
 The packaged shell and Python syntax checks passed in a network-isolated
 container; the focused delayed-failure, two-failure, normal-exit, and
-diagnostic-mode test passed. This image has not been published or selected for
-any provider. The next separately authorized bounded GPU test should stop
-before account sign-in, inspect the crashing commandlet's
-Wine/Proton trace and Epic updater log, and avoid copying raw logs containing
-account data to the control plane.
+diagnostic-mode test passed. At this preparation point, the image had not
+yet been published or selected for any provider. The subsequent GPU test
+is recorded below.
+
+## Updater trace GPU test and flag-forwarding fix — 2026-09-28
+
+The diagnostic image above was published separately at immutable digest
+`sha256:bba1dbff12fc7ab610216badf3476e8f996361b841f528194970223fc25fe33b`
+and selected only for ABZÛ's private admin test. Session
+`baf15266-1822-486f-a94d-580b732bb7a2` ran one Scaleway Paris L4 VM at
+that exact digest; the public Heroic image stayed at its accepted digest.
+The official Epic installer and updater initially returned to the store
+picker. Several updater service attempts started the
+`-Commandlet=selfupdateinstall` child, which exited `777006` within roughly
+0.2 seconds; the controller then reported code 8 `StartServiceFailed`.
+The previously suspected missing registry key also appeared, but the service
+constructed the correct launcher path, and the local successful run had the
+same key message. A later launch in this same VM reached the official Epic
+sign-in screen. No account credentials were entered, so login persistence,
+library access, and ABZÛ remain unverified. The session ended at 21:33:04 UTC
+after 790 billed GPU seconds; the VM entered its normal drain cleanup. The
+admin-only API selector was restored to the prior image and live health
+returned HTTP 200.
+
+The opt-in `--logs` did **not** reach Faugus. The pinned upstream
+`faugus-launcher` shell entry has a `--game` case that forwards only `$2` to
+`faugus.runner`, discarding our third `--logs` argument. The live process
+confirmed `python3 -m faugus.runner --game dpad-epic` with no `--logs`, and
+no Proton/UMU trace files existed. The separate diagnostic Dockerfile now
+applies an exact-source, fail-closed patch to forward remaining `--game`
+arguments. A new local image built successfully; a real container invocation
+with an unknown probe flag was rejected by `runner.py`, proving the flag
+reached the runner, and `--game nonexistent --logs` was accepted. This local
+fix has not been published or selected for a provider. The next GPU test
+should collect the actual pre-login trace and then, with separate owner
+authorization, test account sign-in persistence.

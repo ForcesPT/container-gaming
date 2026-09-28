@@ -6,6 +6,9 @@ ARG DPAD_SOURCE_REVISION
 LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
       com.dpadplay.launcher.qualification="epic-updater-diagnostic-only"
 COPY scripts/faugus-epic-launch scripts/dpad_epic_updater_failed.py /opt/dpadcloud/
+COPY scripts/dpad_patch_faugus_game_flags.py /tmp/dpad_patch_faugus_game_flags.py
 RUN sed -i 's/\r$//' /opt/dpadcloud/faugus-epic-launch \
-    && chmod +x /opt/dpadcloud/faugus-epic-launch
+    && chmod +x /opt/dpadcloud/faugus-epic-launch \
+    && python3 /tmp/dpad_patch_faugus_game_flags.py \
+    && rm /tmp/dpad_patch_faugus_game_flags.py
 ENV DPAD_EPIC_DIAGNOSTICS=1
