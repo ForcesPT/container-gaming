@@ -1,0 +1,14 @@
+# Admin-only post-auth crash diagnostic. Public Instant Play remains Heroic.
+FROM forcespt/dpadcloud-gaming@sha256:197c62900eb7d7e3d8ba184a596e4194c45a723a4d0c8f7c816748066b2c4894
+
+USER root
+ARG DPAD_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
+      com.dpadplay.launcher.qualification="epic-postauth-diagnostic-only"
+
+COPY scripts/faugus-epic-launch /opt/dpadcloud/faugus-epic-launch
+RUN sed -i 's/\r$//' /opt/dpadcloud/faugus-epic-launch \
+    && chmod +x /opt/dpadcloud/faugus-epic-launch \
+    && bash -n /opt/dpadcloud/faugus-epic-launch
+
+ENV DPAD_EPIC_DIAGNOSTICS=1

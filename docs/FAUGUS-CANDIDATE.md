@@ -671,3 +671,9 @@ exact bundled official Epic MSI under UMU/GE-Proton10-34 completed with status
 candidate was removed before publication or a billed GPU test. A newer Epic
 installer would need its own executable inventory check before revisiting that
 idea.
+
+The reproducible next diagnostic image is defined by
+`Dockerfile.faugus-epic-postauth`. It derives from the exact tested
+flag-forwarding digest and changes only the Epic wrapper's default Wine debug
+channels from `-all,err+all,warn+seh` to `-all,err+all`. It remains admin-only
+and does not claim to fix the launcher crash.
