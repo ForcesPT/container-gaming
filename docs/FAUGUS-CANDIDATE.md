@@ -480,3 +480,51 @@ could finish. This negative control confirms that the smoke distinguishes the
 specific premature-cleanup behavior the adapter changes.
 It does not authenticate to Epic or establish the cause of the previous
 post-login `SignedIn=1` to `SignedIn=0` transition.
+
+## Handoff/keyboard GPU canary — 2026-09-28
+
+One bounded Paris L4 admin **Test game** session ran image
+`forcespt/dpadcloud-gaming@sha256:0dc089aa168d8ffabecd1367a84d7c18c27dcc228b6cf5d8c324f3a526431b00`;
+`docker inspect` on the assigned slot confirmed that exact image. The embedded
+Selkies stream connected and showed the store picker. The owner used the new
+taskbar selector to change from US to Portuguese (Portugal); the taskbar showed
+`PT`. This verifies the selector's visible result, not every key mapping in an
+Epic input field. An initial Steam window was caused by selecting the Steam
+card; it was closed before the Epic checks.
+
+Epic's official MSI opened and installed. Each subsequent launch returned to
+the picker before sign-in. The updater service log showed the
+`selfupdateinstall` child exiting with code `777006`, followed by the service
+stopping; its controller reported code 8, `StartServiceFailed`. The launcher
+log reported a successful download/install but no current
+`C:\ProgramData\Epic\EpicGamesLauncher\Data\Launcher.manifest`; only the staged
+`LauncherUpdate.manifest` existed. The service also logged a missing
+`HKLM\SOFTWARE\WOW6432Node\EpicGames\Epic Games Updater` key, then constructed
+the launcher path as a fallback. These are observed signals, not yet proof of
+the root cause.
+
+For a runner comparison on this disposable VM only, both the wrapper's
+`PROTONPATH` and Faugus's saved `dpad-epic` runner selection were switched to
+the already installed GE-Proton11-3, keeping WineD3D. The updater displayed
+“Installing Updates” for several minutes without log progress and still did
+not reach sign-in. After stopping that attempt, a copy of the officially
+downloaded `LauncherUpdate.manifest` was placed at the missing current-manifest
+path in the disposable prefix. The next launch returned to the picker with the
+same `StartServiceFailed` result. This rules out the missing file alone as a
+fix. None of these diagnostic edits changed the published image.
+
+The owner never entered Epic credentials in this session. Login persistence,
+library access, and ABZÛ launch therefore remain unverified. The session ended
+at 20:22:56 UTC after 2,124 billed GPU seconds with the $1.29 minimum charge.
+The API's private test selector was restored to baseline, and the public Heroic
+image stayed unchanged. The VM entered the normal 10-minute idle drain period.
+The scheduler then destroyed the VM, and exact Scaleway GETs for native VM
+`799ba26b-0661-49b1-b3d9-6eaf2c53129e` and SBS volume
+`c4c59f71-97dc-4ab8-b884-78fd0656adc6` both returned HTTP 404 at
+20:34 UTC. The VM database record is `destroyed` with no cleanup error.
+
+A later unpaid Docker Desktop attempt used the same canary image and its
+official MSI under Xvfb, but UMU stopped before starting Wine because the
+local Docker engine disallowed the user namespace required by pressure-vessel.
+It supplied no evidence about Epic's updater and the disposable container was
+removed.
