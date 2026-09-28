@@ -1,13 +1,17 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
-> **2026-09-28 Faugus handoff and keyboard menu — LOCAL CANDIDATE.** Pinned
+> **2026-09-28 Faugus handoff and keyboard menu — PUBLISHED CANARY, GPU PENDING.** Pinned
 > Faugus 2.4.2 kills marked Epic child processes as soon as the watched UMU
 > parent exits. An Epic-only adapter now waits through updater/client handoffs
-> before cleanup; local source, real-process, and packaged wrapper tests pass.
+> before cleanup; local source, real-process, packaged wrapper, and actual
+> Faugus runner handoff tests pass.
 > Labwc's Waybar has a searchable keyboard layout picker, with a headless
-> compositor switch to Portuguese locally verified. This has not been
-> published or tested with account login on a GPU. The prior DPoP parse error
-> remains unconfirmed as a separate sign-in blocker. See
+> compositor switch to Portuguese locally verified. The separate image is
+> published at digest `0dc089aa168d8ffabecd1367a84d7c18c27dcc228b6cf5d8c324f3a526431b00`.
+> The admin-only selector was staged and then rolled back when the owner was
+> away; no GPU VM or billable session was created. Public Heroic is unchanged.
+> Account login, keyboard input through Selkies, and the prior DPoP parse error
+> still need GPU verification. See
 > [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md).
 
 > **2026-09-28 Epic retry GPU canary:** The separately published retry image

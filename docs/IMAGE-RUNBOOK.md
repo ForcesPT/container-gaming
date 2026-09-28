@@ -51,8 +51,10 @@
 > selector. `dpad-keyboard-layout` reads installed XKB layouts, stores the
 > session user's choice at `/home/dpad/.config/dpadplay/keyboard.env`, and runs
 > `labwc --reconfigure`. A local headless Labwc accepted a switch to Portuguese
-> (Portugal). The new image remains local only; browser and game symbol input
-> still need GPU acceptance. Public Sway has no bottom Waybar.
+> (Portugal). The separate canary image is published but has not been run on a
+> GPU; browser and game symbol input still need acceptance. Its temporary
+> admin-only selector was rolled back before any billable test. Public Sway has
+> no bottom Waybar.
 >
 > `r8` preserves the same Smithay compositor, Wayland socket, nested Sway,
 > XWayland, and DpadPlay launcher across transient signaling/browser disconnects.

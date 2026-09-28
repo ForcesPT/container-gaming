@@ -458,3 +458,21 @@ requires the owner to sign in. A verified one-session teardown guard is staged
 but is armed only after an exact admin Test game session is created. The owner
 approved at most one Paris L4 VM, an $8 infrastructure cap, and teardown within
 one hour; the test must verify the slot's exact digest before Epic sign-in.
+
+The owner was away from the computer, so the admin selector was rolled back
+before any test submission. The API returned to baseline
+`sha256:1d107049e195522665afb1f9a018a763934ec3048eb29165e4ac750c606a96e6`,
+its test image reference is empty, the public Heroic reference is unchanged,
+and the timer was disabled. The first immediate public health request during
+the API restart returned 502; a subsequent request returned HTTP 200 with
+`{"status":"ok"}`. The published canary remains available for a later
+explicitly bounded test. No GPU VM was created or billed in this attempt.
+
+With no account input, a separate disposable-container integration smoke used
+the **actual patched Faugus runner** and a stub UMU that spawned a marked
+`EpicGamesLaunc` child before its parent exited. The child completed its
+five-second work; Faugus logged the handoff and finalized after a quiet period,
+and the wrapper returned successfully after 30 seconds. This is stronger than
+the helper unit test because it exercises Faugus's real process-exit callback.
+It does not authenticate to Epic or establish the cause of the previous
+post-login `SignedIn=1` to `SignedIn=0` transition.
