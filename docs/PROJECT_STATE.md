@@ -5,7 +5,9 @@
 > update and kept the client alive for 150 seconds. The GPU canary's
 > `StartServiceFailed` did not reproduce locally. A separate local canary image
 > now retries once only after that fresh, short-lived updater error; focused
-> fault tests pass. No live image selection changed. See
+> fault tests pass. It was published separately at immutable digest
+> `67e89b9ee19cdfe862015186ad4471fb99b09a8502468d9e3af8772b3622fb6f`.
+> No live image selection changed. See
 > [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md) for the remaining GPU gate.
 
 > **2026-09-28 Faugus GPU canary:** One approved Paris L4 session qualified

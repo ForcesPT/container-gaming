@@ -208,12 +208,15 @@ commandlet finished with exit code 0. The GPU-only `StartServiceFailed` result
 therefore did not reproduce locally. This does not establish what failed on the
 Paris VM or qualify its graphics/login path.
 
-A separate local image, `dpadplay-faugus-candidate:epic-updater-retry`, now has
+A separate canary image, `dpadplay-faugus-candidate:epic-updater-retry`, now has
 a one-time recovery for exactly this updater failure. If Faugus exits within
 30 seconds and an updater log written during that launch reports code 8
 `StartServiceFailed`, the wrapper waits eight seconds and launches once more.
 A second occurrence exits with an explicit error. Normal exits and old logs do
 not trigger a retry. Focused log-detection tests and wrapper fault injection
-passed, including the two-failure limit. The image is local only; no provider
-binding or public image was changed. A new bounded GPU run is required to learn
-whether the retry resolves the VM-specific failure.
+passed, including the two-failure limit. The owner approved publishing only
+this separate canary tag at
+`forcespt/dpadcloud-gaming@sha256:67e89b9ee19cdfe862015186ad4471fb99b09a8502468d9e3af8772b3622fb6f`
+from source revision `83c8a1dec18c3c332c79f5b13704fa9af794ee79`. No provider binding
+or public image was changed. A new bounded GPU run is required to learn whether
+the retry resolves the VM-specific failure.
