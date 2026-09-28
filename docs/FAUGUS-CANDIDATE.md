@@ -266,8 +266,22 @@ startup path, and `EpicGamesLauncher.exe` then raised an access violation.
 The session user's normal Vulkan probe still saw the NVIDIA L4 and X11 surface
 extensions, so the failure is narrower than a missing GPU device. Setting
 `PROTON_USE_WINED3D=1` in the Epic-only Faugus wrapper bypassed the DXVK
-failure and rendered the official Epic sign-in window. The owner is testing
-account login in the diagnostic stream. This setting may also affect games
+failure and rendered the official Epic sign-in window. The owner tested
+account login in the diagnostic stream. Epic briefly reported
+`OnLoginComplete TRUE` and `SignedIn=1`, then returned to `SignedIn=0` and
+presented sign-in again. The sanitized launcher log reported
+`GenerateDpop failed to parse public key` and `EOS Auth Login failed error:
+EOS_NotConfigured`. The EOS bootstrapper also reported
+`CreateProcessAsUser failed: ErrorCode=0x6 (Invalid handle)`; a later attempt
+said the EOS service initialized, but sign-in still looped. Switching the same
+VM to its GE-Proton11-3 runner with WineD3D retained reproduced the loop.
+This is a post-login failure, so another password attempt is not a fix.
+Epic [documents a separate local Online Services prerequisite](https://www.epicgames.com/help/en-US/epic-games-store-c5719341124379/launcher-support-c5719357217435/epic-online-services-and-epic-games-launcher-14-2-0-update-a5720351763099)
+for current launcher updates. The next local diagnostic should check whether
+that component is installed and whether its service starts under Wine, then
+test DPoP key creation without recording account tokens. The observed
+`EOS_NotConfigured` line alone does not prove which prerequisite failed.
+This setting may also affect games
 started as children of Epic; game graphics and performance remain to be
 measured before public Instant Play qualification.
 
@@ -279,11 +293,24 @@ Linux preparation tests pass. A disposable container smoke test confirms the
 new image's actual Faugus dispatch, pinned UMU runner and private-volume
 wrapper path. The local image ID is
 `sha256:b6fa168ca28eea0aed0c74d3943a5473e864b4e37cdc4ee7e3df3a051b09621e`.
-Registry publication was blocked by automatic approval review pending exact
-owner authorization; no production image selector was changed.
+After the owner authorized the exact payload and destination, this separate
+canary was published as
+`forcespt/dpadcloud-gaming:faugus-epic-wined3d-canary-20260928-1c3ef28`
+at digest `sha256:b6fa168ca28eea0aed0c74d3943a5473e864b4e37cdc4ee7e3df3a051b09621e`.
+It was not selected as the public Instant Play image. The successful container
+smoke does not qualify official Epic login, library access, ABZÛ, or gameplay.
 
 The guest Xwayland keyboard started with US layout. Switching it to `pt`
 fixed `@` for the owner's Portuguese (Portugal) keyboard, but the Selkies
 path still mapped Shift+0 to `>` instead of `=`. On-screen keyboard clicks
 stole focus from Epic, so the diagnostic used a focused XTest insertion for
 two requested `=` characters. Keyboard mapping needs a separate product fix.
+
+The session ended at 03:22:01 UTC after 2,405 billed GPU seconds; billing
+finalized at 03:22:05 UTC. The scheduled cleanup destroyed native Scaleway VM
+`e3949fec-48c3-417b-a97b-c06d646ecb1c` and SBS volume
+`dfa71d3b-f0b7-40ce-b66b-2a65b257e8bf`; both direct provider GETs returned
+404 at 03:33 UTC, before the one-hour deadline. The admin-only API image
+selector was rolled back to its previous image, its test image ref is empty,
+and public API health returned HTTP 200. Both bounded fallback timers were
+disabled after cleanup. Heroic remains the public Instant Epic route.
