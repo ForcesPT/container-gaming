@@ -592,7 +592,10 @@ sign-in screen. No account credentials were entered, so login persistence,
 library access, and ABZÛ remain unverified. The session ended at 21:33:04 UTC
 after 790 billed GPU seconds; the VM entered its normal drain cleanup. The
 admin-only API selector was restored to the prior image and live health
-returned HTTP 200.
+returned HTTP 200. The VM became `destroyed` in the DpadPlay database, and
+direct Scaleway GETs for server `b995ea8c-f11a-4180-89e4-bc3970310074`
+and boot volume `4da4f1b8-dd06-4198-8fb7-9c331a619cff` both returned 404.
+The completed fallback timers were disabled.
 
 The opt-in `--logs` did **not** reach Faugus. The pinned upstream
 `faugus-launcher` shell entry has a `--game` case that forwards only `$2` to

@@ -7,7 +7,8 @@
 > the official Epic sign-in screen; no account login was attempted, so login
 > persistence and ABZÛ remain unverified. The session ended after 790 billed
 > GPU seconds. The admin-only selector was rolled back and public Heroic was
-> unchanged; provider drain cleanup was pending at the time of this note.
+> unchanged. The exact Scaleway VM and boot volume both returned 404 after
+> drain, and the completed fallback timers were disabled.
 > The diagnostic image did not capture Proton logs because pinned Faugus's
 > `--game` shell shortcut dropped `--logs`. An exact-source patch now forwards
 > the flag in a new local-only diagnostic image, with a real container CLI
