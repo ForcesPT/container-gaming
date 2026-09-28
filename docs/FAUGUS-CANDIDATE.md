@@ -609,3 +609,65 @@ reached the runner, and `--game nonexistent --logs` was accepted. This local
 fix has not been published or selected for a provider. The next GPU test
 should collect the actual pre-login trace and then, with separate owner
 authorization, test account sign-in persistence.
+
+## Flag-forwarding GPU test — 2026-09-28/29
+
+The exact-source `--logs` forwarding patch was published as the separate
+admin-only image `forcespt/dpadcloud-gaming@sha256:197c62900eb7d7e3d8ba184a596e4194c45a723a4d0c8f7c816748066b2c4894`.
+An approved Paris L4 **Test game** session
+`fd8a349e-e36d-4bf5-abeb-69672850f8e1` ran that exact digest; the public
+Heroic image remained unchanged. A transient NFS readiness failure prevented
+the first attempt from reaching a stream, with zero billed GPU seconds. The
+worker's bounded NFS mount retry was then released independently. This second
+VM completed host preparation in 11 seconds and reached a connected Selkies
+stream.
+
+The official Epic MSI installed and its update reached the native Epic sign-in
+window. Process inspection proved Faugus actually ran
+`python3 -m faugus.runner --game dpad-epic --logs`; it produced `umu.log` and a
+Proton trace. The updater service still logged `selfupdateinstall` exit
+`777006` at 23:14:56 UTC, yet the client subsequently rendered sign-in. The
+account owner advanced through password sign-in to Epic's authenticator prompt.
+The Windows Epic client then restarted repeatedly under the same long-running
+Faugus/UMU parent; a later client PID was only seconds old while its parent
+was more than seven minutes old. The Proton trace repeatedly showed
+`0xc0000005` access violations at a null address. This is a stronger signal
+for a client crash/restart loop than a Faugus parent handoff, but the captured
+trace does not identify the crashing module or prove a root cause. Signed-in
+library access and ABZÛ were **not** verified.
+
+The opt-in `WINEDEBUG=-all,err+all,warn+seh` setting generated 1.77 GB of Proton
+trace before teardown; future diagnostics must avoid this unbounded SEH output.
+This Instant Play admin session used ephemeral storage: `DPAD_VOLUME_MOUNT` and
+`DPAD_FAUGUS_STATE_ROOT` were absent, and the Epic prefix was on the
+container's overlay filesystem. Even if same-VM sign-in succeeded, credentials
+could not persist across a new VM session under this storage profile. This
+needs a per-user private state design before promising cross-session login
+persistence.
+
+The session ended early at 23:25:40 UTC after 936 billed GPU seconds, with
+billing finalized at 23:25:46 UTC. The VM entered normal drain cleanup,
+briefly showed `error`, and the scheduler's cleanup retry marked it
+`destroyed`. Direct Scaleway GETs for server
+`954ab4af-edf3-4265-a3f7-3e212f196345` and boot volume
+`30c04e32-faef-47c4-a25d-f58f160acc37` both returned 404. The admin-only
+API selector was restored to its prior image and live health returned HTTP
+200; both completed fallback timers were disabled. No GPU resource from this
+test remains.
+
+The next diagnostic should isolate the launcher executable choice and capture
+bounded, sanitized client errors around the first authenticated restart. A
+fresh owner-approved GPU test is required to establish whether Epic reaches a
+stable signed-in library. This test does not justify promoting Faugus to the
+public Instant Play route.
+
+## Win32 executable hypothesis ruled out locally — 2026-09-29
+
+[UMU's own Epic launch example](https://github.com/Open-Wine-Components/umu-launcher#how-do-i-use-it)
+uses `Binaries/Win32/EpicGamesLauncher.exe`, while the DpadPlay Faugus record
+uses `Binaries/Win64/EpicGamesLauncher.exe`. A disposable local install of the
+exact bundled official Epic MSI under UMU/GE-Proton10-34 completed with status
+0, but its prefix contained only the Win64 executable. The proposed Win32
+candidate was removed before publication or a billed GPU test. A newer Epic
+installer would need its own executable inventory check before revisiting that
+idea.

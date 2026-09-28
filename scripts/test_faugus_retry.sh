@@ -63,5 +63,5 @@ export FAUGUS_TEST_MODE=normal DPAD_EPIC_DIAGNOSTICS=1
 "$tmp/scripts/faugus-epic-launch" >"$tmp/diagnostic.log" 2>&1
 test "$(cat "$tmp/count")" = 1
 grep -q -- '--game dpad-epic --logs' "$tmp/last-args"
-grep -q -- '-all,err+all,warn+seh' "$tmp/last-winedebug"
+grep -qx -- '-all,err+all' "$tmp/last-winedebug"
 echo FAUGUS_RETRY_TEST_OK

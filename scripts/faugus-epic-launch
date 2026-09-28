@@ -37,8 +37,9 @@ launch_started_s="$(date +%s)"
 faugus_args=(--game dpad-epic)
 if [ "${DPAD_EPIC_DIAGNOSTICS:-0}" = 1 ]; then
     # Admin canary only: keep UMU/Proton logs in the private Faugus data root
-    # and capture Wine's early exception/service path before any account login.
-    export WINEDEBUG="${WINEDEBUG:--all,err+all,warn+seh}"
+    # and capture Wine errors. warn+seh emits millions of repeated null-fault
+    # lines when Epic enters its restart loop and can exhaust the VM disk.
+    export WINEDEBUG="${WINEDEBUG:--all,err+all}"
     faugus_args+=(--logs)
 fi
 set +e

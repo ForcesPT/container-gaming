@@ -1,5 +1,21 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-29 latest Faugus Epic sign-in result.** The admin-only
+> flag-forwarding image `sha256:197c6290…b2c4894` ran on a Paris L4 VM.
+> Official Epic reached password sign-in and the authenticator prompt, then
+> its Windows client restarted repeatedly. Faugus/UMU stayed alive, and the
+> Proton trace showed repeated `0xc0000005` null-address access violations;
+> the crashing module remains unidentified. No stable library or ABZÛ launch
+> was verified. The session ended after 936 billed GPU seconds. The exact
+> Scaleway server and boot volume both returned 404, production API and
+> private selector were restored, and fallback timers were disabled. Public
+> Heroic remains unchanged. This Instant Play profile had ephemeral state,
+> so Epic login cannot persist across new VMs even if the same-VM crash is
+> fixed. The diagnostic trace grew to 1.77 GB; source now omits the noisy
+> `warn+seh` Wine channel, with its focused container test passing. This
+> smaller diagnostic change is local only. See
+> [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md).
+>
 > **2026-09-28 latest Faugus diagnostic GPU result.** The separate admin
 > image `sha256:bba1dbff…25fe33b` ran on one Paris L4 VM. Epic's official
 > updater initially returned to the picker: its `selfupdateinstall` child
