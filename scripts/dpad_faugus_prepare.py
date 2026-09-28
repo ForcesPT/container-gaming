@@ -7,7 +7,8 @@ import stat
 import tempfile
 import sys
 
-RUNNER = '/home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-3'
+RUNNER = '/home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34'
+PREVIOUS_RUNNER = '/home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-3'
 
 def private_directory(path):
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -94,9 +95,11 @@ def prepare(home, runner=RUNNER, umu='/usr/bin/umu-run', state_root=None):
     if len(matches) > 1:
         raise ValueError('duplicate Epic record')
     if matches:
-        for key in ('path', 'prefix', 'runner'):
+        for key in ('path', 'prefix'):
             if matches[0].get(key) != entry[key]:
                 raise ValueError('conflicting Epic record')
+        if matches[0].get('runner') not in (runner, PREVIOUS_RUNNER):
+            raise ValueError('conflicting Epic runner')
         entry['playtime'] = matches[0].get('playtime', 0)
         games[games.index(matches[0])] = entry
     else:

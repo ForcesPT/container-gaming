@@ -30,6 +30,11 @@ RUN mkdir -p /opt/dpadcloud/faugus/source \
     && curl -fLsS --retry 3 https://launcher-public-service-prod06.ol.epicgames.com/launcher/api/installer/download/EpicGamesLauncherInstaller.msi -o /opt/dpadcloud/faugus/EpicGamesLauncherInstaller.msi \
     && echo 'd55d79710edfeaa107a62f2ea007bec1eeeac8b715a43c2ba3858eec7bc60337  /opt/dpadcloud/faugus/EpicGamesLauncherInstaller.msi' | sha256sum -c - \
     && rm /tmp/faugus.tar.gz /tmp/dpad_patch_faugus.py
+RUN curl -fLsS --retry 3 https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton10-34/GE-Proton10-34.tar.gz -o /tmp/GE-Proton10-34.tar.gz \
+    && echo '9fd0b2cfbd501c0b5c892239c392c7283a029b5e5d5a77d3f85b0ce190d555456241a18eebca16b53f094b403499201c13550a3f0b9b365e1a5eb5737cbb7303  /tmp/GE-Proton10-34.tar.gz' | sha512sum -c - \
+    && tar -xzf /tmp/GE-Proton10-34.tar.gz -C /home/dpad/.steam/debian-installation/compatibilitytools.d/ \
+    && chown -R dpad:dpad /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34 \
+    && rm /tmp/GE-Proton10-34.tar.gz
 COPY scripts/faugus-launcher /usr/local/bin/faugus-launcher
 COPY --from=picker-adapter /work/output/ /opt/dpadcloud/launcher/resources/
 COPY scripts/swaymsg-desktop-compat /usr/local/bin/swaymsg
@@ -38,5 +43,5 @@ RUN sed -i 's/\r$//' /usr/local/bin/swaymsg /usr/local/bin/faugus-launcher /opt/
     && chmod +x /usr/local/bin/swaymsg /usr/local/bin/faugus-launcher /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/epic-launch /opt/dpadcloud/launcher-shell \
     && /usr/bin/python3 -c 'import gi, requests, PIL, vdf, psutil, dbus; gi.require_version("Gtk", "4.0"); gi.require_version("Adw", "1"); gi.require_version("Manette", "0.2"); from gi.repository import Gtk, Adw, Manette' \
     && test -x /usr/bin/umu-run \
-    && test -x /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-3/proton
+    && test -x /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34/proton
 ENV DPAD_EPIC_BACKEND=faugus FAUGUS_DISABLE_UPDATES=1 DPAD_FAUGUS_CLIENT_ONLY_TEST=1

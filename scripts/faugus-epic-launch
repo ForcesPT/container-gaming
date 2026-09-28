@@ -3,8 +3,9 @@
 set -euo pipefail
 export FAUGUS_DISABLE_UPDATES=1
 export UMU_RUNTIME_UPDATE=0
-export PROTONPATH=/home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-3
+export PROTONPATH=/home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34
 export PROTON_ENABLE_WAYLAND=0
+export PROTON_USE_WINED3D=1
 export WINEPREFIX="${HOME}/Faugus/epic-games"
 export GAMEID=umu-default
 unset XDG_DATA_HOME XDG_CONFIG_HOME XDG_STATE_HOME
