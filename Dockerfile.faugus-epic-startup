@@ -1,0 +1,26 @@
+# Local/private candidate: preserve the exact GPU-tested DPoP, DXVK and video runtime.
+FROM forcespt/dpadcloud-gaming@sha256:8bd0f99256c7ecb6dd6d9305ef577185950049eb3ec242a10029bb09cdf98d49 AS runtime-base
+FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS picker-adapter
+WORKDIR /work
+RUN npm install --no-audit --no-fund @electron/asar@3.2.17
+COPY --from=runtime-base /opt/dpadcloud/launcher/resources/ /work/resources/
+COPY scripts/dpad_patch_epic_startup_picker.cjs /work/patch.cjs
+COPY launcher/src/main.js /work/canonical.js
+COPY launcher/src/epic_reopen.cjs /work/epic_reopen.cjs
+RUN ./node_modules/.bin/asar extract resources/app.asar unpacked \
+    && node patch.cjs unpacked/src/main.js canonical.js \
+    && cp epic_reopen.cjs unpacked/src/ \
+    && node --check unpacked/src/main.js \
+    && ./node_modules/.bin/asar pack unpacked output/app.asar --unpack-dir node_modules
+
+FROM runtime-base
+USER root
+ARG DPAD_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
+      com.dpadplay.launcher.qualification="official-epic-startup-local-candidate"
+COPY --from=picker-adapter /work/output/ /opt/dpadcloud/launcher/resources/
+COPY scripts/faugus-epic-launch scripts/dpad_epic_resume.py /opt/dpadcloud/
+RUN sed -i 's/\r$//' /opt/dpadcloud/faugus-epic-launch \
+    && chmod +x /opt/dpadcloud/faugus-epic-launch \
+    && bash -n /opt/dpadcloud/faugus-epic-launch \
+    && python3 -m py_compile /opt/dpadcloud/dpad_epic_resume.py

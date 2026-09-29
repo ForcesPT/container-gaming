@@ -5,8 +5,13 @@ WORKDIR /work
 RUN npm install --no-audit --no-fund @electron/asar@3.2.17
 COPY --from=runtime-base /opt/dpadcloud/launcher/resources/ /work/resources/
 COPY scripts/dpad_patch_faugus_picker.cjs /work/patch.cjs
+COPY scripts/dpad_patch_epic_startup_picker.cjs /work/startup-patch.cjs
+COPY launcher/src/main.js /work/canonical.js
+COPY launcher/src/epic_reopen.cjs /work/epic_reopen.cjs
 RUN ./node_modules/.bin/asar extract resources/app.asar unpacked \
     && node patch.cjs unpacked/src/main.js \
+    && node startup-patch.cjs unpacked/src/main.js canonical.js \
+    && cp epic_reopen.cjs unpacked/src/ \
     && node --check unpacked/src/main.js \
     && ./node_modules/.bin/asar pack unpacked output/app.asar --unpack-dir node_modules
 FROM runtime-base
@@ -39,7 +44,7 @@ COPY scripts/faugus-launcher /usr/local/bin/faugus-launcher
 COPY scripts/dpad-publish-desktop-config scripts/dpad-waybar scripts/dpad-keyboard-layout /opt/dpadcloud/
 COPY --from=picker-adapter /work/output/ /opt/dpadcloud/launcher/resources/
 COPY scripts/swaymsg-desktop-compat /usr/local/bin/swaymsg
-COPY scripts/faugus-epic-launch scripts/dpad_faugus_prepare.py scripts/dpad_epic_updater_failed.py scripts/epic-launch scripts/launcher-shell /opt/dpadcloud/
+COPY scripts/faugus-epic-launch scripts/dpad_faugus_prepare.py scripts/dpad_epic_updater_failed.py scripts/dpad_epic_resume.py scripts/epic-launch scripts/launcher-shell /opt/dpadcloud/
 RUN sed -i 's/\r$//' /usr/local/bin/swaymsg /usr/local/bin/faugus-launcher /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/epic-launch /opt/dpadcloud/launcher-shell /opt/dpadcloud/dpad-publish-desktop-config /opt/dpadcloud/dpad-waybar \
     && chmod +x /usr/local/bin/swaymsg /usr/local/bin/faugus-launcher /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/epic-launch /opt/dpadcloud/launcher-shell /opt/dpadcloud/dpad-publish-desktop-config /opt/dpadcloud/dpad-waybar /opt/dpadcloud/dpad-keyboard-layout \
     && /usr/bin/python3 -c 'import gi, requests, PIL, vdf, psutil, dbus; gi.require_version("Gtk", "4.0"); gi.require_version("Adw", "1"); gi.require_version("Manette", "0.2"); from gi.repository import Gtk, Adw, Manette' \

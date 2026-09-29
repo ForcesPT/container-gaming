@@ -19,6 +19,7 @@ const {
 const path = require('path');
 const fs = require('fs');
 const { spawn, execSync } = require('child_process');
+const { reopenManagedEpic } = require('./epic_reopen.cjs');
 const { pollGamepads, mapToWebApi } = require('./sdl_manager.cjs');
 const {
   detectStoreIdFromTitles,
@@ -342,7 +343,7 @@ function createWindow() {
 // stays visible in the renderer until the store window actually appears (polled
 // via swaymsg), then the launcher window is hidden. When the store exits, the
 // launcher is restored from scratchpad + fullscreened.
-ipcMain.handle('launch-store', (event, storeId) => {
+ipcMain.handle('launch-store', async (event, storeId) => {
   const store = STORES.find((s) => s.id === storeId);
   if (!store) return { ok: false, error: 'unknown store' };
   if (store.comingSoon || !store.cmd) return { ok: false, error: 'coming soon / no command' };
@@ -372,6 +373,35 @@ ipcMain.handle('launch-store', (event, storeId) => {
   }
   if (action.action === 'resume') {
     const existingChild = activeStoreChildren.get(storeId);
+    if (storeId === 'epic' && process.env.DPAD_EPIC_BACKEND === 'faugus'
+        && Array.isArray(storeTitles) && existingChild && existingChild._dpadWindowSeen
+        && !checkStoreWindowVisible(storeId)) {
+      return reopenManagedEpic({
+        owner: existingChild,
+        isCurrent: () => activeStoreChildren.get(storeId) === existingChild,
+        isVisible: () => checkStoreWindowVisible(storeId),
+        requestRestore: () => {
+          // Keep one second-instance helper even if its UMU parent stays alive.
+          if (existingChild._dpadEpicRestoreProcess) return true;
+          const restore = spawn('/opt/dpadcloud/faugus-epic-launch', ['--resume'], {
+            detached: true, stdio: 'ignore', env: { ...process.env },
+          });
+          existingChild._dpadEpicRestoreProcess = restore;
+          const clear = () => {
+            if (existingChild._dpadEpicRestoreProcess === restore) {
+              delete existingChild._dpadEpicRestoreProcess;
+            }
+          };
+          restore.once('error', clear);
+          restore.once('exit', clear);
+          restore.unref();
+          return true;
+        },
+        focus: () => focusStoreWindow(storeId),
+        hide: hideLauncherToScratchpad,
+        notify: () => { if (mainWindow) mainWindow.webContents.send('store-visible', storeId); },
+      });
+    }
     const resumed = resumeActiveStore({
       activeStoreId: storeId,
       activeStorePid: existingChild ? existingChild.pid : null,
@@ -423,6 +453,7 @@ ipcMain.handle('launch-store', (event, storeId) => {
       const elapsedSec = Math.round(pollCount * POLL_MS / 1000);
       const visible = checkStoreWindowVisible(storeId);
       if (visible) {
+        child._dpadWindowSeen = true;
         log(`launch-store ${storeId}: store window detected after ${elapsedSec}s`);
         clearStoreVisibleTimer(storeId, child);
         hideLauncherToScratchpad();

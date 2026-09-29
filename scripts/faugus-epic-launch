@@ -24,20 +24,38 @@ if [ -n "${DPAD_FAUGUS_STATE_ROOT:-}" ]; then
     export XDG_STATE_HOME="${DPAD_FAUGUS_STATE_ROOT}/state"
 fi
 script_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+mode="${1:---launch}"
+if [ "$#" -gt 1 ] || [[ "$mode" != --launch && "$mode" != --prepare-only && "$mode" != --resume ]]; then
+    echo 'usage: faugus-epic-launch [--prepare-only|--resume]' >&2
+    exit 1
+fi
 python3 -I "${script_dir}/dpad_faugus_prepare.py" --lock-only
 exec 9<"${XDG_STATE_HOME:-${HOME}/.local/state}/faugus-launcher/dpad-epic.lock"
+if [ "$mode" = --resume ]; then
+    # Never start another Faugus controller or kill an invisible client/game.
+    # Only ask the already managed official client to restore via its normal
+    # second-instance invocation. A free launch lock means the owner exited.
+    if flock -n 9; then
+        echo 'Epic launch owner has exited; select Epic again to launch' >&2
+        exit 1
+    fi
+    python3 -I "${script_dir}/dpad_epic_resume.py" "$WINEPREFIX"
+    export FAUGUSID=dpad-epic
+    export UMU_USE_STEAM=1 UMU_CONTAINER_NSENTER=1
+    exec /usr/bin/umu-run "${WINEPREFIX}/drive_c/Program Files/Epic Games/Launcher/Portal/Binaries/Win64/EpicGamesLauncher.exe" -SkipBuildPatchPrereq
+fi
 flock -n 9 || { echo 'Epic is already starting or running' >&2; exit 1; }
 python3 -I "${script_dir}/dpad_faugus_prepare.py"
 epic_exe="${WINEPREFIX}/drive_c/Program Files/Epic Games/Launcher/Portal/Binaries/Win64/EpicGamesLauncher.exe"
 if [ ! -f "$epic_exe" ]; then
     installer=/opt/dpadcloud/faugus/EpicGamesLauncherInstaller.msi
     echo 'd55d79710edfeaa107a62f2ea007bec1eeeac8b715a43c2ba3858eec7bc60337  /opt/dpadcloud/faugus/EpicGamesLauncherInstaller.msi' | sha256sum -c -
-    # Show the official installer; the account owner completes its normal flow.
-    faugus-launcher --run "/usr/bin/umu-run msiexec /i ${installer}"
-    test -f "$epic_exe" || { echo 'Epic installation is not completed; reopen Epic to retry' >&2; exit 1; }
+    # Standard MSI unattended install; no account or signed-in template is used.
+    # This can also be invoked separately by provisioning on a private prefix.
+    timeout --kill-after=15s 300s faugus-launcher --run "/usr/bin/umu-run msiexec /i ${installer} /qn /norestart"
+    test -f "$epic_exe" || { echo 'Epic installation did not complete' >&2; exit 1; }
 fi
-launch_started_ns="$(date +%s%N)"
-launch_started_s="$(date +%s)"
+[ "$mode" != --prepare-only ] || exit 0
 faugus_args=(--game dpad-epic)
 if [ "${DPAD_EPIC_DIAGNOSTICS:-0}" = 1 ]; then
     # Admin canary only: keep UMU/Proton logs in the private Faugus data root
@@ -46,33 +64,27 @@ if [ "${DPAD_EPIC_DIAGNOSTICS:-0}" = 1 ]; then
     export WINEDEBUG="${WINEDEBUG:--all,err+all}"
     faugus_args+=(--logs)
 fi
-set +e
-faugus-launcher "${faugus_args[@]}"
-launch_status=$?
-set -e
-
-# Epic's new self-updater runs as a Windows service. In the GPU canary it
-# returned StartServiceFailed and Faugus exited before showing a login window.
-# Retry only that exact fresh failure. The guarded Faugus process handoff can
-# keep the wrapper alive for at least 20 seconds after Epic's updater exits,
-# so a 30-second limit can miss the failure observed on the GPU canary.
-# Normal user exits do not have a fresh StartServiceFailed log.
-if [ "$(( $(date +%s) - launch_started_s ))" -lt 120 ]; then
-    sleep 2
-fi
-if [ "$(( $(date +%s) - launch_started_s ))" -lt 120 ] \
-   && python3 -I "${script_dir}/dpad_epic_updater_failed.py" "$WINEPREFIX" "$launch_started_ns"; then
-    echo 'Epic updater service did not start; retrying the launcher once' >&2
-    sleep 8
-    retry_started_ns="$(date +%s%N)"
+# Retry at most three launches, and only a new, short-lived code-8 updater
+# failure. A normal close, unrelated error, old log or long-running signed-in
+# client must never trigger an automatic reopening.
+for attempt in 1 2 3; do
+    launch_started_ns="$(date +%s%N)"
+    launch_started_s="$(date +%s)"
     set +e
     faugus-launcher "${faugus_args[@]}"
-    retry_status=$?
+    launch_status=$?
     set -e
-    if python3 -I "${script_dir}/dpad_epic_updater_failed.py" "$WINEPREFIX" "$retry_started_ns"; then
-        echo 'Epic updater service failed again; inspect EpicGamesUpdater logs' >&2
+    if [ "$(( $(date +%s) - launch_started_s ))" -ge 120 ]; then
+        exit "$launch_status"
+    fi
+    sleep 2
+    if ! python3 -I "${script_dir}/dpad_epic_updater_failed.py" "$WINEPREFIX" "$launch_started_ns"; then
+        exit "$launch_status"
+    fi
+    if [ "$attempt" -eq 3 ]; then
+        echo 'Epic updater service failed after three attempts; inspect EpicGamesUpdater logs' >&2
         exit 1
     fi
-    exit "$retry_status"
-fi
-exit "$launch_status"
+    echo "Epic updater service did not start; retrying the launcher (attempt $((attempt + 1))/3)" >&2
+    sleep 8
+done

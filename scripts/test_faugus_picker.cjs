@@ -12,5 +12,8 @@ for (const [backend, expected] of [['faugus', 'heroic'], ['heroic', 'heroic'], [
 assert.ok(source.includes("return swaymsg('[title=\"Epic Games Launcher\"] focus') !== null"));
 const lifecycle = require('/opt/dpadcloud/launcher/resources/app.asar/src/store_lifecycle.cjs');
 assert.equal(lifecycle.detectStoreIdFromTitles(['Epic Games Launcher']), 'epic');
+assert.ok(source.includes("spawn('/opt/dpadcloud/faugus-epic-launch', ['--resume']"));
+assert.ok(source.includes('child._dpadWindowSeen = true'));
+assert.equal(typeof require('/opt/dpadcloud/launcher/resources/app.asar/src/epic_reopen.cjs').reopenManagedEpic, 'function');
 require('/opt/dpadcloud/launcher/resources/app.asar/node_modules/koffi');
 console.log('Packaged Epic selectors, title detection and native koffi import passed.');

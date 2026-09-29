@@ -961,3 +961,56 @@ metadata against an authorized game payload. A container image containing
 Epic binaries raises separate distribution and commercial-use licensing
 questions; review Epic's current Store EULA and obtain any required rights
 before shipping a preinstalled public image.
+
+## Official Epic startup and reopening — local candidate, 2026-09-29
+
+The new `Dockerfile.faugus-epic-startup` layers onto the exact GPU-tested
+video-first image `sha256:8bd0f992…98d49`. It retains the DPoP key patch,
+DXVK/NVIDIA ICD default and video-first player. No installed prefix or user
+account state is copied into an image. It is local only; no selector or public
+deployment has changed and no paid VM was started.
+
+Changes:
+
+- `faugus-epic-launch --prepare-only` validates private Faugus state and silently
+  installs the checksum-pinned official MSI with `/qn /norestart`, bounded to
+  five minutes plus termination grace. A prepared prefix is reused without
+  launching Epic or requesting an account. The ordinary store card performs
+  the same preparation automatically if needed.
+- The launcher retries **only** fresh updater `StartServiceFailed` code-8 errors
+  from attempts shorter than two minutes, at most three launches. This covers
+  the observed two failed updater rounds without requiring three card clicks.
+  Normal exits, unrelated errors and stale logs do not cause reopening.
+- Selecting a previously visible but now hidden managed Epic client sends
+  `--resume`. The helper requires a held launch-owner lock and a live matching
+  effective UID, private prefix, `FAUGUSID` and exact official executable.
+  It invokes the same official executable through UMU with Faugus's runtime
+  options; it does not start another Faugus controller or kill a client/game.
+- The picker waits up to 30 seconds for a visible, focused Epic window.
+  Concurrent selections share one restore operation. Timeout, focus failure
+  and owner exit leave the picker available. From-scratch Faugus builds use
+  the same wrapper and exact picker adapter.
+
+Local verification:
+
+- A fresh **real** MSI install via Faugus/UMU/GE-Proton/Xvfb passed in a
+  disposable container without account sign-in. Prefix mode was 0700;
+  repeat preparation reused the install. The offline attempt failed because
+  UMU's Steam runtime was not initialized in the base. Allowing its initial
+  runtime download passed. A provisioning caller therefore needs either a
+  prepared runtime or network access for that first setup.
+- Four process-guard cases, eleven private-state preparation cases, three
+  updater-log cases, the retry/installation wrapper scenarios, packaged
+  picker selectors/native module import, and reopen concurrency/timeout/focus
+  policy passed. A real marked Linux test process also verifies exact restore
+  dispatch and that the existing process remains alive while duplicate normal
+  launch is refused. This uses a stub UMU command, not Epic's window behavior.
+
+Remaining acceptance: one bounded GPU canary must verify unattended first
+install, updater completion from one card selection, closing the signed-in
+official window, and reopening it without manual process termination. The
+`--prepare-only` command installs the MSI; it does **not** certify all Epic
+self-updates before VM readiness. Provisioning integration, genuine shared
+ABZÛ installation registration, gameplay and private cross-VM state remain
+separate work. Existing Epic binary distribution/commercial-use rights review
+still applies before public release.

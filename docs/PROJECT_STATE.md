@@ -1,5 +1,21 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-29 local official Epic startup/reopen candidate.** The wrapper now
+> installs the pinned MSI silently into a private prefix, provides
+> `--prepare-only` for provisioning, and retries only fresh short-lived
+> `StartServiceFailed` code-8 updater failures, up to three launches. The picker
+> can request restoration of its previously visible, still-managed Epic client
+> without terminating it or launching a second Faugus controller. The restore
+> helper requires matching UID, prefix, marker and executable, and the picker
+> waits for a real focused window. A disposable account-free local installation
+> passed using actual Faugus/UMU/Proton and Xvfb; prefix mode was 0700 and repeat
+> preparation reused it. Offline runtime initialization failed because the base
+> has no initial UMU Steam runtime; allowing its initial download passed. Local
+> preparation, updater, retry, process-guard and packaged picker tests passed.
+> GPU hidden-window restoration and one-click updater completion are unverified.
+> No new image publication, deployment or paid VM occurred. See
+> [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md).
+
 > **2026-09-29 private video-first GPU result.** Published admin image
 > `sha256:8bd0f992…98d49` rendered live video in the embedded player while
 > audio was delayed; browser diagnostics later recorded both peers, more than
