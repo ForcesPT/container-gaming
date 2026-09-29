@@ -831,3 +831,51 @@ volume `e582e74b-e45b-40a9-a799-d2e641b834eb`. The API-only test selector
 was restored to its baseline image with both selector values empty and health
 HTTP 200. Both completed fallback timers were disabled. The public Heroic
 route remained unchanged.
+
+## Official Epic DXVK follow-up canary — 2026-09-29
+
+Commit `d9f1777` built and published the admin-only DXVK image at immutable
+digest `sha256:a38b41e2d2549abcd65c2634f4dd10ff8178563540d0e0752af78a4739420352`.
+The locally built image passed the disposable updater-retry wrapper check. One
+approved Paris L4 admin session `bd6b48b4-8f12-45da-b98c-bbd2c8fac899`
+reached `ready` at 03:36:33 UTC with that exact image pinned in the running
+slot. The public Heroic image was not changed.
+
+This test did **not** reach the Epic installer or sign-in. Both the embedded
+and direct Selkies players stayed at `Waiting for stream.` Browser status
+recorded a video peer and input data channel but zero received packets or
+frames. Relay-only mode failed to connect. The guest had a healthy slot,
+Labwc/XWayland and launcher processes, Wayland sockets, a started GStreamer
+video pipeline, and nonzero NVIDIA encoder utilization. Coturn listened on
+UDP/TCP 3478 with relay allocations in the configured 40000–40063 range;
+the attached Scaleway security group had inbound default `accept`. These
+checks narrow the fault to media delivery or browser playback, but do not
+identify the failing hop.
+
+A test-only TCP TURN entry was added inside this VM; the player still advertised
+the UDP route and did not start playback. I then sent SIGTERM to the Selkies
+process to test supervisor recovery. The process was still present afterward,
+but the gateway began reporting socket hang-ups and the direct page returned
+`ERR_INVALID_RESPONSE`. Worker certificate renewal repeatedly recorded
+`probe_websocket` / `connection_reset` and ended the session at 03:53:12 UTC.
+Its bounded evidence showed a running container with no OOM, the signaling
+socket and service present, and only `python_traceback` and
+`websocket_handler_error` log signatures. The termination signal may have
+caused that later failure; it cannot explain the original waiting state,
+which preceded it. Do not treat this result as DXVK or Epic qualification,
+and do not send signals to Selkies during a billed media probe without a
+recovery plan.
+
+Billing finalized after 1,000 GPU seconds. The exact DB VM reached
+`destroyed`, and Scaleway returned 404 for server
+`ffb451e1-b71f-4e6d-ac96-69bb32c2c770` and boot volume
+`94b53ec5-9f74-476f-922a-675bd9bc38d7`. The API returned to baseline
+`sha256:1d107049e195522665afb1f9a018a763934ec3048eb29165e4ac750c606a96e6`;
+both private image selector values were empty, health returned HTTP 200, and
+the completed fallback timers were disabled. No resource from this test remains.
+
+Before another billed Epic attempt, capture a browser WebRTC selected
+candidate pair, inbound RTP bytes/frames, and a bounded server RTP counter
+while the player is in the original waiting state. Establish actual video
+first, then test the pinned DXVK image and Epic pointer coordinates on the
+same session. This image does not require republishing for that retest.
