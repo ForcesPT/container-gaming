@@ -1014,3 +1014,67 @@ self-updates before VM readiness. Provisioning integration, genuine shared
 ABZÛ installation registration, gameplay and private cross-VM state remain
 separate work. Existing Epic binary distribution/commercial-use rights review
 still applies before public release.
+
+## Startup GPU canary — 2026-09-29 (fully cleaned up)
+
+The owner approved publishing `f6be930` only as
+`forcespt/dpadcloud-gaming:faugus-epic-startup-canary-20260929-f6be930`,
+then one Paris L4 admin VM capped at $8 and one hour. The published and live
+slot digest was
+`sha256:9140640cdfa19d343344362ae595bacbdea95f7b0e135e49e4a5d6d12c3d441c`.
+Session `2d358d3f-18ea-41cb-bc14-65715315a1d0` launched at 22:58:32 UTC
+and reached ready at 23:04:20 UTC. An absolute teardown timer was armed for
+23:40 UTC; its idle deadline was bound to the same exact session. Public
+Heroic stayed unchanged.
+
+Results:
+
+- The first card launch installed the pinned MSI unattended, with no installer
+  clicks. Both media peers connected and real decoded video rendered.
+- The ordinary DXVK path retried three times and exited code 1. A later normal
+  launch repeated the same bounded result. Six updater controller logs reported
+  code 8 `StartServiceFailed`; the service reached running but its
+  `selfupdateinstall` child exited `777006`. The current Proton trace contained
+  `wine_vkCreateInstance Failed to create instance, res=-7`.
+- A same-VM diagnostic used Epic's documented `-noselfupdate` flag. It reached
+  UMU but left an updater window and no stable client; it was stopped before
+  sign-in and the flag was reverted. It is not a proposed production default.
+- A test-only wrapper change enabled WineD3D for updating. The official update
+  installer ran, and the owner completed account sign-in inside Epic. The
+  owner then reported the same post-login restart loop. No credentials or
+  verification codes were entered by the agent or copied into diagnostics.
+- DXVK was atomically restored for future launches. Only the exact managed
+  test client's process tree was terminated, with guards refusing an unknown
+  Windows child; the observed `tabtip.exe` input helper was accounted for.
+  Epic reopened directly into the signed-in library at about 23:33 UTC.
+- The agent closed only the visible Epic window and selected its store card.
+  Library reappeared signed in without another Faugus launch or process
+  termination. The owner confirmed Store and Library navigation respond.
+  This qualifies the observed close/card recovery; the separate no-window
+  `--resume` second-instance branch was not positively identified in the trace.
+
+The normal session destroy flow ended the session at 23:35:40 UTC, finalized
+billing at 23:35:44 UTC, billed 1,880 GPU seconds, freed the slot, and marked
+the VM draining. Production API was restored to
+`sha256:1d107049e195522665afb1f9a018a763934ec3048eb29165e4ac750c606a96e6`,
+both private test selector values were empty, and health returned 200. Its
+completed rollback timer was disabled. After the normal drain grace, the DB VM
+reached `destroyed`. Exact Scaleway server and boot-volume GETs both returned
+404 at 23:46 UTC, within one hour of launch. The completed session teardown
+timer was also disabled. Resource identities:
+
+- DB VM: `3e4ca19f-b608-4291-89e0-49bc7e7e2159`
+- Scaleway server: `97bed207-38f7-4649-a547-d0567be29ece`
+- Boot volume: `75901854-a3ba-48f4-b2b8-bf35f6f3db98`
+
+Local proof screenshots are under `test-results/epic-startup-*-20260929.png`;
+they are untracked test artifacts, not image inputs. The signed-in library
+proof is `epic-startup-signed-in-dxvk-20260929.png`.
+
+Next: qualify an unattended update preparation path before exposing the picker,
+while preserving DXVK for the signed-in client. The updater's graphics context
+and Wine service environment need isolation; more identical retries do not
+resolve the observed Vulkan error. Genuine Epic installation metadata for the
+shared ABZÛ payload, game launch, and private cross-VM state remain open.
+The original published startup digest still requires manual graphics-phase
+changes and is not ready for public promotion.

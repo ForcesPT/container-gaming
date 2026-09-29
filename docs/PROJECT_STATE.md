@@ -1,5 +1,25 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-29 startup GPU canary, fully cleaned up.** Published private
+> startup image `sha256:9140640c…3d441c` from `f6be930` silently installed
+> Epic's MSI on one Paris L4 VM. Both WebRTC peers and decoded video worked.
+> Normal DXVK updating exhausted three attempts twice: its service child exited
+> `777006`, with Wine Vulkan instance creation failing (`res=-7`). A test-only
+> `-noselfupdate` attempt did not resolve startup and was reverted. Enabling
+> WineD3D only on this diagnostic VM allowed the official update and sign-in,
+> but the owner reproduced the post-login restart loop. After atomically
+> restoring DXVK and terminating only that test's managed client tree, Epic
+> reopened directly into the signed-in library. Closing its window and selecting
+> the Epic card restored the library without process termination or a new
+> Faugus launch. The owner confirmed Store and Library respond. No game was
+> installed or launched. The session ended at 23:35:40 UTC, with 1,880 GPU
+> seconds billed and billing finalized. Production API is restored, both test
+> selectors are empty, and health is 200. The DB VM is destroyed; exact
+> Scaleway server and boot-volume GETs returned 404 at 23:46 UTC, within the
+> one-hour bound. Both fallback timers are disabled. This is a partial
+> acceptance result: updater/client graphics switching is still manual and
+> the published image must not be promoted as one-click startup.
+
 > **2026-09-29 local official Epic startup/reopen candidate.** The wrapper now
 > installs the pinned MSI silently into a private prefix, provides
 > `--prepare-only` for provisioning, and retries only fresh short-lived
