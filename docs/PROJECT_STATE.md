@@ -1,5 +1,19 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-29 DXVK canary stream blocker and local video-first follow-up.**
+> The approved Paris L4 DXVK VM reached ready but Selkies stayed at `Waiting
+> for stream`; no Epic launch or input test occurred. It was ended and its
+> exact server and boot volume returned provider 404, with the private image
+> selector restored. Source inspection showed the Selkies overlay and START
+> require both separate video and audio peers, while the browser logged an
+> incoming video track and input channel but no incoming audio track. Its
+> displayed zero media counters were gated behind audio connection and do not
+> prove zero video RTP. A private video-first client patch now exposes video
+> when audio is delayed and samples video RTP/decoded frames independently.
+> Local image build, JavaScript syntax, and state transitions passed. This
+> image is unpublished and has not been GPU-tested; audio root cause and Epic
+> gameplay remain open. See [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md).
+
 > **2026-09-29 official Epic signed-in storefront canary.** The private DPoP
 > patch removed Epic's persistent-key errors and the owner completed sign-in.
 > WineD3D then caused a graphics-device restart loop about every nine seconds.

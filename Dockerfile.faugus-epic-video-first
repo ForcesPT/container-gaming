@@ -1,0 +1,14 @@
+# Private follow-up to the pinned official Epic DXVK canary. Allow the player
+# to show a connected video stream while its separate audio peer is delayed.
+# This is not a public Instant Play image or an audio transport repair.
+FROM forcespt/dpadcloud-gaming@sha256:a38b41e2d2549abcd65c2634f4dd10ff8178563540d0e0752af78a4739420352
+
+USER root
+ARG DPAD_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
+      com.dpadplay.launcher.qualification="official-epic-video-first-admin-canary"
+
+COPY scripts/patch_selkies_video_first.py /opt/dpadcloud/patch_selkies_video_first.py
+RUN python3 /opt/dpadcloud/patch_selkies_video_first.py \
+       /opt/gst-web/app.js /opt/gst-web/index.html \
+    && python3 -m py_compile /opt/dpadcloud/patch_selkies_video_first.py

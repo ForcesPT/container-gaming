@@ -843,8 +843,11 @@ slot. The public Heroic image was not changed.
 
 This test did **not** reach the Epic installer or sign-in. Both the embedded
 and direct Selkies players stayed at `Waiting for stream.` Browser status
-recorded a video peer and input data channel but zero received packets or
-frames. Relay-only mode failed to connect. The guest had a healthy slot,
+recorded an incoming video track and input data channel. Its displayed media
+statistics remained zero, but later source inspection showed that the stats
+loop does not start until both video and audio peers connect. Those zeroes
+therefore do not establish that video RTP packets or frames were absent.
+Relay-only mode failed to connect. The guest had a healthy slot,
 Labwc/XWayland and launcher processes, Wayland sockets, a started GStreamer
 video pipeline, and nonzero NVIDIA encoder utilization. Coturn listened on
 UDP/TCP 3478 with relay allocations in the configured 40000–40063 range;
@@ -878,4 +881,35 @@ Before another billed Epic attempt, capture a browser WebRTC selected
 candidate pair, inbound RTP bytes/frames, and a bounded server RTP counter
 while the player is in the original waiting state. Establish actual video
 first, then test the pinned DXVK image and Epic pointer coordinates on the
-same session. This image does not require republishing for that retest.
+same session.
+
+## Video-first Selkies canary — local only, 2026-09-29
+
+Source inspection after teardown found a specific browser gate. This Selkies
+client runs separate WebRTC connections for video and audio. Its loading
+overlay and START button depend on `app.status`, but the callbacks only set
+that status to `connected` once **both** peers connect. The observed browser
+logs had an incoming video track and input data channel, while audio only
+waited for its peer. This is consistent with the overlay remaining visible;
+it does not prove that video RTP frames arrived. The existing diagnostics also
+wait for both peers, which explains why their displayed zero counters were not
+valid evidence of zero video traffic.
+
+`Dockerfile.faugus-epic-video-first` pins the exact published DXVK canary and
+patches only the private Selkies web client. Video connection now reveals the
+player and START button even when audio is pending or reconnecting. The drawer
+shows separate peer states and samples video RTP bytes, packets, candidate type,
+and decoded frames without waiting for audio. Loss of video still restores the
+connection overlay. The script checks exact source snippets and refuses an
+unknown Selkies version. The local image built successfully; its bundled
+JavaScript passed `node --check`, and a runtime state-transition test passed
+the video-only, audio reset, audio reconnect, and video loss cases. This is a
+diagnostic canary, not an audio transport or Epic login qualification.
+
+The image has not been published or run on a GPU VM. The previous paid VM is
+gone, so a new capped test needs separate authorization. During that test,
+record these video-only counters before attempting Epic; if RTP packets or
+decoded frames remain zero, inspect server RTP and the selected candidate
+pair rather than treating the overlay fix as proof of playback. A prior project
+note documents a separate stale audio-peer UID failure on reconnect; there is
+no evidence yet that it occurred in this specific test.
