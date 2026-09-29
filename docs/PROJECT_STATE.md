@@ -1,5 +1,22 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-29 private video-first GPU result.** Published admin image
+> `sha256:8bd0f992…98d49` rendered live video in the embedded player while
+> audio was delayed; browser diagnostics later recorded both peers, more than
+> 9 MB of video RTP, and over 2,400 decoded frames. The owner clicked Epic,
+> signed in to the official launcher, opened Library, and found ABZÛ. Mouse
+> clicks worked. The first two Epic launches returned to the picker through
+> self-update; the third reached sign-in. The owner closed Epic, then it
+> reopened signed in after its leftover background process was terminated.
+> ABZÛ showed Install because official installation metadata for the shared
+> payload is still missing. The test prefix was ephemeral, so cross-VM login
+> persistence remains unverified. The session ended after 1,072 GPU seconds;
+> the private API selector is back to baseline and public health is 200. After
+> the 10-minute drain, the DB VM was destroyed and exact Scaleway server and
+> boot-volume GETs both returned 404. Both fallback timers were disabled.
+> Full evidence is in
+> [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md). Public Heroic is unchanged.
+
 > **2026-09-29 DXVK canary stream blocker and local video-first follow-up.**
 > The approved Paris L4 DXVK VM reached ready but Selkies stayed at `Waiting
 > for stream`; no Epic launch or input test occurred. It was ended and its

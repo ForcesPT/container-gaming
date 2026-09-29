@@ -913,3 +913,51 @@ decoded frames remain zero, inspect server RTP and the selected candidate
 pair rather than treating the overlay fix as proof of playback. A prior project
 note documents a separate stale audio-peer UID failure on reconnect; there is
 no evidence yet that it occurred in this specific test.
+
+## Video-first GPU canary — 2026-09-29
+
+The owner approved one Paris L4 admin test on the published private image
+`sha256:8bd0f99256c7ecb6dd6d9305ef577185950049eb3ec242a10029bb09cdf98d49`.
+Session `57c63757-9612-4f3d-b85c-27df6be3fc4f` reached ready at 04:27:57 UTC
+with the exact image in its running slot. The embedded Selkies player rendered
+the picker while audio was still connecting. Both peers subsequently connected;
+the browser reported a host candidate, more than 9 MB of video RTP, more than
+9,000 video packets, and over 2,400 decoded frames. This resolves the earlier
+`Waiting for stream` overlay symptom for this canary and proves actual video
+delivery. It does not establish every audio reconnect path.
+
+The owner launched official Epic from the picker. The first two launches showed
+Epic self-update and returned to the picker. Epic's own updater log reported
+`StartServiceFailed` (code 8). The third launch reached sign-in. The owner
+signed in within Epic, opened Library using the mouse, and found ABZÛ in the
+account. Epic offered Install: the official launcher has no installation record
+for the shared game files. The taskbar keyboard indicator showed Portuguese
+after the owner used its layout selector. No game installation or gameplay was
+attempted.
+
+Closing the Epic window left its process running without a visible window, so
+the picker reported that Epic was still starting. After terminating only that
+leftover Epic process, Faugus released its launch lock. The owner relaunched
+Epic and it opened signed in, proving sign-in persistence across a launcher
+restart within this one VM. The current admin test prefix was mode 0700 at
+`/home/dpad/Faugus/epic-games`, with no `DPAD_VOLUME_MOUNT` or
+`DPAD_FAUGUS_STATE_ROOT`; this does not prove persistence across separate VMs.
+
+The session was ended at 04:45:49 UTC, 1,072 GPU seconds billed, well before
+the one-hour deadline. The API-only image selector was restored to its baseline
+`sha256:1d107049e195522665afb1f9a018a763934ec3048eb29165e4ac750c606a96e6`;
+both private selector values were empty and public health returned HTTP 200.
+After the scheduler's 10-minute drain grace, the DB VM reached `destroyed`.
+Scaleway returned 404 for the exact server
+`941fe1b9-b905-4aab-8d9c-bad916026007` and SBS boot volume
+`07f0f1d9-13f7-4fcd-a7d0-d76b11d950ca`. Both completed fallback timers were
+disabled. The public Instant Play image remained the Heroic digest
+`sha256:59c8efe85c30224c5e9e878c577b78d3b9563cdecf0763665eb297a50d837d20`.
+
+Next technical steps: prepare the official Epic client before exposing the
+picker, bind its mutable prefix to private per-user storage, provide a clean
+Quit action for tray/background processes, and register Epic's genuine install
+metadata against an authorized game payload. A container image containing
+Epic binaries raises separate distribution and commercial-use licensing
+questions; review Epic's current Store EULA and obtain any required rights
+before shipping a preinstalled public image.
