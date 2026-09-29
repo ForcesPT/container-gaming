@@ -676,4 +676,84 @@ The reproducible next diagnostic image is defined by
 `Dockerfile.faugus-epic-postauth`. It derives from the exact tested
 flag-forwarding digest and changes only the Epic wrapper's default Wine debug
 channels from `-all,err+all,warn+seh` to `-all,err+all`. It remains admin-only
-and does not claim to fix the launcher crash.
+and does not claim to fix the launcher crash. A local build from source
+`6fcee8d` produced image ID
+`sha256:62462253608d1caeb84fc2f66382900c1e7c0407fa0491d15e198e616907e93b`;
+the packaged script passed `bash -n` and the image's diagnostic mode and Wine
+channel check passed.
+
+## Post-verification Epic restart — 2026-09-29
+
+The exact diagnostic image above was published as the separate Docker Hub
+digest `sha256:62462253608d1caeb84fc2f66382900c1e7c0407fa0491d15e198e616907e93b`
+and selected only for an approved ABZÛ admin **Test game** session
+`90653013-afb9-4b9a-91de-113eaba0eeec` on one Paris L4 VM. The running
+slot's `docker inspect` image matched that digest. The public Heroic route
+remained unchanged.
+
+The official Epic MSI installed and updated, with several early returns to the
+store picker. The updater service logged `StartServiceFailed` (`code 8`), yet a
+later launch reached the native Epic sign-in window. That pre-login window
+stayed open for over two minutes with the same Windows client PID. The account
+owner completed password entry and reached the verification prompt. After
+verification, Epic restarted repeatedly while Faugus/UMU stayed alive.
+
+Epic's own logs gave a more specific auth failure than the earlier large Proton
+trace: `LogDPoP: Failed to create persistent DPoP key (Status: 0x80090029)`,
+followed by `no public JWK available`, `GenerateDpop failed to parse public
+key`, and `EOS_NotConfigured`. The launcher logged `SignedIn=1` briefly and
+then `SignedIn=0` across successive client restarts. This strongly implicates
+the DPoP key failure in the login loop; it does not prove that every process
+restart has the same cause. The bounded Proton trace stayed below 200 KB and
+showed no new `0xc0000005` line in the inspected tail; a separate Xalia
+accessibility exception was present, with no established causal link to Epic.
+
+[Microsoft's error table](https://learn.microsoft.com/windows/win32/com/com-error-codes-4)
+defines `0x80090029` as `NTE_NOT_SUPPORTED`. Current upstream
+[Wine `ncrypt` source](https://github.com/wine-mirror/wine/blob/master/dlls/ncrypt/main.c)
+still marks named persistent keys unsupported, and `NCryptOpenKey` returns
+`NTE_NOT_SUPPORTED`. This makes a Wine/Proton CNG compatibility gap the leading
+explanation, but the exact Epic algorithm and failing CNG call have not yet
+been traced. Swapping Faugus UI or storage mounts alone cannot establish
+working DPoP authentication. An implementation must preserve Epic's DPoP
+security semantics; disabling proofs is not a valid product fix.
+
+The session ended at 00:17:13 UTC after 829 billed GPU seconds, and billing
+finalized at 00:17:16 UTC. The API-only selector was restored to the prior
+image, both private selector variables were empty, and live health was HTTP
+200. The DB VM reached `destroyed`; Scaleway returned 404 for exact server
+`70c36e17-6392-46f5-ba3f-a5f2ac35a490` and boot volume
+`772dd2b7-3322-4a20-bcfe-c2fd01c8d1f9`. The completed session teardown
+fallback timer was disabled. No VM or volume from this test remains.
+
+## Official Epic persistence research — 2026-09-29
+
+The requirement is Epic's official Windows store client, launched by Faugus;
+Heroic/Legendary is not an acceptable substitute for this candidate. Epic's
+[published requirements](https://www.epicgames.com/help/c-202300000001619/a202300000014568)
+list Windows and macOS, not Linux. Faugus
+[re-added the official Epic launcher](https://github.com/Faugus/faugus-launcher/releases)
+with Proton support in its July 2026 release, but that does not qualify this
+specific GE-Proton runtime or DpadPlay's session lifecycle.
+
+[Soju's published Wine patch](https://github.com/BCD1210/soju/blob/main/patches/ncrypt-persisted-keys.patch)
+documents the *same* Epic `Failed to create persistent DPoP key (Status:
+0x80090029)` and missing public JWK markers. It implements named CNG key
+persistence and ECDSA P-256/P-384 support in `ncrypt`, and Soju reports official
+Epic login and game installation on macOS. This is an exact diagnostic lead,
+not Linux validation. The GE-Proton10-34 tag `GE-Proton10-34` pins Valve Wine
+source `1729f00e17e879f98f9df1f2bca86bc5d21a65df`; `git apply --check`
+against that revision's `dlls/ncrypt/main.c` and `ncrypt_internal.h` passed
+without modification. The patch has not been built into our runner, tested for
+key persistence, or run against Epic on a DpadPlay VM.
+
+The patch stores private keys in the Wine prefix under
+`%APPDATA%\Microsoft\Crypto\Keys`. Any canary must ensure this path is
+private to one user, never stored in the shared game master, and survives a
+launcher restart. A separate durable per-user volume is needed for login
+persistence across different VMs; the tested Instant Play session used
+ephemeral client state. Before promotion, build a pinned Proton canary and
+verify named P-256 create/open/sign across separate Wine processes, filesystem
+permissions, official Epic sign-in and restart on one VM, then persistence
+across VMs with a private volume. Review patch licensing and source delivery
+for any distributed image. The public Heroic route remains unchanged.

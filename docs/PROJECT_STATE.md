@@ -1,6 +1,24 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
-> **2026-09-29 latest Faugus Epic sign-in result.** The admin-only
+> **2026-09-29 Faugus official Epic post-verification test.** The scoped
+> admin-only image `sha256:62462253…907e93b` ran on one Paris L4 VM; public
+> Heroic remained unchanged. Official Epic reached sign-in after updater
+> retries, stayed open for over two minutes, then restarted repeatedly after
+> the owner's verification prompt. Faugus/UMU remained alive. Epic logged
+> `Failed to create persistent DPoP key (Status: 0x80090029)`, no public JWK,
+> a failed DPoP token grant, and `SignedIn=1` followed by `SignedIn=0`.
+> Microsoft defines the status as `NTE_NOT_SUPPORTED`; upstream Wine still
+> lacks named key persistence in `ncrypt`. This is the leading compatibility
+> explanation, not yet an exact API-level proof. The session ended after 829
+> billed GPU seconds and billing finalized; the API test selector and image
+> were restored, with health 200. The DB VM is destroyed, and the exact
+> Scaleway server and boot volume returned 404; the completed fallback timer
+> was disabled. Research found a published Wine `ncrypt` patch addressing the
+> exact Epic DPoP markers. It applies cleanly to GE-Proton10-34's pinned Wine
+> source but has not been built or tested in DpadPlay. See
+> [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md).
+>
+> **2026-09-29 prior Faugus Epic sign-in result.** The admin-only
 > flag-forwarding image `sha256:197c6290…b2c4894` ran on a Paris L4 VM.
 > Official Epic reached password sign-in and the authenticator prompt, then
 > its Windows client restarted repeatedly. Faugus/UMU stayed alive, and the
@@ -13,7 +31,7 @@
 > so Epic login cannot persist across new VMs even if the same-VM crash is
 > fixed. The diagnostic trace grew to 1.77 GB; source now omits the noisy
 > `warn+seh` Wine channel, with its focused container test passing. This
-> smaller diagnostic change is local only. See
+> smaller diagnostic change was later published for the test above. See
 > [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md).
 >
 > **2026-09-28 latest Faugus diagnostic GPU result.** The separate admin
