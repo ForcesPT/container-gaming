@@ -1,0 +1,73 @@
+# Private official-Epic canary: rebuild only Wine's 64-bit ncrypt.dll from the
+# GE-Proton10-34 pinned Valve Wine source with the published persistence patch.
+# Keep the public gaming image and Faugus/UMU integration unchanged.
+FROM ubuntu:24.04 AS ncrypt-source
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       build-essential bison ca-certificates curl flex git \
+       gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
+    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends autoconf python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG VALVE_WINE_REV=1729f00e17e879f98f9df1f2bca86bc5d21a65df
+ARG SOJU_REV=f482f2b607e3374163e8a5e47a75f422b3d332b6
+ARG SOJU_PATCH_SHA256=6283b3637b1d98bf43f68618c0991ee23e719c8bddaed05eff05e3989c954efe
+RUN git init /src/wine \
+    && git -C /src/wine remote add origin https://github.com/ValveSoftware/wine.git \
+    && git -C /src/wine fetch --depth=1 origin "${VALVE_WINE_REV}" \
+    && git -C /src/wine checkout --detach FETCH_HEAD \
+    && test "$(git -C /src/wine rev-parse HEAD)" = "${VALVE_WINE_REV}" \
+    && curl -fL --retry 3 \
+       "https://raw.githubusercontent.com/BCD1210/soju/${SOJU_REV}/patches/ncrypt-persisted-keys.patch" \
+       -o /tmp/ncrypt-persisted-keys.patch \
+    && printf '%s  %s\n' "${SOJU_PATCH_SHA256}" /tmp/ncrypt-persisted-keys.patch | sha256sum -c - \
+    && curl -fL --retry 3 \
+       "https://raw.githubusercontent.com/BCD1210/soju/${SOJU_REV}/LICENSE" \
+       -o /tmp/soju-LICENSE \
+    && echo '3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986  /tmp/soju-LICENSE' | sha256sum -c - \
+    && git -C /src/wine apply --check /tmp/ncrypt-persisted-keys.patch \
+    && git -C /src/wine apply /tmp/ncrypt-persisted-keys.patch
+
+FROM ncrypt-source AS ncrypt-generated
+RUN cd /src/wine \
+    && sed -i '/WINE_CONFIG_MAKEFILE(dlls\/amd_ags_x64)/d' configure.ac \
+    && git rm -r --quiet -- dlls/amd_ags_x64 \
+    && ./tools/make_makefiles \
+    && ./tools/make_requests \
+    && ./tools/make_specfiles \
+    && cd dlls/winevulkan && python3 make_vulkan \
+    && cd /src/wine \
+    && autoreconf -f \
+    && python3 -c 'from pathlib import Path; p=Path("include/Makefile.in"); t=p.read_text(); e=chr(92)+chr(10); m="SOURCES = "+e; assert m in t; p.write_text(t.replace(m,m+"\tconfig.h.in "+e+"\twine/vulkan.h "+e,1))'
+
+FROM ncrypt-generated AS ncrypt-builder
+RUN cd /src/wine \
+    && mkdir -p /src/wine-build/include/wine \
+    && cp include/wine/vulkan.h include/wine/vulkan_driver.h /src/wine-build/include/wine/ \
+    && cd /src/wine-build \
+    && /src/wine/configure --enable-win64 --without-x --without-freetype \
+    && make -j"$(nproc)" dlls/ncrypt/x86_64-windows/ncrypt.dll \
+    && test -s dlls/ncrypt/x86_64-windows/ncrypt.dll
+
+FROM forcespt/dpadcloud-gaming@sha256:62462253608d1caeb84fc2f66382900c1e7c0407fa0491d15e198e616907e93b
+USER root
+ARG DPAD_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
+      com.dpadplay.launcher.qualification="official-epic-dpop-admin-canary"
+
+COPY --from=ncrypt-builder /src/wine-build/dlls/ncrypt/x86_64-windows/ncrypt.dll \
+    /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34/files/lib/wine/x86_64-windows/ncrypt.dll
+COPY --from=ncrypt-source /src/wine/dlls/ncrypt/main.c /src/wine/dlls/ncrypt/ncrypt_internal.h \
+    /src/wine/LICENSE /src/wine/COPYING.LIB /tmp/ncrypt-persisted-keys.patch /tmp/soju-LICENSE \
+    /usr/share/doc/dpadplay/epic-ncrypt/
+COPY scripts/faugus-epic-launch scripts/dpad_faugus_prepare.py /opt/dpadcloud/
+RUN chown dpad:dpad \
+    /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34/files/lib/wine/x86_64-windows/ncrypt.dll \
+    && sed -i 's/\r$//' /opt/dpadcloud/faugus-epic-launch \
+    && chmod +x /opt/dpadcloud/faugus-epic-launch \
+    && bash -n /opt/dpadcloud/faugus-epic-launch \
+    && python3 -m py_compile /opt/dpadcloud/dpad_faugus_prepare.py

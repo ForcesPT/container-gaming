@@ -744,16 +744,42 @@ Epic login and game installation on macOS. This is an exact diagnostic lead,
 not Linux validation. The GE-Proton10-34 tag `GE-Proton10-34` pins Valve Wine
 source `1729f00e17e879f98f9df1f2bca86bc5d21a65df`; `git apply --check`
 against that revision's `dlls/ncrypt/main.c` and `ncrypt_internal.h` passed
-without modification. The patch has not been built into our runner, tested for
-key persistence, or run against Epic on a DpadPlay VM.
+without modification.
 
 The patch stores private keys in the Wine prefix under
 `%APPDATA%\Microsoft\Crypto\Keys`. Any canary must ensure this path is
 private to one user, never stored in the shared game master, and survives a
 launcher restart. A separate durable per-user volume is needed for login
 persistence across different VMs; the tested Instant Play session used
-ephemeral client state. Before promotion, build a pinned Proton canary and
-verify named P-256 create/open/sign across separate Wine processes, filesystem
-permissions, official Epic sign-in and restart on one VM, then persistence
-across VMs with a private volume. Review patch licensing and source delivery
-for any distributed image. The public Heroic route remains unchanged.
+ephemeral client state. Before promotion, verify official Epic sign-in and
+restart on one VM, then persistence across VMs with a private volume. Keep
+the patch source and licensing notices with any distributed image. The public
+Heroic route remains unchanged.
+
+## Pinned DPoP canary — local validation, 2026-09-29
+
+`Dockerfile.faugus-epic-dpop` now builds only the 64 bit `ncrypt.dll` from
+GE-Proton10-34's pinned Valve Wine revision and applies Soju revision
+`f482f2b607e3374163e8a5e47a75f422b3d332b6`'s patch after verifying
+SHA-256 `6283b3637b1d98bf43f68618c0991ee23e719c8bddaed05eff05e3989c954efe`.
+It replaces that DLL in the exact prior admin diagnostic image, and copies a
+launcher with `umask 077` and a preparation check requiring the Epic prefix to
+be mode 0700. A local packaging proof image is
+`sha256:ddfd865e6ad4ec4bc10de2279e8426b391868718516ce71703c63c34e0e2d503`;
+it includes the modified source, patch, and Wine and Soju license notices.
+It has not been published or selected for production.
+
+The account-free `scripts/ncrypt_persistence_probe.c` was compiled for Windows
+and run with the bundled GE-Proton Wine in a disposable container. The patched
+runner created a named ECDSA P-256 key, exported its public blob, signed data,
+then a separate Wine process reopened the key, exported the identical public
+blob, and signed again. The baseline image failed at key creation with the
+same `0x80090029` seen in Epic's log. With the new launcher file mask, the key
+file was mode 0600 under the private prefix. All 11 focused preparation tests
+passed. The local container had no preinstalled UMU sniper runtime, so this
+probe used the bundled Wine executable directly; the Faugus/UMU and official
+Epic paths still require a bounded GPU canary.
+
+Official Epic login, stable library after restart, ABZÛ gameplay, and login
+persistence across separate VMs remain unverified. The last item needs durable
+per-user state rather than the current ephemeral Instant Play client volume.

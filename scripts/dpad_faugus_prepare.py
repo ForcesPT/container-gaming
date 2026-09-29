@@ -71,6 +71,8 @@ def prepare(home, runner=RUNNER, umu='/usr/bin/umu-run', state_root=None):
         raise ValueError('pinned UMU/GE-Proton is unavailable')
     prefixes, config_path_root, data_path_root, _ = locations(home, state_root)
     prefix = private_directory(prefixes / 'epic-games')
+    if stat.S_IMODE(prefix.lstat().st_mode) & 0o077:
+        raise ValueError('Epic prefix permissions are not private')
     config_dir = private_directory(config_path_root)
     data_dir = private_directory(data_path_root)
     prepare_lock(home, state_root)

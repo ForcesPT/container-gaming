@@ -1,5 +1,18 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-29 pinned Epic DPoP local canary.** A private image built Wine's
+> `ncrypt.dll` from the GE-Proton10-34 pinned source with the checksum-pinned
+> Soju persistence patch. An account-free Windows probe passed named P-256
+> create/export/sign, then open/export/sign in a new Wine process with an
+> identical public key. The unpatched image failed key creation with Epic's
+> `0x80090029`. The Epic prefix now requires mode 0700, and the launcher file
+> mask produced mode 0600 key material. Focused preparation tests passed.
+> Local packaging proof image `sha256:ddfd865e6ad4ec4bc10de2279e8426b391868718516ce71703c63c34e0e2d503`
+> includes modified source, patch, and Wine and Soju notices. It
+> is not published or VM-tested. UMU and official Epic login still need a
+> bounded GPU canary; public Heroic is unchanged. See
+> [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md).
+>
 > **2026-09-29 Faugus official Epic post-verification test.** The scoped
 > admin-only image `sha256:62462253…907e93b` ran on one Paris L4 VM; public
 > Heroic remained unchanged. Official Epic reached sign-in after updater

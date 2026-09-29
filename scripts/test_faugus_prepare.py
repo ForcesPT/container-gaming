@@ -28,8 +28,16 @@ class PreparationTests(unittest.TestCase):
     def test_accounts_have_separate_prefixes_and_state(self):
         first, second = self.prep(), self.prep('b')
         self.assertNotEqual(first, second)
+        self.assertEqual((self.root / 'a' / 'Faugus' / 'epic-games').stat().st_mode & 0o777, 0o700)
         self.assertEqual(json.loads(self.inventory('b').read_text())[0]['playtime'], 0)
         self.assertEqual(self.inventory().stat().st_mode & 0o777, 0o600)
+
+    def test_epic_prefix_must_not_be_group_readable(self):
+        self.prep()
+        prefix = self.root / 'a' / 'Faugus' / 'epic-games'
+        prefix.chmod(0o755)
+        with self.assertRaisesRegex(ValueError, 'prefix permissions'):
+            self.prep()
 
     def test_repeated_preparation_preserves_games_and_playtime(self):
         self.prep()

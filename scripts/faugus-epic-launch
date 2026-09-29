@@ -1,6 +1,7 @@
 #!/bin/bash
 # Candidate official Epic route. All mutable client state is private to the user.
 set -euo pipefail
+umask 077
 export FAUGUS_DISABLE_UPDATES=1
 export UMU_RUNTIME_UPDATE=0
 export PROTONPATH=/home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34
