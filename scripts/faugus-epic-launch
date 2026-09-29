@@ -6,7 +6,10 @@ export FAUGUS_DISABLE_UPDATES=1
 export UMU_RUNTIME_UPDATE=0
 export PROTONPATH=/home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34
 export PROTON_ENABLE_WAYLAND=0
-export PROTON_USE_WINED3D=1
+# The authenticated Epic client repeatedly lost its graphics device under
+# WineD3D. Its DXVK/Vulkan path remained signed in on the Paris L4 canary.
+unset PROTON_USE_WINED3D
+export VK_ICD_FILENAMES="${VK_ICD_FILENAMES:-/etc/vulkan/icd.d/nvidia_icd.json}"
 export WINEPREFIX="${HOME}/Faugus/epic-games"
 export GAMEID=umu-default
 unset XDG_DATA_HOME XDG_CONFIG_HOME XDG_STATE_HOME

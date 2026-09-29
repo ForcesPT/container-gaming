@@ -16,7 +16,8 @@ cat >/usr/bin/umu-run <<'STUB'
 #!/bin/sh
 set -eu
 test "$FAUGUSID" = dpad-epic
-test "$PROTON_USE_WINED3D" = 1
+test -z "${PROTON_USE_WINED3D:-}"
+test "$VK_ICD_FILENAMES" = /etc/vulkan/icd.d/nvidia_icd.json
 /usr/bin/python3 - <<'PY'
 import os
 import subprocess

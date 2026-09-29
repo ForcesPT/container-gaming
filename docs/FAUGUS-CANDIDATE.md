@@ -780,6 +780,54 @@ passed. The local container had no preinstalled UMU sniper runtime, so this
 probe used the bundled Wine executable directly; the Faugus/UMU and official
 Epic paths still require a bounded GPU canary.
 
-Official Epic login, stable library after restart, ABZÛ gameplay, and login
-persistence across separate VMs remain unverified. The last item needs durable
-per-user state rather than the current ephemeral Instant Play client volume.
+At this local-only validation stage, official Epic login, a stable library
+after restart, ABZÛ gameplay, and login persistence across separate VMs were
+unverified. The last item needs durable per-user state rather than the current
+ephemeral Instant Play client volume. The later GPU result follows.
+
+## Official Epic authenticated storefront canary — 2026-09-29
+
+The DPoP canary was published at immutable digest
+`sha256:43f8459d1b56f2922deb011271688e04b73f12ef23142ac60fff049f32fb0eb3`
+and selected for one private Paris L4 admin session
+`560f185f-d92d-43ed-83a2-1d51b81ceae7`. The running slot matched the
+digest. The owner signed in inside the official Epic client. The patched
+`ncrypt.dll` created one private, persistent key file in the Wine prefix;
+the inspected logs had zero DPoP key creation, missing JWK, or parse failures
+and reported `SignedIn=1`.
+
+The launcher nevertheless restarted about every nine seconds with the
+WineD3D/OpenGL fallback. Epic logged graphics-device loss before requesting
+each restart; the Proton trace repeatedly failed to create an OpenGL context.
+The L4's host Vulkan and OpenGL probes passed. A test-only `-noselfupdate`
+option did not stop the cycle. On this same VM, removing
+`PROTON_USE_WINED3D=1` and pinning
+`VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json` switched the client to
+DXVK/Vulkan. The official signed-in Epic storefront rendered and stayed open
+for several minutes, beyond the prior nine-second restart cycle. The source
+wrapper now makes this graphics change locally, preserving an explicitly
+configured Vulkan ICD and falling back to the NVIDIA ICD used by this canary.
+`Dockerfile.faugus-epic-dxvk` layers that wrapper on the exact tested DPoP
+digest. The local image builds and the disposable updater-retry wrapper test
+passes; no replacement image has been published or deployed.
+
+Epic's Library and ABZÛ were not verified. The owner reported that left click
+and other controls in the Epic window did not respond. Browser automated
+clicks also failed to activate the Library, so the stream input path needs a
+focused check before another billed canary. Compare the browser pointer over a
+known Epic target against XWayland root coordinates, then record X11 button
+press/release on that window. If coordinates are correct, compare one guarded
+XTest click with the browser click to isolate the compositor/CEF route. Do not
+change global Selkies input based only on this one observation. A deliberate
+Epic close/reopen,
+game launch, and login persistence across VMs remain open. In particular, the
+DPoP key is private inside this ephemeral VM; a durable per-user client state
+volume is still needed for cross-VM sign-in persistence.
+
+The session ended at 03:10:31 UTC after 2,596 billed GPU seconds; billing
+finalized at 03:10:36 UTC. The scheduler destroyed the exact VM, and Scaleway
+returned 404 for server `817dcbe3-2adf-407b-b99d-62e64a1f719b` and boot
+volume `e582e74b-e45b-40a9-a799-d2e641b834eb`. The API-only test selector
+was restored to its baseline image with both selector values empty and health
+HTTP 200. Both completed fallback timers were disabled. The public Heroic
+route remained unchanged.

@@ -1,0 +1,13 @@
+# Private follow-up canary built from the exact DPoP image tested on Paris L4.
+# Changes only the official Epic launch environment. It is not the public
+# Instant Play image and does not qualify shared-game import or gameplay.
+FROM forcespt/dpadcloud-gaming@sha256:43f8459d1b56f2922deb011271688e04b73f12ef23142ac60fff049f32fb0eb3
+
+USER root
+ARG DPAD_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
+      com.dpadplay.launcher.qualification="official-epic-dxvk-admin-canary"
+COPY scripts/faugus-epic-launch /opt/dpadcloud/faugus-epic-launch
+RUN sed -i 's/\r$//' /opt/dpadcloud/faugus-epic-launch \
+    && chmod +x /opt/dpadcloud/faugus-epic-launch \
+    && bash -n /opt/dpadcloud/faugus-epic-launch

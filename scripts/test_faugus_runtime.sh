@@ -38,7 +38,8 @@ cat >/usr/bin/umu-run <<'STUB'
 #!/bin/sh
 set -eu
 test "$PROTONPATH" = /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34
-test "$PROTON_USE_WINED3D" = 1
+test -z "${PROTON_USE_WINED3D:-}"
+test "$VK_ICD_FILENAMES" = /etc/vulkan/icd.d/nvidia_icd.json
 test "$UMU_RUNTIME_UPDATE" = 0
 test "$WINEPREFIX" = /tmp/faugus-private-volume/faugus/prefixes/epic-games
 test "$XDG_DATA_HOME" = /tmp/faugus-private-volume/faugus/data

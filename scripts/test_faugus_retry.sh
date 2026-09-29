@@ -1,16 +1,20 @@
 #!/bin/bash
 # Run in the candidate Linux image with the three updated scripts in /tmp.
 set -euo pipefail
+umask 077
 tmp="$(mktemp -d)"
-trap 'rm -rf -- "$tmp"' EXIT
+trap 'code=$?; if [ "$code" -ne 0 ]; then for log in "$tmp"/*.log; do [ ! -f "$log" ] || { echo "FAILED: $log" >&2; tail -n 20 "$log" >&2; }; done; fi; rm -rf -- "$tmp"' EXIT
 mkdir -p "$tmp/bin" "$tmp/home" "$tmp/private" "$tmp/scripts"
 cp /tmp/faugus-epic-launch-new "$tmp/scripts/faugus-epic-launch"
 cp /tmp/dpad_faugus_prepare-new.py "$tmp/scripts/dpad_faugus_prepare.py"
 cp /tmp/dpad_epic_updater_failed-new.py "$tmp/scripts/dpad_epic_updater_failed.py"
+sed -i 's/\r$//' "$tmp/scripts/faugus-epic-launch"
 chmod +x "$tmp/scripts/faugus-epic-launch"
 cat >"$tmp/bin/faugus-launcher" <<'STUB'
 #!/bin/bash
 set -euo pipefail
+test -z "${PROTON_USE_WINED3D:-}"
+test "$VK_ICD_FILENAMES" = /etc/vulkan/icd.d/nvidia_icd.json
 count=0
 if [ -f "$FAUGUS_TEST_COUNT" ]; then count="$(cat "$FAUGUS_TEST_COUNT")"; fi
 count=$((count + 1))

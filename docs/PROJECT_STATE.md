@@ -1,5 +1,17 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-29 official Epic signed-in storefront canary.** The private DPoP
+> patch removed Epic's persistent-key errors and the owner completed sign-in.
+> WineD3D then caused a graphics-device restart loop about every nine seconds.
+> Switching the exact test VM to DXVK/Vulkan with the NVIDIA ICD made the
+> official signed-in Epic storefront render and remain open for several
+> minutes. The owner reported left clicks and other Epic controls not working;
+> Library, ABZÛ, deliberate restart, and cross-VM login persistence remain
+> unverified. The session and billing ended; the exact VM and boot volume
+> returned provider 404. API selector and health were restored, and public
+> Heroic is unchanged. Source now defaults Epic to DXVK with the NVIDIA ICD,
+> but no new image was published. See [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md).
+
 > **2026-09-29 pinned Epic DPoP local canary.** A private image built Wine's
 > `ncrypt.dll` from the GE-Proton10-34 pinned source with the checksum-pinned
 > Soju persistence patch. An account-free Windows probe passed named P-256
