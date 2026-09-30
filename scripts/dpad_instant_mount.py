@@ -16,7 +16,7 @@ from dpad_instant_register import validate_metadata
 
 def compile_mount(config, slot, image, mount, root, *, now):
     fields = {'sessionId', 'releaseId', 'manifestSha256', 'image', 'slot', 'app', 'scratchGiB', 'expiresAt', 'metadata'}
-    if not isinstance(config, dict) or set(config) not in (fields, fields | {'storageMode'}):
+    if not isinstance(config, dict) or not fields <= set(config) or set(config) - fields - {'storageMode', 'officialEpic'}:
         raise ValueError('invalid contract fields')
     dedicated = config.get('storageMode') == 'dedicated-ephemeral'
     if 'storageMode' in config and not dedicated:
@@ -57,7 +57,28 @@ def compile_mount(config, slot, image, mount, root, *, now):
         raise ValueError('oversized manifest')
     if hashlib.sha256((bundle / 'manifest.jsonl').read_bytes()).hexdigest() != config['manifestSha256']:
         raise ValueError('manifest mismatch')
-    return ['--pull=never', '--mount', f'type=bind,src={bundle}/files,dst=/opt/dpad-instant/game,readonly,bind-recursive=disabled',
+    official_args = []
+    if 'officialEpic' in config:
+        official = config['officialEpic']
+        if (not isinstance(official, dict) or set(official) != {'capsuleSha256', 'vendorManifestSha256'}
+                or any(not isinstance(v, str) or not re.fullmatch(r'[a-f0-9]{64}', v) for v in official.values())):
+            raise ValueError('invalid official Epic binding')
+        capsule_root = bundle / 'epic'
+        for path in (capsule_root, capsule_root / 'installation.json', capsule_root / 'vendor.manifest'):
+            info = path.lstat()
+            if path.resolve() != path or info.st_mode & 0o222 or not (stat.S_ISDIR(info.st_mode) if path == capsule_root else stat.S_ISREG(info.st_mode)):
+                raise ValueError('unsealed official installation')
+        for name, digest, limit in [('installation.json', official['capsuleSha256'], 65536), ('vendor.manifest', official['vendorManifestSha256'], 8*1024*1024)]:
+            path = capsule_root / name
+            if path.stat().st_size > limit or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                raise ValueError('official installation digest mismatch')
+        binding = {'releaseId': config['releaseId'], 'payloadManifestSha256': config['manifestSha256'],
+                   'vendorManifestSha256': official['vendorManifestSha256'],
+                   **{k: config['metadata'][k] for k in ('app', 'version', 'executable', 'installSize')}}
+        official_args = ['--device', '/dev/fuse:/dev/fuse:rwm', '--mount', f'type=bind,src={capsule_root},dst=/opt/dpad-instant/epic,readonly,bind-recursive=disabled',
+                         '-e', 'DPAD_EPIC_INSTALLATION_SHA256=' + official['capsuleSha256'],
+                         '-e', 'DPAD_EPIC_INSTALLATION_BINDING=' + base64.b64encode(json.dumps(binding).encode()).decode()]
+    return ['--pull=never', *official_args, '--mount', f'type=bind,src={bundle}/files,dst=/opt/dpad-instant/game,readonly,bind-recursive=disabled',
             '--label', 'dpad.instant.session=' + config['sessionId'],
             '--label', 'dpad.instant.release=' + config['releaseId'],
             *(['--label', 'dpad.instant.storage=dedicated-ephemeral'] if dedicated else []),

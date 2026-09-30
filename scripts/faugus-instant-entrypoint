@@ -1,0 +1,6 @@
+#!/bin/bash
+set -euo pipefail
+if [ -n "${DPAD_EPIC_INSTALLATION_SHA256:-}${DPAD_EPIC_INSTALLATION_BINDING:-}" ]; then
+    python3 -I /opt/dpadcloud/dpad_epic_overlay.py
+fi
+exec /opt/dpadcloud/entrypoint.sh "$@"

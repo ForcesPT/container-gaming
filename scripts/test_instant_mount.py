@@ -39,6 +39,33 @@ def fixture():
             (bundle / 'files').chmod(0o755)
 
 class MountTests(unittest.TestCase):
+    def test_official_sidecars_are_pinned_readonly_with_private_fuse_device(self):
+        import base64
+        import json
+        with fixture() as (config, image, mount, root, bundle):
+            bundle.chmod(0o755)
+            sidecars = bundle / 'epic'; sidecars.mkdir()
+            for name, content in [('installation.json', b'fixture capsule'), ('vendor.manifest', b'fixture vendor')]:
+                (sidecars / name).write_bytes(content)
+                (sidecars / name).chmod(0o444)
+            sidecars.chmod(0o555); bundle.chmod(0o555)
+            config['officialEpic'] = dict(capsuleSha256=hashlib.sha256(b'fixture capsule').hexdigest(), vendorManifestSha256=hashlib.sha256(b'fixture vendor').hexdigest())
+            try:
+                args = m.compile_mount(config, 0, image, mount, root, now=100)
+                self.assertIn('/dev/fuse:/dev/fuse:rwm', args)
+                self.assertIn('type=bind,src=' + str(sidecars) + ',dst=/opt/dpad-instant/epic,readonly,bind-recursive=disabled', args)
+                encoded = next(a.split('=', 1)[1] for a in args if a.startswith('DPAD_EPIC_INSTALLATION_BINDING='))
+                binding = json.loads(base64.b64decode(encoded))
+                self.assertEqual(binding['releaseId'], config['releaseId'])
+                self.assertEqual(binding['payloadManifestSha256'], config['manifestSha256'])
+                self.assertEqual(binding['app'], config['app'])
+                with self.assertRaises(ValueError):
+                    m.compile_mount({**config, 'officialEpic': {**config['officialEpic'], 'capsuleSha256': 'f'*64}}, 0, image, mount, root, now=100)
+                (sidecars / 'vendor.manifest').chmod(0o644)
+                with self.assertRaises(ValueError): m.compile_mount(config, 0, image, mount, root, now=100)
+            finally:
+                sidecars.chmod(0o755)
+
     def test_dedicated_ephemeral_omits_quota_but_retains_readonly_release(self):
         with fixture() as (config, image, mount, root, bundle):
             config['storageMode'] = 'dedicated-ephemeral'

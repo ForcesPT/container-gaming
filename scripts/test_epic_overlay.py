@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
@@ -34,10 +35,52 @@ with tempfile.TemporaryDirectory() as temp:
     env = {**os.environ, 'HOME': '/home/dpad', 'DPAD_FAUGUS_INSTANT_TEST': '1',
            'DPAD_EPIC_INSTALLATION_BINDING': base64.b64encode(json.dumps(binding).encode()).decode(),
            'DPAD_EPIC_INSTALLATION_SHA256': digest}
-    result = subprocess.run(['runuser', '-u', 'dpad', '--', '/usr/bin/python3', '-I',
-                             str(Path(__file__).with_name('dpad_epic_installation.py')), 'register'],
-                            env=env, check=True, capture_output=True, text=True, timeout=20)
-    assert 'DPAD_INSTANT_INSTALLATION official_epic_registered' in result.stdout
+    if os.environ.get('DPAD_TEST_EPIC_PACKAGED_STARTUP') == '1':
+        # Exercise packaged entry points with only the Electron picker replaced.
+        # Real template cloning, prefix selection and registration remain intact.
+        picker = Path('/opt/dpadcloud/launcher/dpad-launcher')
+        original, mode = picker.read_bytes(), picker.stat().st_mode
+        marker = Path('/tmp/dpad-test-picker-started')
+        picker.write_text('#!/bin/bash\ntouch /tmp/dpad-test-picker-started\n')
+        picker.chmod(0o755)
+        env.update(DPAD_EPIC_BACKEND='faugus', DPAD_INSTANT_APP=binding['app'],
+                   DPAD_INSTANT_METADATA='fixture-not-used-by-official-route')
+        if os.environ.get('DPAD_TEST_EPIC_VOLUME') == '1':
+            volume = Path('/home/dpad/test-volume'); volume.mkdir(mode=0o700)
+            import pwd
+            user = pwd.getpwnam('dpad'); os.chown(volume, user.pw_uid, user.pw_gid)
+            env['DPAD_VOLUME_MOUNT'] = str(volume)
+            prefix = volume / 'faugus/prefixes/epic-games'
+        else:
+            prefix = Path('/home/dpad/Faugus/epic-games')
+        try:
+            subprocess.run(['runuser', '-u', 'dpad', '--', '/bin/bash', '/opt/dpadcloud/launcher-shell'],
+                           env=env, check=True, capture_output=True, text=True, timeout=90)
+            assert marker.is_file(), 'picker did not start after registration'
+            executable = prefix / 'drive_c/Program Files/Epic Games/Launcher/Portal/Binaries/Win64/EpicGamesLauncher.exe'
+            assert executable.is_file(), 'preinstalled official client was not cloned'
+            assert (prefix / 'drive_c/DpadPlay/Games/FixtureGame').readlink() == merged
+            item = prefix / 'drive_c/ProgramData/Epic/EpicGamesLauncher/Data/Manifests/FixtureGame_guid.item'
+            assert json.loads(item.read_text())['InstallLocation'] == 'C:\\DpadPlay\\Games\\FixtureGame'
+            assert stat.S_IMODE(prefix.stat().st_mode) == 0o700
+            if env.get('DPAD_VOLUME_MOUNT'):
+                assert not Path('/home/dpad/Faugus/epic-games').exists(), 'registration used the wrong home prefix'
+            # A second startup must retain the client and the existing game entry.
+            guid = re.findall(r'"MachineGuid"="([^"]+)"', (prefix / 'system.reg').read_text())
+            assert len(guid) == 1 and guid[0] != '00000000-0000-0000-0000-000000000000'
+            subprocess.run(['runuser', '-u', 'dpad', '--', '/bin/bash', '/opt/dpadcloud/launcher-shell'],
+                           env=env, check=True, capture_output=True, text=True, timeout=90)
+            assert re.findall(r'"MachineGuid"="([^"]+)"', (prefix / 'system.reg').read_text()) == guid
+            inventory = json.loads((prefix / 'drive_c/ProgramData/Epic/UnrealEngineLauncher/LauncherInstalled.dat').read_text())
+            assert len([row for row in inventory['InstallationList'] if row['AppName'] == 'FixtureGame']) == 1
+            print('PACKAGED_EPIC_PREPARE_REGISTER_REPLAY_OK mode=' + ('volume' if env.get('DPAD_VOLUME_MOUNT') else 'home'))
+        finally:
+            picker.write_bytes(original); picker.chmod(mode)
+    else:
+        result = subprocess.run(['runuser', '-u', 'dpad', '--', '/usr/bin/python3', '-I',
+                                 str(Path(__file__).with_name('dpad_epic_installation.py')), 'register'],
+                                env=env, check=True, capture_output=True, text=True, timeout=20)
+        assert 'DPAD_INSTANT_INSTALLATION official_epic_registered' in result.stdout
     # Atomic updater replacement and new user state must affect only the COW view.
     code = "from pathlib import Path; p=Path('/opt/dpad-instant/official-game'); (p/'Game.exe.new').write_bytes(b'private replacement'); (p/'Game.exe.new').replace(p/'Game.exe'); (p/'private-save').write_text('session-only')"
     subprocess.run(['runuser', '-u', 'dpad', '--', 'python3', '-I', '-c', code], check=True)

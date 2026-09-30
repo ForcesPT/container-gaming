@@ -12,7 +12,11 @@ The storage worker accepts these files under `<plans>/<release UUID>/official-ep
 
 ## Session storage
 
-`Dockerfile.epic-instant` extends the accepted client image and adds pinned Ubuntu FUSE overlayfs 1.13-1. The trusted host passes `/dev/fuse` only when an official-record binding is present. Shared payload and sidecar binds stay read-only.
+`Dockerfile.epic-instant` requires an explicit `STORE_IMAGE` build argument and
+extends that qualified preinstalled official-store image with pinned Ubuntu
+FUSE overlayfs 1.13-1. The trusted host passes `/dev/fuse` only when an
+official-record binding is present. Shared payload and sidecar binds stay
+read-only. Do not build it from a GUI test container or an authenticated prefix.
 
 The root entrypoint validates these records and creates a private FUSE view at `/opt/dpad-instant/official-game`. Its upper/work directories live inside the disposable container. The launcher registers the completed installation into that user's Epic prefix, with a Windows path to this private view. Updates, installation metadata and saves affect the private view. The existing scratch storage limit and dedicated-disk admission contract still apply. Destroying the session container discards private writes.
 
