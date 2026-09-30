@@ -1,5 +1,16 @@
 # Faugus official Epic candidate — 2026-09-27
 
+> **2026-09-30 Paris L4 client acceptance passed.** Private published image
+> `sha256:cc58f0f2…ff27f4ff` completed fresh silent installation and automatic
+> official update with DXVK throughout. The owner signed in, opened Library
+> and confirmed two signed-in window-close/picker-reopen cycles, without a
+> process kill or manual graphics change. The bounded session ended normally;
+> database destruction and exact server/boot-volume 404s confirm cleanup. See the exact receipt in
+> [EPIC-SERVICE-DIAGNOSTICS.md](EPIC-SERVICE-DIAGNOSTICS.md). This qualifies the
+> official client on this test profile; shared-game registration, gameplay,
+> cross-VM state and other provider profiles still require acceptance. Public
+> Heroic remains unchanged. The earlier entries below are historical.
+
 > **2026-09-30 local service candidate.** Fresh official MSI, automatic DXVK
 > updating and EOS initialization passed without an account or graphics
 > switching. The official sign-in page renders and accepts pointer focus and

@@ -1,5 +1,23 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-30 official Epic GPU acceptance passed; fully cleaned up.**
+> Published private image `sha256:cc58f0f2…ff27f4ff` from `cc952c5` completed
+> a fresh silent install and official update after one Epic-card click on Paris
+> L4. DXVK remained enabled throughout; no runner switch or process kill was
+> needed. EOS reported System identity, update success and readiness, with no
+> updater `777006`, prerequisite or persistent-DPoP-key failures. The owner
+> signed in, opened Library, and confirmed two window-close/card-reopen cycles
+> returned directly to the signed-in Library. The managed client and controller
+> stayed alive. Session `4f31b3a3-c46a-4bf7-9930-db3372c66749` ended normally at
+> 05:03:15 UTC; billing finalized with 1,044 GPU seconds and a USD 1.29 charge.
+> At 05:14:31 UTC the database VM was destroyed and exact Scaleway server and
+> boot-volume GETs both returned 404, within the one-hour bound. The current
+> wallet-fix API is restored, private selectors are empty, and public Heroic
+> remains unchanged. No game was installed or launched. Next: official Epic
+> recognition of the shared ABZÛ payload and gameplay; cross-VM account
+> persistence and other providers remain unqualified. See
+> [EPIC-SERVICE-DIAGNOSTICS.md](EPIC-SERVICE-DIAGNOSTICS.md).
+
 > **2026-09-30 local EOS service identity correction.** The official installer
 > and DXVK update now complete in a fresh account-free prefix. Wine started
 > Epic's LocalSystem Online Services child with the interactive user's token;

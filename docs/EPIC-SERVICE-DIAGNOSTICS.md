@@ -270,3 +270,118 @@ This is ready for a **focused GPU startup/login acceptance test**, not public
 promotion or a claim that repeated reopening already works. Publish only as a
 private canary after owner authorization. Check pre-login gates before asking
 for account input, and record reopening failures separately from startup.
+
+### 2026-09-30 private publication receipt
+
+The owner approved publishing this exact candidate and one Paris L4 private
+admin test, limited to one VM, USD 8 infrastructure spend, and teardown within
+one hour. The approved tag was pushed successfully:
+
+- `forcespt/dpadcloud-gaming:faugus-epic-eos-canary-20260930-cc952c5`.
+- Registry index digest: `sha256:cc58f0f2fa167ba464a4c5634076d3e8720e07f890118692fa332a26ff27f4ff`.
+- Linux amd64 manifest: `sha256:65b3b86857da8f91a76034fb5ed8364258b8d24584914be9cf94d534af53a263`.
+
+An independent registry inspection confirmed the tag's index digest. The
+private admin form offers Paris L4 at USD 1.29 per first billed hour, with a
+USD 1.29 minimum wallet balance. The dashboard currently shows USD 0.11;
+the owner was asked to fund the wallet before submission. No test session or
+VM has been created in this pass, and the API selector has not been changed.
+GPU startup, owner login and reopening remain unverified for this image.
+
+### 2026-09-30 approved GPU test in progress
+
+Wallet funding was confirmed. A newer wallet-fix API had been deployed while
+the test waited: image `sha256:9f9307ca9d466701ffc19d0ae844d5d9c0f8a4b411e75394c61c5d20f90a3239`,
+source `4b4a0dfc05f04012335d1cd10e5aa60745df294d`. The old API canary was not
+reused. A local derivative preserves every baseline layer and adds only the
+reviewed admin-only expiring selector module. Eight packaged boundary checks
+passed. Temporary API image: `sha256:d73a9ecfb712d94ba3718cd54dab4384ebe923e322bbaded11a52779f5dafc16`.
+Both forward and rollback overlays explicitly retain the previously observed
+public Instant image `sha256:c5fa2556c232dbf2cfb4e031aa215fade1a5ca233090ba98cf03dbd93a1142dd`.
+The first restart revealed Compose interpolation drift in that setting; it was
+corrected and verified before any session submission. The wallet fix remains
+in the temporary API. Its automatic rollback is armed for 05:30 UTC.
+
+The private ABZÛ form was submitted once at 04:40:26 UTC:
+
+- Session: `4f31b3a3-c46a-4bf7-9930-db3372c66749`.
+- Database VM: `d2524a9d-68e9-46da-a3ba-cd719dcfa838`.
+- Scaleway server: `6bf8d188-ba08-45d4-b418-4a57170487ef`, `fr-par-2`.
+- Boot volume: `9f08e507-59ea-45ab-aa4a-af0028b2c615`.
+- Exact-session persistent teardown: 05:25 UTC, leaving 15 minutes before the
+  one-hour infrastructure bound. End earlier if prerequisite checks fail.
+
+The provider reports the server running; application provisioning is still
+pending. The database session/VM image binding matches the approved registry
+index. Actual slot payload, NVIDIA Vulkan, Epic startup and owner sign-in have
+not yet been checked. No additional VM is authorized by this approval.
+
+At 04:45:50 UTC the session reached ready. Verified SSH checked the actual
+slot's immutable image reference, the unchanged wrapper hash, and the patched
+runner service PE. The fresh Epic prefix later contained the identical PE.
+NVIDIA L4 driver `580.178.04` exposes the desktop surface extensions but no
+`VK_EXT_headless_surface`; `vulkaninfo --summary` returned 0 with the NVIDIA ICD.
+Both WebRTC peers connected, with decoded video frames and video RTP observed.
+The exact session's idle deadline is bounded to its 05:25 UTC teardown.
+
+One owner click on Epic started the silent MSI installation and official update.
+No manual graphics switch or additional picker click was required. At 04:53 UTC
+the pre-login checks reported installed client/host, EOS installer success,
+System identity, managed-service update success, main-service readiness and
+host exit 0. Missing GUID, starter initialization and minimum-version failures
+were absent. `StartServiceFailed` and `777006` counts were zero. Official sign-in
+was visibly open. These are GPU startup results, not account acceptance.
+
+After admission, the API was restored to wallet-fix baseline `9f9307ca…a3239`;
+private selectors and the admin-test flag are empty, the public Instant image
+is preserved, and health is 200. Its completed fallback timer is disabled;
+the exact-session teardown timer remains active. The owner was asked to sign
+in once and check Library. Post-verification behavior and reopening are pending.
+
+### 2026-09-30 owner login and reopening passed
+
+The owner completed verification and confirmed Library opened. A screenshot
+shows the official signed-in Epic Library. The owner then closed only the Epic
+window and reopened it from the picker twice; both attempts returned directly
+to Library without another login. No test-only process termination, renderer
+change, runner change or prefix replacement occurred during this acceptance.
+
+Sanitized post-auth probes retained the same Faugus controller (started
+04:50:17 UTC) and GameThread client (started 04:52:04 UTC, before account input).
+The final probe reported one controller, one GameThread, installed/current
+official client, successful EOS update and readiness, and zero
+`StartServiceFailed`, `777006`, or persistent-DPoP-key failure markers. Internal
+`SignedIn=0` model transitions are present alongside `SignedIn=1`; they do not
+establish a restart, and the owner and visible Library establish successful
+account access. Store/Library responsiveness was included in the owner check;
+the explicit repeated result was direct Library reopening.
+
+The normal website End session action completed at 05:03:15.040 UTC, with billing
+finalized at 05:03:18.529 UTC and 1,044 GPU seconds billed. The slot was freed and
+the VM entered its normal drain at 05:03:18.492 UTC. Provider deletion is pending
+and must be recorded before this test is described as fully cleaned up.
+
+At 05:14:31.892 UTC, exact Scaleway server and boot-volume GETs both returned
+404. The database VM is `destroyed`, with the expected boot volume in its
+durable cleanup plan. This is within one hour of creation. The dashboard shows
+Finished, 00:17:24 GPU time and USD 1.29 charge. Private image/deadline selectors
+and the admin-test flag are empty; the original public Instant image is retained.
+Both completed fallback timers are disabled. The test is fully cleaned up.
+
+This qualifies fresh startup, account sign-in and same-session window reopening
+on this Paris L4 profile. It does not qualify shared ABZÛ installation metadata,
+gameplay, persistence across a destroyed VM, other stores or other providers.
+The published candidate remains private; the public Instant image is unchanged.
+
+### Next implementation gate
+
+Current Instant descriptors and `dpad_instant_register.py` target
+Heroic/Legendary. The Faugus client-only canary deliberately skips that registry;
+successful official login alone cannot make the shared payload appear installed.
+Use genuine official Epic `.item` / `.egstore` records from an authorized clean
+installation to define the separate official registration contract, preserving
+catalog identity and launcher ownership checks. Do not infer missing catalog
+identifiers or treat file presence as entitlement. Keep account/prefix state
+private and give verification/updates session-local writable storage rather
+than writes to the provider's read-only master. Qualify ABZÛ recognition and
+launch before enabling the official route for customer Instant sessions.
