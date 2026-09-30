@@ -8,6 +8,9 @@ game's FAUGUSID as soon as the parent exits, which interrupts such handoffs.
 from __future__ import annotations
 
 import time
+import os
+from pathlib import Path
+import stat
 
 import psutil
 
@@ -21,10 +24,30 @@ def epic_process_running(processes=None) -> bool:
         processes = psutil.process_iter()
     for process in processes:
         try:
-            name = process.name().casefold()
-            if not any(part in name for part in EPIC_NAMES):
+            if process.uids().effective != os.geteuid():
                 continue
-            if process.environ().get("FAUGUSID") == EPIC_MARKER:
+            name = process.name().casefold()
+            if not (any(part in name for part in EPIC_NAMES) or name == 'gamethread'):
+                continue
+            environment = process.environ()
+            if environment.get("FAUGUSID") != EPIC_MARKER:
+                continue
+            if name != 'gamethread':
+                return True
+            # Unreal's renamed main process must still be the official client
+            # in this user's private prefix. A game or UMU helper is not enough.
+            prefix = Path(environment.get('WINEPREFIX', ''))
+            if not prefix.is_absolute():
+                continue
+            prefix = prefix.resolve(strict=True)
+            info = prefix.stat()
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                    or stat.S_IMODE(info.st_mode) & 0o077):
+                continue
+            executable = str(prefix / 'drive_c/Program Files/Epic Games/Launcher/Portal/Binaries/Win64/EpicGamesLauncher.exe')
+            windows = r'C:\Program Files\Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe'
+            if any(arg.casefold() in (executable.casefold(), windows.casefold())
+                   for arg in process.cmdline()):
                 return True
         except (psutil.Error, OSError, KeyError):
             continue

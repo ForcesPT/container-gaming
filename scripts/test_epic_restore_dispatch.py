@@ -15,6 +15,7 @@ with tempfile.TemporaryDirectory() as temporary:
     executable = prefix / 'drive_c/Program Files/Epic Games/Launcher/Portal/Binaries/Win64/EpicGamesLauncher.exe'
     executable.parent.mkdir(parents=True)
     prefix.chmod(0o700)
+    (prefix / 'pfx').symlink_to(prefix, target_is_directory=True)
     executable.touch()
     environment = {**os.environ, 'HOME': str(root / 'home'),
                    'DPAD_FAUGUS_STATE_ROOT': str(root / 'state'),
@@ -37,9 +38,9 @@ echo RESTORE_DISPATCH_OK > "$EPIC_TEST_EVENTS"
         with (root / 'state/state/faugus-launcher/dpad-epic.lock').open() as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             child = subprocess.Popen([str(executable), '-c',
-                "import ctypes,time; ctypes.CDLL(None).prctl(15,b'EpicGamesLaunc',0,0,0); time.sleep(30)"],
+                "import ctypes,time; ctypes.CDLL(None).prctl(15,b'GameThread',0,0,0); time.sleep(30)"],
                 executable=sys.executable,
-                env={**environment, 'FAUGUSID': 'dpad-epic', 'WINEPREFIX': str(prefix)})
+                env={**environment, 'FAUGUSID': 'dpad-epic', 'WINEPREFIX': str(prefix / 'pfx') + '/'})
             try:
                 for _ in range(30):
                     if managed_client_running(str(prefix)): break

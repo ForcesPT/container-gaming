@@ -1078,3 +1078,65 @@ resolve the observed Vulkan error. Genuine Epic installation metadata for the
 shared ABZÛ payload, game launch, and private cross-VM state remain open.
 The original published startup digest still requires manual graphics-phase
 changes and is not ready for public promotion.
+
+## Automatic update preparation investigation — 2026-09-30
+
+`scripts/probe_epic_update_local.py` is an account-free investigation tool for
+the existing startup image, not a new startup policy. It creates an isolated
+private prefix, copies the installed wrapper into a temporary directory,
+enables WineD3D only in that disposable copy, performs the real silent MSI
+install, then observes the official launcher for at most three minutes.
+It prints only selected update-stage messages, redacting URLs, emails and
+long IDs and excluding authentication-related lines. It never signs in and
+does not change the installed image wrapper or production profiles.
+
+Run in a disposable container as the image user with a read-only repository
+mount at `/workspace`. Use the manual authenticated Xvfb harness and an outer
+timeout; `xvfb-run` hung during local Docker recovery:
+
+```bash
+timeout --kill-after=15s 600s bash /workspace/scripts/run_epic_update_probe.sh
+```
+
+Purpose: learn a genuine vendor update-completion signal before implementing
+an automated OpenGL preparation / DXVK client handoff. A zero launcher exit,
+an existing executable, or a visible window alone must not be treated as
+proof that self-update completed. Account-bearing prefixes and user games
+must not be interrupted by preparation.
+
+Docker's engine recovered after the owner restarted it. Two bounded probes
+completed the real silent MSI install with exit 0, then observed the official
+updater for three minutes without account sign-in. Both disposable containers
+were removed. The second probe explicitly selected the image's software
+`lvp_icd.json`; a native Vulkan summary reported Mesa llvmpipe. This is a local
+CPU graphics probe, not evidence of NVIDIA GPU compatibility.
+
+The updater service's child repeatedly exited `777006`. Importantly, the
+client also logged `LogSelfUpdateService: Installer complete. Success:1`,
+`Waiting for next version update` and a successful `queryinstallation`, then
+repeated the updater cycle. None of those messages alone can qualify completed
+updating or trigger an automatic graphics switch. The probe now orders log
+files by modification time and omits verbose build-stat counters. A genuine
+stable completion signal still needs qualification on the GPU environment.
+
+The same real, account-free run exposed two process-identity mismatches:
+Epic changes its Linux process name between `EpicGamesLaunch` and `GameThread`,
+and UMU sets `WINEPREFIX` to `<private-prefix>/pfx/`, where `pfx` is a symlink
+back to the private prefix. Both were observed with the exact official Epic
+executable and `FAUGUSID=dpad-epic`. The old restore helper rejected this alias;
+the old handoff watcher missed `GameThread` entirely.
+
+The local candidate corrects these guards. Resume accepts only the matching
+user, marker, official executable and either the original prefix or its
+verified self-referential `pfx` symlink. Updater commandlets, UMU helpers and
+unrelated games cannot request client restoration. Handoff preserves a renamed
+`GameThread` only with a matching owner, marker, private prefix and official
+executable. Its existing continuous quiet period remains unchanged.
+
+Focused validation passed: six resume tests, four handoff tests, an installed
+wrapper restore dispatch with a real marked `GameThread` and `pfx/` alias
+(existing process stayed alive; a second controller was refused), and the
+actual installed Faugus hook retaining a detached marked child until it exited
+before its quiet-period cleanup (30 seconds total). This is a process identity
+fix, not a claim that the updater/client graphics handoff is automatic.
+No image publication, production change or new cloud VM occurred.

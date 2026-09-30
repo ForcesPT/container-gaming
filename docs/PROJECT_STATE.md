@@ -1,5 +1,18 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-30 local process-identity correction.** Docker is responding again.
+> Two account-free, bounded local probes completed Epic's silent MSI install;
+> the updater still repeated child exit `777006`, even while reporting
+> `Installer complete. Success:1`. That message cannot qualify completion.
+> The real client used `GameThread` and UMU's `<prefix>/pfx/` alias. The local
+> resume and handoff guards now recognize those identities with owner, marker,
+> private-prefix and official-executable checks. Ten focused tests, real
+> installed-wrapper restore dispatch, and the installed Faugus handoff hook
+> passed. The existing client stayed alive and a second controller was refused.
+> Local software Vulkan is not GPU acceptance; automatic update preparation
+> remains open. No publication, production change or paid VM occurred. See
+> [FAUGUS-CANDIDATE.md](FAUGUS-CANDIDATE.md).
+
 > **2026-09-29 startup GPU canary, fully cleaned up.** Published private
 > startup image `sha256:9140640c…3d441c` from `f6be930` silently installed
 > Epic's MSI on one Paris L4 VM. Both WebRTC peers and decoded video worked.

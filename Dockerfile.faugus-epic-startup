@@ -20,7 +20,9 @@ LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
       com.dpadplay.launcher.qualification="official-epic-startup-local-candidate"
 COPY --from=picker-adapter /work/output/ /opt/dpadcloud/launcher/resources/
 COPY scripts/faugus-epic-launch scripts/dpad_epic_resume.py /opt/dpadcloud/
+COPY scripts/dpad_epic_handoff.py /opt/dpadcloud/faugus/source/faugus/dpad_epic_handoff.py
 RUN sed -i 's/\r$//' /opt/dpadcloud/faugus-epic-launch \
     && chmod +x /opt/dpadcloud/faugus-epic-launch \
     && bash -n /opt/dpadcloud/faugus-epic-launch \
-    && python3 -m py_compile /opt/dpadcloud/dpad_epic_resume.py
+    && python3 -m py_compile /opt/dpadcloud/dpad_epic_resume.py \
+       /opt/dpadcloud/faugus/source/faugus/dpad_epic_handoff.py

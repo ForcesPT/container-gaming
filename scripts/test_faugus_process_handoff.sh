@@ -11,6 +11,8 @@ exe="$state/faugus/prefixes/epic-games/drive_c/Program Files/Epic Games/Launcher
 mkdir -p "$(dirname "$exe")"
 touch "$exe"
 chown -R dpad:dpad "$state"
+chmod 700 "$state/faugus/prefixes/epic-games"
+ln -s . "$state/faugus/prefixes/epic-games/pfx"
 
 cat >/usr/bin/umu-run <<'STUB'
 #!/bin/sh
@@ -25,12 +27,15 @@ import subprocess
 child = '''import ctypes
 import time
 from pathlib import Path
-ctypes.CDLL(None).prctl(15, b'EpicGamesLaunc', 0, 0, 0)
+ctypes.CDLL(None).prctl(15, b'GameThread', 0, 0, 0)
 Path('/tmp/dpad-faugus-handoff-smoke/child-started').write_text('started')
 time.sleep(5)
 Path('/tmp/dpad-faugus-handoff-smoke/child-finished').write_text('finished')
 '''
-subprocess.Popen(['/usr/bin/python3', '-c', child], env=os.environ.copy(),
+prefix = os.environ['WINEPREFIX']
+executable = prefix + '/drive_c/Program Files/Epic Games/Launcher/Portal/Binaries/Win64/EpicGamesLauncher.exe'
+environment = {**os.environ, 'WINEPREFIX': prefix + '/pfx/'}
+subprocess.Popen([executable, '-c', child], executable='/usr/bin/python3', env=environment,
                  start_new_session=True, stdout=subprocess.DEVNULL,
                  stderr=subprocess.DEVNULL, close_fds=True)
 PY
