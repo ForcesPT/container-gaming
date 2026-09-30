@@ -792,6 +792,8 @@ RUN set -e; \
 #     Selkies crashes on peer connect because ElementFactory.make returns None.
 COPY --from=wayland-display-builder /usr/local/lib/x86_64-linux-gnu/libwayland-server.so.0* /usr/local/lib/x86_64-linux-gnu/
 RUN ldconfig
+# Preserve the packaged ABI when GPU runtime hooks rebuild ld.so.cache.
+ENV LD_LIBRARY_PATH=/usr/local/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}
 COPY --from=wayland-display-builder /out/lib/x86_64-linux-gnu/gstreamer-1.0/libgstwaylanddisplaysrc.so /opt/gstreamer/lib/x86_64-linux-gnu/gstreamer-1.0/libgstwaylanddisplaysrc.so
 
 # Apply the waylanddisplaysrc capture branch to Selkies. The entrypoint always

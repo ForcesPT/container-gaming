@@ -59,6 +59,12 @@ paid VM has been performed in this local qualification session.
 
 ## Local display limits
 
+With GPU injection enabled, Docker's regenerated loader cache selected the
+system Wayland 1.22 server instead of the packaged 1.23 ABI. Explicitly putting
+`/usr/local/lib/x86_64-linux-gnu` on `LD_LIBRARY_PATH` resolves that symbol error.
+The candidate and future base-image builds retain that precedence; a build-time
+factory check verifies the packaged compositor loads without GPU injection.
+
 Docker Desktop exposes CUDA/NVENC through WSL but this host does not expose the
 native Linux EGL interop entry point needed by the production Wayland capture
 plugin. A 60 Hz dummy Xorg display and software Vulkan/GL are used for local
