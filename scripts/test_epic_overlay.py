@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory() as temp:
         env.update(DPAD_EPIC_BACKEND='faugus', DPAD_INSTANT_APP=binding['app'],
                    DPAD_INSTANT_METADATA='fixture-not-used-by-official-route')
         if os.environ.get('DPAD_TEST_EPIC_VOLUME') == '1':
-            volume = Path('/home/dpad/test-volume'); volume.mkdir(mode=0o700)
+            volume = Path('/home/dpad/test-volume'); volume.mkdir(mode=0o700, exist_ok=True)
             import pwd
             user = pwd.getpwnam('dpad'); os.chown(volume, user.pw_uid, user.pw_gid)
             env['DPAD_VOLUME_MOUNT'] = str(volume)
@@ -73,6 +73,19 @@ with tempfile.TemporaryDirectory() as temp:
             assert re.findall(r'"MachineGuid"="([^"]+)"', (prefix / 'system.reg').read_text()) == guid
             inventory = json.loads((prefix / 'drive_c/ProgramData/Epic/UnrealEngineLauncher/LauncherInstalled.dat').read_text())
             assert len([row for row in inventory['InstallationList'] if row['AppName'] == 'FixtureGame']) == 1
+            persistence_pass = os.environ.get('DPAD_TEST_EPIC_PERSIST_PASS')
+            if persistence_pass:
+                assert env.get('DPAD_VOLUME_MOUNT'), 'persistent volume test requires volume mode'
+                checkpoint = volume / '.dpad-test-installation.json'
+                snapshot = {'machineGuid': guid[0], 'itemSha256': hashlib.sha256(item.read_bytes()).hexdigest()}
+                if persistence_pass == 'first':
+                    assert not checkpoint.exists(), 'expected a fresh disposable volume'
+                    checkpoint.write_text(json.dumps(snapshot)); checkpoint.chmod(0o600)
+                elif persistence_pass == 'second':
+                    assert json.loads(checkpoint.read_text()) == snapshot, 'identity or game records changed across containers'
+                    print('REAL_VOLUME_CROSS_CONTAINER_INSTALLATION_PERSISTENCE_OK')
+                else:
+                    raise AssertionError('unknown persistence test pass')
             print('PACKAGED_EPIC_PREPARE_REGISTER_REPLAY_OK mode=' + ('volume' if env.get('DPAD_VOLUME_MOUNT') else 'home'))
         finally:
             picker.write_bytes(original_picker); picker.chmod(mode)
