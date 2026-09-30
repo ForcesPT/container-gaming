@@ -64,6 +64,9 @@ system Wayland 1.22 server instead of the packaged 1.23 ABI. Explicitly putting
 `/usr/local/lib/x86_64-linux-gnu` on `LD_LIBRARY_PATH` resolves that symbol error.
 The candidate and future base-image builds retain that precedence; a build-time
 factory check verifies the packaged compositor loads without GPU injection.
+That check uses and removes a temporary plugin registry. Baking a no-GPU
+registry into root's cache hid CUDA/NVENC factories from later root probes;
+using a fresh registry restored hardware encoding on the assembled image.
 
 Docker Desktop exposes CUDA/NVENC through WSL but this host does not expose the
 native Linux EGL interop entry point needed by the production Wayland capture

@@ -75,4 +75,6 @@ ENV DPAD_GOG_BACKEND=official
 # GPU runtime hooks can regenerate ld.so.cache with the older host library first.
 # Keep the compositor's bundled Wayland 1.23 ABI ahead of that cache.
 ENV LD_LIBRARY_PATH=/usr/local/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}
-RUN . /opt/gstreamer/gst-env && gst-inspect-1.0 waylanddisplaysrc >/dev/null
+RUN . /opt/gstreamer/gst-env \
+    && GST_REGISTRY=/tmp/dpad-build-gst-registry.bin gst-inspect-1.0 waylanddisplaysrc >/dev/null \
+    && rm -f /tmp/dpad-build-gst-registry.bin
