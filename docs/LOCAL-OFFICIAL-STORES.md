@@ -13,7 +13,7 @@ authenticated libraries, game installation, gameplay, or cross-session tokens.
 | Epic Windows | Fresh official MSI/update completed; DXVK sign-in rendered; dummy input and close/reopen passed; fresh preinstalled-template launch and clean close/reopen passed without installer/runtime download | Final all-store assembled-image recheck; no local account authentication |
 | GOG Galaxy Windows | Official 2.1.9.27 sign-in rendered; dummy input, clean close/reopen, sanitized-template fresh clone passed; reproduced on the rebuilt shared-cache image without runtime download | No local account authentication |
 | Battle.net Windows | Official installer completed; settled sign-in rendered; dummy input passed and was cleared | Fresh sanitized-template sign-in and reopen checks |
-| EA App Windows | Official installer completed; sign-in rendered; dummy input passed and was cleared | Fresh sanitized-template sign-in and reopen checks |
+| EA App Windows | Official sign-in/input passed; fresh sanitized-template clone and reopen passed after repairing the existing service path | Final assembled-image recheck; no local account authentication |
 | Ubisoft Connect Windows | Official installer completed; sign-in, dummy input and clean close/reopen passed | Fresh sanitized-template sign-in and reopen checks |
 
 The Computer Use skill requires explicit approval before accepting a legally
@@ -26,6 +26,14 @@ paid VM has been performed in this local qualification session.
 
 ## Fixes and actual behavior checks
 
+- EA's installer registered a legacy `EABackgroundService.exe` path although
+  its installed binary lives in a versioned directory. A fresh prefix exposed
+  error 2 and the "Background services crashed" dialog. The wrapper now picks
+  the newest valid installed version and repairs only the existing service's
+  executable path through Wine's live registry API, preserving its account,
+  start mode and permissions. A second untouched template clone reached
+  sign-in, accepted dummy input and reopened without reinstalling. Evidence:
+  `ea-fresh-service-repaired-login.jpg` and `ea-fresh-reopen.jpg`.
 - GE-Proton10-34 Wine source, full GE/staging patch set and server protocol 864
   are matched before rebuilding components. An earlier protocol-856 experiment
   is rejected and must never be published.

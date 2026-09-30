@@ -90,12 +90,20 @@ unset LD_PRELOAD
 # a non-versioned `EA Desktop/EA Desktop` path, so support both layouts.
 EA_BASE="$PREFIX/drive_c/Program Files/Electronic Arts/EA Desktop"
 resolve_ea_installed_exe() {
-    local candidate
-    for candidate in \
-        "$EA_BASE"/*/"EA Desktop"/EADesktop.exe \
-        "$EA_BASE"/"EA Desktop"/EADesktop.exe \
-        "$EA_BASE"/*/"EA Desktop"/EALauncher.exe \
-        "$EA_BASE"/"EA Desktop"/EALauncher.exe; do
+    local candidate version
+    # Updates can retain older directories. Select the newest numeric version,
+    # then use the legacy layout only when no versioned client is valid.
+    while IFS= read -r -d '' version; do
+        [[ "$version" =~ ^[0-9]+(\.[0-9]+)*$ ]] || continue
+        for candidate in "$EA_BASE/$version/EA Desktop/EADesktop.exe" \
+                         "$EA_BASE/$version/EA Desktop/EALauncher.exe"; do
+            if [ -f "$candidate" ] && "$VERIFY_WINDOWS_BINARY" --pe-only "$candidate" >>"$LOG" 2>&1; then
+                printf '%s\n' "$candidate"
+                return 0
+            fi
+        done
+    done < <(find "$EA_BASE" -mindepth 1 -maxdepth 1 -type d -printf '%f\0' 2>/dev/null | sort -zVr)
+    for candidate in "$EA_BASE/EA Desktop/EADesktop.exe" "$EA_BASE/EA Desktop/EALauncher.exe"; do
         if [ -f "$candidate" ] && "$VERIFY_WINDOWS_BINARY" --pe-only "$candidate" >>"$LOG" 2>&1; then
             printf '%s\n' "$candidate"
             return 0
@@ -239,6 +247,27 @@ fi
 # Convert the discovered legacy/versioned Unix path to its Wine C: path.
 EA_REL="${EA_INST#"$PREFIX/drive_c/"}"
 EA_EXE="C:\\${EA_REL//\//\\}"
+# EA's installer can register the legacy service path while placing the client
+# in a versioned directory. Its installer-owned service keeps working until
+# exit, masking the broken registration on the next clean prefix startup.
+# Repair only this existing service's executable path; preserve its account,
+# start mode and permissions. Use Wine's live registry API, never edit a registry
+# file underneath wineserver.
+EA_SERVICE="${EA_INST%/*}/EABackgroundService.exe"
+if ! "$VERIFY_WINDOWS_BINARY" --pe-only "$EA_SERVICE" >>"$LOG" 2>&1; then
+    echo '[ea-launch] FATAL: installed EA background service is missing or invalid' | tee -a "$LOG" >&2
+    exit 1
+fi
+EA_SERVICE_REL="${EA_SERVICE#"$PREFIX/drive_c/"}"
+EA_SERVICE_COMMAND="\"C:\\${EA_SERVICE_REL//\//\\}\" -start"
+EA_SERVICE_KEY='HKLM\System\CurrentControlSet\Services\EABackgroundService'
+if ! timeout --kill-after=5s 60s env PROTON_VERB=run "$UMU_RUN" reg.exe query "$EA_SERVICE_KEY" /v ImagePath >>"$LOG" 2>&1 \
+   || ! timeout --kill-after=5s 60s env PROTON_VERB=run "$UMU_RUN" reg.exe add "$EA_SERVICE_KEY" \
+        /v ImagePath /t REG_EXPAND_SZ /d "$EA_SERVICE_COMMAND" /f >>"$LOG" 2>&1; then
+    echo '[ea-launch] FATAL: existing EA background service path could not be prepared' | tee -a "$LOG" >&2
+    exit 1
+fi
+echo '[ea-launch] installed EA service path prepared' >> "$LOG"
 # EA App is a Chromium/CEF app. Under Wine/Proton + Xwayland the CEF GPU
 # present path white-screens (same issue as Battle.net). Force CEF software
 # compositing with --disable-gpu + --in-process-gpu. Env-overridable via

@@ -53,11 +53,13 @@ COPY --from=store-service-builder /src/wine/dlls/kernelbase/process.c /src/wine/
     /tmp/chromium-flags.patch /tmp/scope-gog-chromium.py /tmp/soju-LICENSE \
     /tmp/store-wine-source.tar.gz /usr/share/doc/dpadplay/official-store-services/
 COPY scripts/gog-launch /opt/dpadcloud/gog-launch
+COPY scripts/ea-launch /opt/dpadcloud/ea-launch
 COPY scripts/dpad-sanitize-store-prefix /opt/dpadcloud/dpad-sanitize-store-prefix
 COPY scripts/swaymsg-desktop-compat /usr/local/bin/swaymsg
 COPY --from=picker-adapter /work/output/ /opt/dpadcloud/launcher/resources/
 RUN sed -i 's/\r$//' /opt/dpadcloud/gog-launch \
     && chmod +x /opt/dpadcloud/gog-launch \
+    && sed -i 's/\r$//' /opt/dpadcloud/ea-launch && chmod +x /opt/dpadcloud/ea-launch \
     && sed -i 's/\r$//' /opt/dpadcloud/dpad-sanitize-store-prefix \
     && chmod +x /opt/dpadcloud/dpad-sanitize-store-prefix \
     && sed -i 's/\r$//' /usr/local/bin/swaymsg && chmod +x /usr/local/bin/swaymsg \
@@ -70,7 +72,7 @@ RUN sed -i 's/\r$//' /opt/dpadcloud/gog-launch \
        -o /opt/dpadcloud/installers/GOGGalaxy-2.1.9.27.exe \
     && echo 'd6166eb2bc3affcea7e0160c08abdfba255a1df4aba960f5bf6b3fb77ce020aa  /opt/dpadcloud/installers/GOGGalaxy-2.1.9.27.exe' | sha256sum -c - \
     && /opt/dpadcloud/dpad-verify-windows-binary --publisher 'GOG  sp. z o.o' /opt/dpadcloud/installers/GOGGalaxy-2.1.9.27.exe \
-    && bash -n /opt/dpadcloud/gog-launch
+    && bash -n /opt/dpadcloud/gog-launch /opt/dpadcloud/ea-launch
 ENV DPAD_GOG_BACKEND=official
 # GPU runtime hooks can regenerate ld.so.cache with the older host library first.
 # Keep the compositor's bundled Wayland 1.23 ABI ahead of that cache.
