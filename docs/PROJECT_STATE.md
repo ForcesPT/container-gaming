@@ -1,5 +1,19 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-10-01 packaged local follow-up complete.** Clean source `d1a4c6c`
+> built the six-store image `sha256:7f765863…7641ee16` and FUSE import extension
+> `sha256:e96b48f5…e19bf17f`. Packaged helpers match source; qualified picker
+> and Wine service binaries are unchanged. Eighteen focused regressions and
+> RTX 4070 Ti 60-frame CUDA/NVENC passed. Actual template preparation before
+> registration, home/volume prefix selection, record replay and unchanged
+> shared-lower FUSE storage passed. A real Docker volume preserved identity and
+> game records across two separate containers; the disposable volume was then
+> removed. Fixture `eae66ff` differs from image source only in test code.
+> No account, genuine vendor manifest, game, push, deploy or paid resource was
+> used. Saved GUI state remains stopped. Account/token, genuine ABZÛ recognition,
+> gameplay, NFS FUSE and native streaming acceptance remain pending. Exact
+> receipts and scopes: [LOCAL-OFFICIAL-STORES.md](LOCAL-OFFICIAL-STORES.md).
+
 > **2026-09-30 local startup/input fixes, source only.** The private Epic
 > registration route prepares the official client before creating game records,
 > so a fresh prefix can clone its installed template. Registration now shares

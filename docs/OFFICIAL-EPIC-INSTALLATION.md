@@ -71,7 +71,11 @@ the wrapper: explicit `DPAD_FAUGUS_STATE_ROOT`, then
 The offline installation suite passed eleven tests. Two disposable-container
 launcher-shell behavior tests passed preparation/registration/picker ordering
 and failure isolation using fake client processes, without an account or
-network. These are source changes; they have not been baked into the qualified
-six-store artifact. Import-image and host-mount integration remain separate
-unpublished working changes and must be assembled from a clean source revision
-before genuine game acceptance.
+network. On October 1 these changes were packaged from clean source `d1a4c6c`
+in the six-store image and its explicit FUSE import extension. Actual packaged
+template preparation, registration and replay passed with home and volume
+prefixes. A real volume retained identity and game records across two separate
+containers. Shared lower files remained unchanged. The records are synthetic;
+genuine vendor metadata, recognition and gameplay are still unqualified. See
+[LOCAL-OFFICIAL-STORES.md](LOCAL-OFFICIAL-STORES.md) for exact image IDs,
+fixture provenance and acceptance limits.

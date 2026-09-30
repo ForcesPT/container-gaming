@@ -1,9 +1,58 @@
-# Local official-store qualification — 2026-09-30
+# Local official-store qualification — 2026-10-01
 
 Owner scope: use the Windows PC and RTX 4070 Ti, with no paid cloud VM.
 Publish/deploy only after the local store gates pass. No account credentials
 were entered during these checks. Login-window qualification does not prove
 authenticated libraries, game installation, gameplay, or cross-session tokens.
+
+## October 1 packaged follow-up
+
+The startup, registration and keyboard rollback fixes are now built from clean
+source `d1a4c6c3a80ef1a7c0cd3034a1d765da7da55b95`:
+
+| Local artifact | Local image index | Scope |
+| --- | --- | --- |
+| `dpadplay/official-stores:d1a4c6c-all` | `sha256:7f76586348d66fe0906b8d14e6d7544ea40a5156e475b0460f230f3e7641ee16` | Private official-client candidate |
+| `dpadplay/epic-instant:d1a4c6c-local` | `sha256:e96b48f5a47f6fb0d8ef61e8cd955918fb9fd54ff6ee6df947721226e19bf17f` | Private import candidate; no genuine-game acceptance |
+
+The import image extends the assembled six-store image with FUSE; it does not
+replace the qualified runner, graphics configuration or preinstalled client.
+Both source labels match the clean build revision. These are local indices,
+not registry publication receipts. Neither image was pushed or deployed.
+
+Account-free checks completed:
+
+- All five Windows template assembly/sanitization gates passed.
+- Actual packaged helpers match the clean source; no local viewer or test
+  desktop is included. The picker archive, Wine server and service binary are
+  byte-identical to the previously qualified runtime. This retains previous
+  six-client UI evidence; it does not claim six new UI/account runs.
+- Eleven installation tests, five keyboard rollback tests and two launcher
+  startup-order/failure tests passed on the updated image.
+- RTX 4070 Ti CUDA conversion and NVENC completed 60 frames on the assembled
+  image without overriding the plugin registry. Native Wayland/EGL capture
+  remains unsupported by this Windows/WSL test host.
+- Real packaged Epic preparation cloned its installed template before game
+  registration. Home and volume prefixes both registered and replayed one
+  synthetic game while preserving client identity and one inventory entry.
+- Real FUSE executable replacement and private save creation left shared lower
+  bytes, directory contents and permissions unchanged in both cases.
+- A real disposable Docker volume reused by two separate `--rm` containers
+  retained the same private client identity and item record. The test volume
+  was removed after its exact name and test/source labels were checked. This
+  proves installation-state persistence, not saved account-token acceptance.
+
+Fixture revision `eae66ff35558a30b3c300773ca15e18beddbf631` changes only the
+overlay test relative to the image source. It corrects a shadowed test snapshot
+variable and adds the two-container volume check. Product image code is
+unchanged. Build/test logs and their hashes are bound by
+`test-results/official-stores-d1a4c6c-receipt.json`.
+
+The earlier saved local GUI container remains stopped. No account credentials,
+real vendor manifest, game, registry publication, website deployment or paid
+resource was used in this follow-up. Owner account/library checks, genuine ABZÛ
+records and recognition, gameplay, NFS-backed FUSE, and native Linux streaming
+remain acceptance gates before public Instant Play promotion.
 
 ## Current result
 
