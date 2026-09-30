@@ -9,20 +9,61 @@ authenticated libraries, game installation, gameplay, or cross-session tokens.
 
 | Client | Local evidence | Remaining gate |
 | --- | --- | --- |
-| Steam Linux | Official sign-in rendered; pointer focus and dummy input worked | Final assembled-image recheck |
-| Epic Windows | Fresh official MSI/update completed; DXVK sign-in rendered; dummy input and close/reopen passed; fresh preinstalled-template launch and clean close/reopen passed without installer/runtime download | Final all-store assembled-image recheck; no local account authentication |
-| GOG Galaxy Windows | Official 2.1.9.27 sign-in rendered; dummy input, clean close/reopen, sanitized-template fresh clone passed; reproduced on the rebuilt shared-cache image without runtime download | No local account authentication |
-| Battle.net Windows | Official installer completed; settled sign-in rendered; dummy input passed and was cleared | Fresh sanitized-template sign-in and reopen checks |
-| EA App Windows | Official sign-in/input passed; fresh sanitized-template clone and reopen passed after repairing the existing service path | Final assembled-image recheck; no local account authentication |
-| Ubisoft Connect Windows | Official installer completed; sign-in, dummy input and clean close/reopen passed | Fresh sanitized-template sign-in and reopen checks |
+| Steam Linux | Official sign-in, pointer/input and reopening passed on the assembled runtime after the normal client update | Account, library and gameplay acceptance |
+| Epic Windows | Preinstalled-template DXVK sign-in/input, clean initial close and normal reopening passed on the assembled runtime without installation/runtime download | Local account and gameplay acceptance |
+| GOG Galaxy Windows | Official 2.1.9.27 sign-in/input, clean close and reopening passed on the assembled runtime | Account, library and gameplay acceptance |
+| Battle.net Windows | Preinstalled-template sign-in/input, initial exit 0 and reopening passed on the assembled runtime | Account, library and gameplay acceptance |
+| EA App Windows | Preinstalled-template sign-in, clean close and reopening passed with the service-path repair; input passed in the fresh repair test | Account, library and gameplay acceptance |
+| Ubisoft Connect Windows | Preinstalled-template sign-in/input, initial exit 0 and reopening passed on the assembled runtime | Account, library and gameplay acceptance |
+
+These UI results bind to local assembled runtime
+`sha256:fdc695bb1a5ba2394a3a3512340fc91efc5a205eef37ad81810cb563fcec1086`
+from source `7266fc11a2aab47131b8a1e756eabdd645e6c897`.
+The private-prefix follow-up is source `d785c946d30a1b296f3bdc9d9e170bf612ebf541`;
+its picker and rebuilt Wine service binaries match that qualified runtime byte
+for byte and its installation-template input is unchanged. All five real
+template clones passed private-root/marker permissions, ownership, distinct
+identities, neutral-template retention and staging cleanup on the final image.
 
 The Computer Use skill requires explicit approval before accepting a legally
 binding installer agreement. On 2026-09-30 the owner explicitly approved
-accepting the EA, Battle.net and Ubisoft installer agreements. Finish those
-local installations and their UI checks under that approval.
-GOG's previous account-free installation is available for independent checks.
-No all-six-store release, registry publication, website deployment, or new
-paid VM has been performed in this local qualification session.
+accepting the EA, Battle.net and Ubisoft installer agreements. These local
+installations and their UI checks completed under that approval.
+No registry publication, website deployment or new paid VM has been performed
+in this local qualification session.
+
+## Private publication candidate
+
+- Image: `dpadplay/official-stores:d785c94-all`.
+- Local image index:
+  `sha256:63c3506ff444f00b7e9327f9c6c9eb5d7b9481ee084d02303984f66b38fee855`.
+- Source: `d785c946d30a1b296f3bdc9d9e170bf612ebf541`, exported with `git archive`;
+  unfinished shared-game recognition edits were excluded.
+- Final hardware test: 60 frames of CUDA upload/conversion, NV12 and modern
+  NVENC p4/ultra-low-latency/CBR on RTX 4070 Ti, without overriding the plugin
+  registry. Evidence: `test-results/d785c94-all-nvenc.log`.
+- Final security test: `test-results/d785c94-security.log`.
+- Five actual private clones: `test-results/d785c94-private-identities.log`.
+- Packaged EA sign-in and dummy input passed after the privacy fix. Evidence:
+  `test-results/private-final-ea-login.jpg` and `test-results/d785c94-ea-ui.log`.
+- Package scope: `test-results/d785c94-package-scope.log`; no local viewer,
+  workspace or proof mounts are packaged. The client-only private test gate is
+  retained. No public Instant Play binding is qualified by this receipt.
+
+The six-client UI screenshots and close/reopen logs are named `final-<store>-*`
+and `7266fc1-<store>-*` in `test-results/`. Actual Wine scope fixtures on that
+runtime passed all three Galaxy renderer boundaries and six Epic SCM cases.
+The privacy follow-up changes staging and root permissions plus the three
+wrappers' ownership/mode setup; it preserves the qualified picker, Wine
+components and installation templates. Keep that distinction in release claims.
+
+Suggested separate publication tag:
+`forcespt/dpadcloud-gaming:official-stores-local-canary-20260930-d785c94`.
+Publishing this image does not itself approve a public product/profile change.
+Record the registry's returned immutable digest before any profile binding.
+For public Instant Play, capture genuine official game installation metadata
+and verify recognition and gameplay first. Local launcher-window and NVENC
+checks cannot replace native Linux Wayland/WebRTC/provider acceptance.
 
 ## Fixes and actual behavior checks
 

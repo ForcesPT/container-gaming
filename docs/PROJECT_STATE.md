@@ -1,21 +1,23 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
-> **2026-09-30 local six-store qualification in progress; no cloud spend.**
-> Owner requested local RTX 4070 Ti/Docker checks before any publication or
-> deployment. Steam and official Epic sign-in UIs passed local pointer/input
-> checks; Epic close/reopen passed, including a fresh preinstalled-template
-> first launch without installer or runtime download. Official GOG Galaxy now passes sign-in,
-> input, clean close/reopen and fresh sanitized-template cloning after matched
-> Wine service/token and scoped Qt renderer fixes. CUDA conversion plus modern
-> NVENC passed on the local GPU. The owner explicitly approved the three
-> remaining installer agreements. EA, Ubisoft and Battle.net now render their
-> official sign-in windows and accept dummy input; Ubisoft clean close/reopen
-> passed. Their installation-only templates are being assembled for fresh
-> prefix checks. The local Windows/WSL display harness cannot prove the production
-> Wayland EGL/WebRTC path. No new paid VM, registry push or production release
-> occurred. Resume from [LOCAL-OFFICIAL-STORES.md](LOCAL-OFFICIAL-STORES.md);
-> complete all remaining gates before publishing. ABZÛ official metadata capture
-> remains separate and unfinished.
+> **2026-09-30 local six-store window gates passed; private canary prepared.**
+> Steam, official Epic, GOG Galaxy, Battle.net, EA and Ubisoft sign-in windows,
+> dummy input and reopening passed on the assembled local runtime. EA's stale
+> background-service executable path was repaired. A real identity check then
+> found permissive private-prefix roots; source `d785c94` fixes protected staging
+> and existing-prefix permissions. All five real store clones passed distinct
+> identities, private permissions, neutral templates and staging cleanup on
+> final image `sha256:63c3506f…b38fee855`. Its security regression, packaged EA
+> sign-in/input and real RTX 4070 Ti CUDA/NVENC checks passed. The picker, Wine
+> service binaries and installation templates retain the qualified UI payload.
+> The full evidence and precise scope are in
+> [LOCAL-OFFICIAL-STORES.md](LOCAL-OFFICIAL-STORES.md). The image is tagged
+> locally for a separate private publication; no registry push, production
+> deployment or paid VM occurred. Authenticated libraries/gameplay across all
+> stores are unverified. ABZÛ genuine installation metadata is still needed.
+> Windows/WSL cannot qualify the production Wayland EGL/WebRTC path; retain
+> native provider acceptance gates. Local Epic is being prepared for owner
+> account testing; never export its user prefix into a release image.
 
 > **2026-09-30 official Epic GPU acceptance passed; fully cleaned up.**
 > Published private image `sha256:cc58f0f2…ff27f4ff` from `cc952c5` completed
