@@ -1,0 +1,22 @@
+# Generated installation-only templates must pass the account-state scrubber.
+# Build these locally from the official clients; never commit a test desktop.
+ARG STORE_IMAGE=dpadplay/official-stores:local
+ARG TEMPLATE_IMAGE=dpadplay/gog-template:local
+FROM ${TEMPLATE_IMAGE} AS templates
+FROM ${STORE_IMAGE}
+USER root
+ARG WINDOWS_STORES=epic,gog,battlenet,ea,ubisoft
+COPY scripts/dpad-sanitize-store-prefix /opt/dpadcloud/dpad-sanitize-store-prefix
+COPY scripts/dpad-verify-store-templates /opt/dpadcloud/dpad-verify-store-templates
+COPY scripts/faugus-epic-launch /opt/dpadcloud/faugus-epic-launch
+COPY --from=templates --chown=dpad:dpad /opt/dpadcloud/ /opt/dpadcloud/
+COPY --from=templates --chown=dpad:dpad /home/dpad/.local/share/umu/ /home/dpad/.local/share/umu/
+RUN sed -i 's/\r$//' /opt/dpadcloud/dpad-sanitize-store-prefix \
+    && chmod +x /opt/dpadcloud/dpad-sanitize-store-prefix \
+    && sed -i 's/\r$//' /opt/dpadcloud/dpad-verify-store-templates /opt/dpadcloud/faugus-epic-launch \
+    && chmod +x /opt/dpadcloud/dpad-verify-store-templates /opt/dpadcloud/faugus-epic-launch \
+    && bash -n /opt/dpadcloud/faugus-epic-launch \
+    && /opt/dpadcloud/dpad-verify-store-templates --stores "$WINDOWS_STORES" \
+    && test -f /home/dpad/.local/share/umu/steamrt3/.installed.ok \
+    && test -x /home/dpad/.local/share/umu/steamrt3/run \
+    && test -d /home/dpad/.local/share/umu/steamrt3/pressure-vessel

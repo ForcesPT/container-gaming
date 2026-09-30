@@ -55,6 +55,10 @@ if [ "$#" -eq 2 ] && { [ "$2" = focus ] || [ "$2" = kill ]; }; then
         [ "$2" = focus ] && exec "$WLRCTL" window focus 'title:Epic Games Launcher'
         exec "$WLRCTL" window close 'title:Epic Games Launcher'
     fi
+    if [ "$1" = '[title=GOG GALAXY]' ]; then
+        [ "$2" = focus ] && exec "$WLRCTL" window focus 'title:GOG GALAXY'
+        exec "$WLRCTL" window close 'title:GOG GALAXY'
+    fi
     case "$1" in
         '[class=steam]') APP_ID=steam ;;
         '[class=Battle.net.exe]') APP_ID=steam_app_battlenet ;;

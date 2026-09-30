@@ -1,48 +1,80 @@
 #!/bin/bash
-# gog-launch — launch Heroic Games Launcher for the GOG store in the headless
-# cloud-gaming session. The dpad-launcher's "GOG" store card (launcher/src/main.js)
-# spawns this; it runs IN THE SAME sway/XWayland session (inheriting DISPLAY=:0,
-# the NVIDIA EGL vendor, PULSE_SERVER, the gamepad interposer env) so the Heroic
-# window is captured by the wayland-display compositor + the user interacts via
-# Selkies.
-#
-# Heroic is an Electron app (like the dpad-launcher itself). It bundles `gogdl`
-# (the GOG CLI backend) + handles login, game install, + game launch. The user
-# lands on the Heroic library → clicks the GOG tab → logs in (first time, browser
-# auth via Selkies Desktop mode) → installs / launches games. GOG is DRM-free
-# (cleanest store). Game installs go to ~/Games (-> <vol>/games on a persistent
-# volume via the entrypoint's setup_stores) so they persist across sessions.
-# Heroic config lives at ~/.config/heroic/ (symlinked to <vol>/heroic-config
-# by setup_stores when a persistent volume is attached).
-#
-# Windows games launch via umu/Proton (Heroic's own umu integration, separate
-# from the battlenet-launch umu path). The image already has GE-Proton11-3
-# baked in compatibilitytools.d/; Heroic detects it on first launch.
-#
-# Env inherited from the launcher (the entrypoint's shared_env via launcher-shell):
-#   DISPLAY=:0  WAYLAND_DISPLAY  XDG_RUNTIME_DIR  PULSE_SERVER  HOME  USER
-# Logs: /tmp/gog-launch.log
-set -u
-
-LOG=/tmp/gog-launch.log
-echo "[gog-launch] $(date -Is) start (HOME=${HOME:-} DISPLAY=${DISPLAY:-})" >> "$LOG"
-
-# Heroic binary (the .deb installs /opt/heroic/heroic symlinked to /usr/bin/heroic).
-HEROIC_BIN="${HEROIC_BIN:-heroic}"
-if ! command -v "$HEROIC_BIN" >/dev/null 2>&1; then
-    echo "[gog-launch] FATAL: heroic not found on PATH" | tee -a "$LOG" >&2
-    exit 1
+# Official GOG Galaxy in a private persistent Wine prefix.
+set -euo pipefail
+umask 077
+backend="${DPAD_GOG_BACKEND:-heroic}"
+if [ "$backend" = heroic ]; then
+    # Existing image releases retain their configured picker/window backend.
+    # The official-store candidate explicitly sets DPAD_GOG_BACKEND=official.
+    heroic="${HEROIC_BIN:-heroic}"
+    command -v "$heroic" >/dev/null || { echo 'Configured GOG backend is unavailable' >&2; exit 1; }
+    read -r -a args <<< "${DPAD_HEROIC_ARGS:---no-sandbox}"
+    exec "$heroic" "${args[@]}"
 fi
-
-# --no-sandbox: Electron/Chromium sandbox needs setuid chrome-sandbox (not
-# available in the container); --no-sandbox matches the dpad-launcher + the
-# vast-docker heroic-launch pattern.
-ARGS="--no-sandbox"
-
-# Allow caller overrides / additions (e.g. DPAD_HEROIC_ARGS for extra flags).
-if [ -n "${DPAD_HEROIC_ARGS:-}" ]; then
-    ARGS="${DPAD_HEROIC_ARGS}"
+[ "$backend" = official ] || { echo 'Unknown GOG backend' >&2; exit 2; }
+export WINEPREFIX="${WINEPREFIX:-${HOME}/Games/gog-galaxy}"
+export PROTONPATH="${HOME}/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34"
+export GAMEID=umu-default STORE=gog UMU_RUNTIME_UPDATE=0 PROTON_ENABLE_WAYLAND=0
+export WINEDEBUG="${WINEDEBUG:--all}"
+# Galaxy overwrites Qt's Chromium flags. The patched Wine CRT preserves this
+# exact executable's CPU web renderer; games and other stores are unaffected.
+export DPAD_GOG_SOFTWARE_RENDERING="${DPAD_GOG_SOFTWARE_RENDERING:-1}"
+unset LD_PRELOAD
+mode="${1:---launch}"
+[[ "$#" -le 1 && "$mode" =~ ^--(launch|prepare-only)$ ]] || { echo 'usage: gog-launch [--prepare-only]' >&2; exit 2; }
+test -x "$PROTONPATH/proton" && command -v umu-run >/dev/null
+mkdir -p -- "$WINEPREFIX"
+WINEPREFIX="$(realpath -e -- "$WINEPREFIX")"
+export WINEPREFIX
+test -O "$WINEPREFIX" || { echo 'GOG prefix is not owned by this user' >&2; exit 1; }
+chmod 700 "$WINEPREFIX"
+# Keep the lock outside the prefix so atomic template cloning stays possible.
+lock_dir="${XDG_STATE_HOME:-${HOME}/.local/state}/dpad-stores"
+python3 -I - "$lock_dir" <<'PY'
+import os, stat, sys
+from pathlib import Path
+p = Path(sys.argv[1]); p.mkdir(parents=True, mode=0o700, exist_ok=True)
+s = p.lstat()
+if not stat.S_ISDIR(s.st_mode) or s.st_uid != os.getuid() or s.st_mode & 0o022:
+    raise SystemExit('Untrusted store lock directory')
+f = os.open(p / 'gog.lock', os.O_CREAT | os.O_RDONLY | os.O_NOFOLLOW, 0o600)
+s = os.fstat(f)
+if not stat.S_ISREG(s.st_mode) or s.st_uid != os.getuid() or s.st_nlink != 1 or s.st_mode & 0o022:
+    raise SystemExit('Untrusted store lock')
+os.close(f)
+PY
+exec 9<"$lock_dir/gog.lock"
+flock -n 9 || { echo 'GOG Galaxy is already starting or running' >&2; exit 1; }
+verify=/opt/dpadcloud/dpad-verify-windows-binary
+resolve_client() {
+    local candidate
+    for candidate in "$WINEPREFIX/drive_c/Program Files/GOG Galaxy/GalaxyClient.exe" \
+        "$WINEPREFIX/drive_c/Program Files (x86)/GOG Galaxy/GalaxyClient.exe"; do
+        if "$verify" --pe-only "$candidate" >/dev/null 2>&1; then
+            printf '%s\n' "$candidate"; return 0
+        fi
+    done
+    return 1
+}
+client="$(resolve_client || true)"
+template=/opt/dpadcloud/gog-prefix
+if [ -z "$client" ] && [ -f "$template/.dpad-preinstalled" ] && [ -z "$(ls -A "$WINEPREFIX")" ]; then
+    /opt/dpadcloud/dpad-clone-prefix-template "$template" "$WINEPREFIX" \
+        --required 'drive_c/Program Files/GOG Galaxy/GalaxyClient.exe'
+    client="$(resolve_client || true)"
 fi
-
-echo "[gog-launch] launching heroic ($HEROIC_BIN $ARGS)" >> "$LOG"
-exec "$HEROIC_BIN" $ARGS >>"$LOG" 2>&1
+if [ -z "$client" ]; then
+    installer=/opt/dpadcloud/installers/GOGGalaxy-2.1.9.27.exe
+    if [ ! -f "$installer" ]; then
+        installer="$WINEPREFIX/GOGGalaxy-2.1.9.27.exe"
+        curl --fail --location --silent --show-error --retry 2 --connect-timeout 20 --max-time 300 \
+            'https://content-system.gog.com/open_link/download?path=/open/galaxy/client/setup_galaxy_2.1.9.27.exe' -o "$installer"
+    fi
+    printf 'd6166eb2bc3affcea7e0160c08abdfba255a1df4aba960f5bf6b3fb77ce020aa  %s\n' "$installer" | sha256sum -c -
+    "$verify" --publisher 'GOG  sp. z o.o' "$installer"
+    timeout --kill-after=15s 600s umu-run "$installer" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+    client="$(resolve_client || true)"
+    test -n "$client" || { echo 'Official GOG Galaxy installation did not complete' >&2; exit 1; }
+fi
+[ "$mode" != --prepare-only ] || exit 0
+exec umu-run "$client" --in-process-gpu /deelevated

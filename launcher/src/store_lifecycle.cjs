@@ -22,10 +22,11 @@ function detectStoreIdFromTitles(titles) {
   return detectStoreIdsFromTitles(titles)[0] || null;
 }
 
-function detectStoreIdsFromTitles(titles) {
+function detectStoreIdsFromTitles(titles, { gogBackend = process.env.DPAD_GOG_BACKEND } = {}) {
   const found = [];
   for (const title of titles) {
     for (const [storeId, pattern] of STORE_TITLE_PATTERNS) {
+      if (storeId === 'gog' && gogBackend === 'official' && !/^GOG GALAXY$/i.test(title)) continue;
       if (pattern.test(title) && !found.includes(storeId)) found.push(storeId);
     }
   }

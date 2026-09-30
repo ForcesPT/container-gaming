@@ -28,8 +28,31 @@ def check(image, revision):
     script = '''set -e
 . /opt/gstreamer/gst-env
 python3 -c 'import ctypes; [ctypes.CDLL(x) for x in ("libcuda.so.1", "libnvidia-encode.so.1", "libnvcuvid.so.1", "libEGL.so.1")]'
-gst-inspect-1.0 nvh264enc >/dev/null
-gst-launch-1.0 -q videotestsrc num-buffers=60 ! video/x-raw,width=1280,height=720,framerate=30/1 ! videoconvert ! video/x-raw,format=NV12 ! nvh264enc ! h264parse ! fakesink
+python3 - <<'PY'
+import gi
+gi.require_version('Gst', '1.0')
+from gi.repository import Gst
+Gst.init(None)
+# Match Selkies: 1.22/1.24 keep the legacy nvh264enc beside the modern CUDA
+# encoder. New drivers reject legacy presets even when NVENC itself works.
+version = Gst.version()
+factory = 'nvcudah264enc' if version[0] == 1 and 20 < version[1] <= 24 else 'nvh264enc'
+settings = ' preset=p4 tune=ultra-low-latency' if version[0] == 1 and version[1] > 22 else ' preset=low-latency-hq'
+pipeline = Gst.parse_launch('videotestsrc num-buffers=60 ! '
+    'video/x-raw,width=1280,height=720,framerate=30/1 ! videoconvert ! '
+    'video/x-raw,format=NV12 ! ' + factory + settings + ' ! h264parse ! fakesink')
+try:
+    if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
+        raise RuntimeError('Encoder did not enter PLAYING')
+    message = pipeline.get_bus().timed_pop_filtered(30 * Gst.SECOND, Gst.MessageType.ERROR | Gst.MessageType.EOS)
+    if message is None:
+        raise RuntimeError('Encoder produced no completion within 30 seconds')
+    if message.type == Gst.MessageType.ERROR:
+        error, debug = message.parse_error()
+        raise RuntimeError(str(error))
+finally:
+    pipeline.set_state(Gst.State.NULL)
+PY
 '''
     try:
         result = subprocess.run([

@@ -284,6 +284,9 @@ function clearStoreVisibleTimer(storeId, owner = null) {
 }
 
 function focusStoreWindow(storeId) {
+  if (storeId === 'gog' && process.env.DPAD_GOG_BACKEND === 'official') {
+    return swaymsg('[title="GOG GALAXY"] focus') !== null;
+  }
   // Proton currently exposes official Epic as the generic steam_app_default
   // class. Target its observed window title to avoid focusing another client.
   if (storeId === 'epic' && process.env.DPAD_EPIC_BACKEND === 'faugus') {

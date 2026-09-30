@@ -1,0 +1,32 @@
+# Match the complete GE-Proton10-34 server protocol before rebuilding components.
+FROM ubuntu:24.04@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential bison ca-certificates curl flex git autoconf python3 \
+    gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
+    && rm -rf /var/lib/apt/lists/*
+RUN git init /src/wine \
+    && git -C /src/wine remote add origin https://github.com/ValveSoftware/wine.git \
+    && git -C /src/wine fetch --depth=1 origin 1729f00e17e879f98f9df1f2bca86bc5d21a65df \
+    && git -C /src/wine checkout --detach FETCH_HEAD \
+    && test "$(git -C /src/wine rev-parse HEAD)" = 1729f00e17e879f98f9df1f2bca86bc5d21a65df
+RUN mkdir -p /src/ge /src/wine-staging \
+    && curl -fLsS --retry 3 https://codeload.github.com/GloriousEggroll/proton-ge-custom/tar.gz/721dd76896b434fe3c1328ea533e0b25b4af04d5 -o /tmp/ge.tar.gz \
+    && echo '49408d3d2971ab8061658e36e7fb0dd154a0834f3e41b50751404ab8908b916f  /tmp/ge.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/ge.tar.gz --strip-components=1 -C /src/ge \
+    && curl -fLsS --retry 3 https://codeload.github.com/wine-staging/wine-staging/tar.gz/05bc4b822fdb1898777b08a8597639ad851f5601 -o /tmp/staging.tar.gz \
+    && echo '4c84af88b459e433b949bcb4478dfdb19e25446ad26c981ab55544bdc65f2805  /tmp/staging.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/staging.tar.gz --strip-components=1 -C /src/wine-staging \
+    && curl -fLsS https://github.com/ValveSoftware/wine/commit/e813ca5771658b00875924ab88d525322e50d39f.patch -o /tmp/restore-configure.patch \
+    && echo 'dc863a602638557496bf63d56c1d9bbbfbb44936652f4ecc36f6dd19517c649f  /tmp/restore-configure.patch' | sha256sum -c -
+COPY scripts/prepare_store_wine.py /tmp/prepare-store-wine.py
+RUN python3 /tmp/prepare-store-wine.py \
+    && cd /src && bash /tmp/prepare-store-wine.sh \
+    && grep -q '#define SERVER_PROTOCOL_VERSION 864' /src/wine/include/wine/server_protocol.h
+RUN cd /src/wine/dlls/winevulkan && python3 make_vulkan \
+    && cd /src/wine && ./tools/make_specfiles \
+    && mkdir -p /src/store-wine-build/include/wine \
+    && cp include/wine/vulkan.h include/wine/vulkan_driver.h /src/store-wine-build/include/wine/ \
+    && cd /src/store-wine-build \
+    && /src/wine/configure --enable-win64 --without-x --without-freetype \
+    && make -j4 server/wineserver programs/services/x86_64-windows/services.exe

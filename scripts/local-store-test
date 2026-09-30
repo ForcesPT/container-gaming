@@ -1,0 +1,22 @@
+#!/bin/bash
+# Account-free local launcher qualification. Viewer must be bound to 127.0.0.1 by Docker.
+set -euo pipefail
+umask 077
+export HOME=/home/dpad USER=dpad DISPLAY=:99 XDG_RUNTIME_DIR=/run/user/1001
+export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
+export LIBGL_ALWAYS_SOFTWARE=1 WINEDEBUG=-all GST_DEBUG=0
+unset LD_PRELOAD __GLX_VENDOR_LIBRARY_NAME __EGL_VENDOR_LIBRARY_FILENAMES
+install -d -m 700 -o dpad -g dpad "$XDG_RUNTIME_DIR" /home/dpad/.local/state /home/dpad/.local/state/dpad-local-test
+# Container restarts retain /tmp. This harness owns only display :99.
+if ! xdpyinfo -display :99 >/dev/null 2>&1; then
+    rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+fi
+Xorg :99 -config /opt/dpadcloud/local-store-xorg.conf -extension MIT-SHM -noreset -nolisten tcp -ac -logfile /tmp/local-xorg.log >/tmp/local-xorg-output.log 2>&1 &
+for attempt in $(seq 1 50); do xdpyinfo -display :99 >/dev/null 2>&1 && break; sleep .1; done
+xdpyinfo -display :99 >/dev/null
+runuser -u dpad -- dbus-run-session -- openbox >/tmp/local-openbox.log 2>&1 &
+runuser -u dpad -- pulseaudio --start --exit-idle-time=-1 >/tmp/local-audio.log 2>&1 || true
+x11vnc -display :99 -noshm -forever -shared -nopw -rfbport 5900 -localhost >/tmp/local-vnc.log 2>&1 &
+websockify --web=/usr/share/novnc 0.0.0.0:5800 localhost:5900 >/tmp/local-viewer.log 2>&1 &
+echo 'LOCAL_STORE_DESKTOP_READY (local harness; software graphics, no account validation)'
+wait -n

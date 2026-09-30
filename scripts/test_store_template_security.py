@@ -217,6 +217,57 @@ with tempfile.TemporaryDirectory() as temporary:
         raise SystemExit("sanitizer followed a symlink ancestor outside the prefix")
 
     sanitizer_module = load_script("dpad_sanitize_store_prefix", SANITIZER)
+    # Galaxy stores authentication in both its user registry and local databases.
+    # Scrub the template copy while preserving unrelated game installation keys.
+    gog_prefix = root / "gog-template"
+    gog_user = gog_prefix / "drive_c/users/dpad"
+    gog_user.mkdir(parents=True)
+    gog_account = gog_user / "AppData/Local/GOG.com/Galaxy/config.json"
+    gog_account.parent.mkdir(parents=True)
+    gog_account.write_text('{"account":"test-only"}', encoding="utf-8")
+    epic_account = gog_user / "AppData/Local/EpicGamesLauncher/Saved/Config/Windows/GameUserSettings.ini"
+    epic_account.parent.mkdir(parents=True)
+    epic_account.write_text("test-only Epic account state", encoding="utf-8")
+    persisted_key = gog_user / "AppData/Roaming/Microsoft/Crypto/Keys/test-only.key"
+    persisted_key.parent.mkdir(parents=True)
+    persisted_key.write_bytes(b"test-only persisted key")
+    gog_database = gog_prefix / "drive_c/ProgramData/GOG.com/Galaxy/storage/galaxy-2.0.db"
+    gog_database.parent.mkdir(parents=True)
+    gog_database.write_bytes(b"test-only-account-database")
+    gog_registry = gog_prefix / "user.reg"
+    gog_registry.write_text(
+        r'WINE REGISTRY Version 2' + '\n\n'
+        r'[Software\\GOG.com\\Galaxy]' + '\n'
+        r'"refreshToken"="test-only-token"' + '\n\n'
+        r'[Software\\GOG.com\\Galaxy\\Accounts]' + '\n'
+        r'"user"="test-only"' + '\n\n'
+        r'[Software\\GOG.com\\Games\\123]' + '\n'
+        r'"path"="C:\\Games\\Example"' + '\n', encoding="utf-8")
+    for backup in ("user.reg.old", "userdef.reg.old", "system.reg.old"):
+        (gog_prefix / backup).write_text("test-only registry backup", encoding="utf-8")
+    sanitizer_module.sanitize(gog_prefix)
+    sanitizer_module.verify_clean(gog_prefix)
+    if gog_account.exists() or gog_database.exists():
+        raise SystemExit("Galaxy account state survived template sanitization")
+    if epic_account.exists() or persisted_key.exists():
+        raise SystemExit("Epic account state or persisted key survived template sanitization")
+    if any((gog_prefix / name).exists() for name in ("user.reg.old", "userdef.reg.old", "system.reg.old")):
+        raise SystemExit("Wine registry backups survived template sanitization")
+    cleaned_registry = gog_registry.read_text(encoding="utf-8")
+    if 'test-only' in cleaned_registry or 'Galaxy' in cleaned_registry or 'Example' not in cleaned_registry:
+        raise SystemExit("Galaxy registry scrub leaked account state or removed unrelated games")
+    registry_outside = root / "registry-outside"
+    registry_outside.write_text("outside must remain", encoding="utf-8")
+    gog_registry.unlink()
+    gog_registry.symlink_to(registry_outside)
+    try:
+        sanitizer_module.sanitize(gog_prefix)
+    except (OSError, SystemExit):
+        pass
+    else:
+        raise SystemExit("Galaxy registry scrub followed a symlink")
+    if registry_outside.read_text(encoding="utf-8") != "outside must remain":
+        raise SystemExit("Galaxy registry scrub altered an outside file")
 
     prefix_parent = root / "prefix-parent-race"
     prefix_race = prefix_parent / "prefix"

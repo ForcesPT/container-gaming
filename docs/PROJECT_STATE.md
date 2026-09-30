@@ -1,5 +1,22 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-30 local six-store qualification in progress; no cloud spend.**
+> Owner requested local RTX 4070 Ti/Docker checks before any publication or
+> deployment. Steam and official Epic sign-in UIs passed local pointer/input
+> checks; Epic close/reopen passed, including a fresh preinstalled-template
+> first launch without installer or runtime download. Official GOG Galaxy now passes sign-in,
+> input, clean close/reopen and fresh sanitized-template cloning after matched
+> Wine service/token and scoped Qt renderer fixes. CUDA conversion plus modern
+> NVENC passed on the local GPU. The owner explicitly approved the three
+> remaining installer agreements. EA, Ubisoft and Battle.net now render their
+> official sign-in windows and accept dummy input; Ubisoft clean close/reopen
+> passed. Their installation-only templates are being assembled for fresh
+> prefix checks. The local Windows/WSL display harness cannot prove the production
+> Wayland EGL/WebRTC path. No new paid VM, registry push or production release
+> occurred. Resume from [LOCAL-OFFICIAL-STORES.md](LOCAL-OFFICIAL-STORES.md);
+> complete all remaining gates before publishing. ABZÛ official metadata capture
+> remains separate and unfinished.
+
 > **2026-09-30 official Epic GPU acceptance passed; fully cleaned up.**
 > Published private image `sha256:cc58f0f2…ff27f4ff` from `cc952c5` completed
 > a fresh silent install and official update after one Epic-card click on Paris
@@ -1394,3 +1411,8 @@ docker build --target vast-vm -t forcespt/dpadcloud-gaming:dpad-SteamOS .
 # Then read §6 — the driver-595→580 downgrade + the Docker Hub push are the
 # two owner steps blocking flicker-free v2 streams.
 ```
+# September 30 — official Epic shared recognition paused
+
+Owner paused the approved ABZÛ installation capture test before Epic sign-in/install. Session `7e62f175-e0e1-4369-98fa-cccc2d463651` was ended through the normal destroy queue at 06:18:08 UTC. It reached stream-ready at 06:16:05 UTC; no genuine ABZÛ installation metadata was captured. Qualified client image remains `cc58f0f2…ff27f4ff`; public Heroic was preserved. Exact provider cleanup evidence is recorded in the capture checkpoint in the control repo.
+
+Local uncommitted recognition candidate and evidence: [OFFICIAL-EPIC-INSTALLATION.md](OFFICIAL-EPIC-INSTALLATION.md). FUSE private storage, export/register, immutable sidecars, vendor binding, artifact packaging and typechecks passed. These tests use synthetic records and do not prove ABZÛ recognition. No new import image was published. Resume from the local candidate after reviewing genuine official records; the owner has no local PC ABZÛ installation. A new paid test needs fresh owner authorization.

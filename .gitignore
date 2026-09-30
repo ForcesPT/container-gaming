@@ -9,6 +9,7 @@ Dockerfile.pathB.bak
 *.log
 /tmp/
 .cache/
+test-results/
 
 # Editor / OS
 .vscode/

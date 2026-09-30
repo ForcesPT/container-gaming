@@ -46,6 +46,11 @@ if [ "$mode" = --resume ]; then
 fi
 flock -n 9 || { echo 'Epic is already starting or running' >&2; exit 1; }
 python3 -I "${script_dir}/dpad_faugus_prepare.py"
+template=/opt/dpadcloud/epic-prefix
+if [ -f "$template/.dpad-preinstalled" ] && [ -z "$(ls -A "$WINEPREFIX")" ]; then
+    /opt/dpadcloud/dpad-clone-prefix-template "$template" "$WINEPREFIX" \
+        --required 'drive_c/Program Files/Epic Games/Launcher/Portal/Binaries/Win64/EpicGamesLauncher.exe'
+fi
 epic_exe="${WINEPREFIX}/drive_c/Program Files/Epic Games/Launcher/Portal/Binaries/Win64/EpicGamesLauncher.exe"
 if [ ! -f "$epic_exe" ]; then
     installer=/opt/dpadcloud/faugus/EpicGamesLauncherInstaller.msi

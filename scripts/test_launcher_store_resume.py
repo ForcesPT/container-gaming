@@ -47,6 +47,9 @@ assert.deepStrictEqual(
   detectStoreIdsFromTitles(['Heroic Games Launcher']),
   ['epic', 'gog'],
 );
+assert.deepStrictEqual(detectStoreIdsFromTitles(['Heroic Games Launcher'], { gogBackend: 'official' }), ['epic']);
+assert.deepStrictEqual(detectStoreIdsFromTitles(['GOG GALAXY'], { gogBackend: 'official' }), ['gog']);
+assert.deepStrictEqual(detectStoreIdsFromTitles(['Guardians of the Galaxy'], { gogBackend: 'official' }), []);
 assert.deepStrictEqual(
   chooseStoreAction({ requestedStoreId: 'epic', runningStoreIds: ['steam'] }),
   { action: 'launch', storeId: 'epic' },

@@ -18,6 +18,10 @@ FORBIDDEN_FILES = {
 }
 FORBIDDEN_SUFFIXES = (".dmp", ".log", ".mdmp")
 STORE_STATE_RELATIVE = (
+    "AppData/Local/EpicGamesLauncher",
+    "AppData/Roaming/EpicGamesLauncher",
+    "AppData/Local/Epic Games",
+    "AppData/Roaming/Microsoft/Crypto/Keys",
     "AppData/Roaming/Battle.net",
     "AppData/Local/Battle.net",
     "AppData/Local/Electronic Arts/EA Desktop/CEF",
@@ -25,11 +29,21 @@ STORE_STATE_RELATIVE = (
     "AppData/Roaming/EA Desktop",
     "AppData/Local/Ubisoft Game Launcher",
     "AppData/Roaming/Ubisoft",
+    "AppData/Local/GOG.com/Galaxy",
+    "AppData/Roaming/GOG.com/Galaxy",
 )
 SETUP_DIRS = ("battlenet-setup", "ea-setup", "ubisoft-setup")
 PREFIX_STATE_RELATIVE = (
+    "user.reg.old",
+    "userdef.reg.old",
+    "system.reg.old",
+    "GOGGalaxy-2.1.9.27.exe",
     "drive_c/ProgramData/Battle.net/Agent/data/cache",
     "drive_c/windows/temp",
+    "drive_c/ProgramData/GOG.com/Galaxy/crashdumps",
+    "drive_c/ProgramData/GOG.com/Galaxy/logs",
+    "drive_c/ProgramData/GOG.com/Galaxy/storage",
+    "drive_c/ProgramData/GOG.com/Galaxy/lock-files",
 )
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 RENAME_NOREPLACE = 1
@@ -97,6 +111,19 @@ def rename_noreplace(directory_fd: int, source: str, destination: str) -> None:
 
 
 def unlink_user_alias(directory_fd: int, name: str, expected: os.stat_result) -> None:
+    # Keep the original symlink inode alive across quarantine. Without O_PATH,
+    # unlink/recreate can immediately reuse its inode and defeat an identity check.
+    descriptor = os.open(name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory_fd)
+    try:
+        pinned = os.fstat(descriptor)
+        if not stat.S_ISLNK(pinned.st_mode) or not same_identity(expected, pinned):
+            raise SystemExit("Wine user alias changed before pinning")
+        unlink_pinned_user_alias(directory_fd, name, pinned)
+    finally:
+        os.close(descriptor)
+
+
+def unlink_pinned_user_alias(directory_fd: int, name: str, expected: os.stat_result) -> None:
     quarantine = f".dpad-sanitize-alias-{os.getpid()}-{secrets.token_hex(8)}"
     try:
         rename_noreplace(directory_fd, name, quarantine)
@@ -243,7 +270,61 @@ def sanitize_suffixes(directory_fd: int) -> None:
             os.unlink(name, dir_fd=directory_fd)
 
 
+def registry_without_galaxy(text: str) -> str:
+    """Drop the whole Galaxy user branch, including its refresh token."""
+    output = []
+    omit = False
+    for line in text.splitlines(keepends=True):
+        if line.startswith("[") and "]" in line:
+            key = line[1:line.index("]")].replace("\\\\", "\\").lower()
+            branch = "software\\gog.com\\galaxy"
+            omit = key == branch or key.startswith(branch + "\\")
+        if not omit:
+            output.append(line)
+    return "".join(output)
+
+
+def clean_galaxy_registry(opened: OpenPrefix, *, verify: bool = False) -> None:
+    for name in ("user.reg", "userdef.reg"):
+        try:
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=opened.prefix_fd)
+        except FileNotFoundError:
+            continue
+        try:
+            pinned = os.fstat(descriptor)
+            if not stat.S_ISREG(pinned.st_mode) or pinned.st_nlink != 1 or pinned.st_size > 16 * 1024 * 1024:
+                raise SystemExit("untrusted Wine user registry")
+            with os.fdopen(os.dup(descriptor), "r", encoding="utf-8", newline="") as reader:
+                original = reader.read()
+            clean = registry_without_galaxy(original)
+            if clean == original:
+                continue
+            if verify:
+                raise SystemExit("Galaxy user registry state remains in template")
+            temporary = ".dpad-clean-registry-" + secrets.token_hex(12)
+            writer = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=opened.prefix_fd)
+            try:
+                with os.fdopen(writer, "w", encoding="utf-8", newline="") as handle:
+                    os.fchown(handle.fileno(), pinned.st_uid, pinned.st_gid)
+                    handle.write(clean)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if not same_identity(pinned, lstat_at(opened.prefix_fd, name)):
+                    raise SystemExit("Wine user registry changed during sanitization")
+                os.replace(temporary, name, src_dir_fd=opened.prefix_fd, dst_dir_fd=opened.prefix_fd)
+                os.fsync(opened.prefix_fd)
+            finally:
+                try:
+                    os.unlink(temporary, dir_fd=opened.prefix_fd)
+                except FileNotFoundError:
+                    pass
+        finally:
+            os.close(descriptor)
+
+
 def sanitize_open(opened: OpenPrefix) -> None:
+    clean_galaxy_registry(opened)
     for setup in SETUP_DIRS:
         remove_entry(opened.drive_fd, setup)
     for _name, user_fd, _pinned in opened.users:
@@ -391,6 +472,7 @@ def sanitize(prefix: Path) -> None:
     try:
         sanitize_open(opened)
         verify_open(opened)
+        clean_galaxy_registry(opened, verify=True)
     finally:
         opened.close()
 
@@ -399,6 +481,7 @@ def verify_clean(prefix: Path) -> None:
     opened = open_prefix(prefix)
     try:
         verify_open(opened)
+        clean_galaxy_registry(opened, verify=True)
     finally:
         opened.close()
 
@@ -416,6 +499,7 @@ def main() -> None:
     try:
         sanitize_open(opened)
         verify_open(opened)
+        clean_galaxy_registry(opened, verify=True)
     finally:
         opened.close()
     print("STORE_PREFIX_SANITIZED")
