@@ -26,6 +26,13 @@ paid VM has been performed in this local qualification session.
 
 ## Fixes and actual behavior checks
 
+- The real five-prefix identity check exposed template root mode `0755` being
+  copied into the EA, Battle.net and Ubisoft private prefixes. Cloning now
+  keeps the copied payload inside a private staging envelope and publishes its
+  root as `0700`. These three wrappers also repair the mode of an existing
+  user-owned prefix before starting Wine and create new files with umask `077`.
+  The regression gate uses an actual permissive template and preserves a
+  non-empty prefix while testing each wrapper's permission repair.
 - EA's installer registered a legacy `EABackgroundService.exe` path although
   its installed binary lives in a versioned directory. A fresh prefix exposed
   error 2 and the "Background services crashed" dialog. The wrapper now picks

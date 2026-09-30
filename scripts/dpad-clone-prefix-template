@@ -87,29 +87,34 @@ def main() -> None:
         if not candidate.is_file():
             raise SystemExit(f"required template executable must be regular: {relative}")
     stage = Path(tempfile.mkdtemp(prefix=f".{destination.name}.dpad-stage-", dir=destination.parent))
+    # copytree copies the template root's permissions too. Keep its payload
+    # behind a separate private staging directory until publication, then
+    # publish a private root regardless of the installation template's mode.
+    payload = stage / "prefix"
     helper_dir = Path(__file__).resolve().parent
     try:
         def ignore_marker(directory: str, names: list[str]) -> set[str]:
             return {MARKER} if Path(directory).resolve() == template and MARKER in names else set()
 
-        shutil.copytree(template, stage, dirs_exist_ok=True, symlinks=True, ignore=ignore_marker)
-        if (stage / MARKER).exists() or (stage / MARKER).is_symlink():
+        shutil.copytree(template, payload, symlinks=True, ignore=ignore_marker)
+        payload.chmod(0o700)
+        if (payload / MARKER).exists() or (payload / MARKER).is_symlink():
             raise RuntimeError("template marker was copied before finalization")
         for relative in required:
             subprocess.run(
-                [str(helper_dir / "dpad-verify-windows-binary"), "--pe-only", str(stage / relative)],
+                [str(helper_dir / "dpad-verify-windows-binary"), "--pe-only", str(payload / relative)],
                 check=True,
             )
-        subprocess.run([str(helper_dir / "dpad-randomize-prefix-id"), str(stage)], check=True)
-        marker = stage / MARKER
+        subprocess.run([str(helper_dir / "dpad-randomize-prefix-id"), str(payload)], check=True)
+        marker = payload / MARKER
         marker.touch(mode=0o600, exist_ok=False)
         marker_fd = os.open(marker, os.O_RDONLY)
         try:
             os.fsync(marker_fd)
         finally:
             os.close(marker_fd)
-        fsync_tree(stage)
-        os.rename(stage, destination)
+        fsync_tree(payload)
+        os.rename(payload, destination)
         parent_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(parent_fd)

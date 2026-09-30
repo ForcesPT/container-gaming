@@ -29,6 +29,7 @@
 #   DISPLAY=:0  WAYLAND_DISPLAY  XDG_RUNTIME_DIR  PULSE_SERVER  HOME  USER
 # Logs: /tmp/ea-launch.log (+ UMU_LOG=1 / PROTON_LOG=1 for verbose).
 set -u
+umask 077
 
 LOG=/tmp/ea-launch.log
 echo "[ea-launch] $(date -Is) start (HOME=${HOME:-} DISPLAY=${DISPLAY:-})" >> "$LOG"
@@ -43,6 +44,10 @@ if ! mkdir -p -- "$PREFIX" 2>/dev/null || ! PREFIX="$(realpath -e -- "$PREFIX")"
     exit 1
 fi
 export WINEPREFIX="$PREFIX"
+if ! test -O "$PREFIX" || ! chmod 700 -- "$PREFIX"; then
+    echo '[ea-launch] FATAL: Wine prefix must be private and owned by this user' >&2
+    exit 1
+fi
 
 # GE-Proton11-3 — same as battlenet-launch. Bundles the NVIDIA compat libs
 # (NVAPI/CUDA/NVENC/NVML) + umu.exe. EA App runs via Xwayland

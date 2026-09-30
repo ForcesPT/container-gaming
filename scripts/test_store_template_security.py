@@ -525,6 +525,7 @@ with tempfile.TemporaryDirectory() as temporary:
 
     template = root / "template"
     template.mkdir()
+    template.chmod(0o755)
     (template / "system.reg").write_text(
         f'WINE REGISTRY Version 2\n"MachineGuid"="{PLACEHOLDER}"\n', encoding="ascii"
     )
@@ -595,6 +596,8 @@ with tempfile.TemporaryDirectory() as temporary:
     run(str(CLONER), str(template), str(destination), "--required", "drive_c/client.exe")
     if not (destination / ".dpad-preinstalled").is_file():
         raise SystemExit("atomic clone did not create final marker")
+    if destination.stat().st_mode & 0o777 != 0o700:
+        raise SystemExit("atomic clone exposed private state through template root permissions")
     registry = (destination / "system.reg").read_text(encoding="ascii")
     match = re.search(r'"MachineGuid"="([^"]+)"', registry)
     if not match or match.group(1) == PLACEHOLDER or uuid.UUID(match.group(1)).int == 0:
@@ -610,8 +613,27 @@ with tempfile.TemporaryDirectory() as temporary:
     if result.returncode != 3 or keep.read_text(encoding="utf-8") != "preserve":
         raise SystemExit("atomic clone did not preserve a non-empty existing prefix")
 
+    # A previously created prefix must become private without reinstalling or
+    # modifying its state. Stop at the intentionally absent runner, so this
+    # fixture cannot start a store or account flow.
+    for launcher in ("ea-launch", "battlenet-launch", "ubisoft-launch"):
+        prefix = root / f"{launcher}-existing"
+        prefix.mkdir(mode=0o755)
+        prefix.chmod(0o755)
+        saved = prefix / "existing-user-state"
+        saved.write_text("preserve", encoding="utf-8")
+        result = subprocess.run(
+            ["bash", str(SCRIPTS / launcher)],
+            env=dict(os.environ, HOME=str(root / "runner-unavailable"), WINEPREFIX=str(prefix)),
+            text=True, capture_output=True,
+        )
+        if (result.returncode == 0 or "GE-Proton" not in result.stderr
+                or prefix.stat().st_mode & 0o777 != 0o700
+                or saved.read_text(encoding="utf-8") != "preserve"):
+            raise SystemExit(f"{launcher} did not preserve and privatize an existing prefix")
+
 cloner_source = CLONER.read_text(encoding="utf-8")
-if "fsync_tree(stage)" not in cloner_source or "os.fsync(parent_fd)" not in cloner_source:
+if "fsync_tree(payload)" not in cloner_source or "os.fsync(parent_fd)" not in cloner_source:
     raise SystemExit("atomic cloner does not durably fsync payload tree and parent directory")
 
 for launcher, installed, publisher in (

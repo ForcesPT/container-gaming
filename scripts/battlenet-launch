@@ -51,6 +51,7 @@
 # We set WINEPREFIX + PROTONPATH + STORE + GAMEID ourselves. Logs:
 # /tmp/battlenet-launch.log (+ UMU_LOG=1 / PROTON_LOG=1 for verbose).
 set -u
+umask 077
 
 LOG=/tmp/battlenet-launch.log
 echo "[battlenet-launch] $(date -Is) start (HOME=${HOME:-} DISPLAY=${DISPLAY:-})" >> "$LOG"
@@ -65,6 +66,10 @@ if ! mkdir -p -- "$PREFIX" 2>/dev/null || ! PREFIX="$(realpath -e -- "$PREFIX")"
     exit 1
 fi
 export WINEPREFIX="$PREFIX"
+if ! test -O "$PREFIX" || ! chmod 700 -- "$PREFIX"; then
+    echo '[battlenet-launch] FATAL: Wine prefix must be private and owned by this user' >&2
+    exit 1
+fi
 
 # GE-Proton11-3 — the Battle.net white-screen fix is in (GE-Proton11-2
 # changelog: "Battle.net: fixed Wine Wayland white-screen behavior" +
