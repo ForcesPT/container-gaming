@@ -20,7 +20,7 @@ from dpad_epic_overlay import prepare
 with tempfile.TemporaryDirectory() as temp:
     root = Path(temp)
     binding, capsule, digest, source, _, _ = fixture(root)
-    original = (source / 'Game.exe').read_bytes()
+    original_game = (source / 'Game.exe').read_bytes()
     (source / 'Game.exe').chmod(0o444)
     source.chmod(0o555)
     root.chmod(0o755)
@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory() as temp:
         # Exercise packaged entry points with only the Electron picker replaced.
         # Real template cloning, prefix selection and registration remain intact.
         picker = Path('/opt/dpadcloud/launcher/dpad-launcher')
-        original, mode = picker.read_bytes(), picker.stat().st_mode
+        original_picker, mode = picker.read_bytes(), picker.stat().st_mode
         marker = Path('/tmp/dpad-test-picker-started')
         picker.write_text('#!/bin/bash\ntouch /tmp/dpad-test-picker-started\n')
         picker.chmod(0o755)
@@ -75,7 +75,7 @@ with tempfile.TemporaryDirectory() as temp:
             assert len([row for row in inventory['InstallationList'] if row['AppName'] == 'FixtureGame']) == 1
             print('PACKAGED_EPIC_PREPARE_REGISTER_REPLAY_OK mode=' + ('volume' if env.get('DPAD_VOLUME_MOUNT') else 'home'))
         finally:
-            picker.write_bytes(original); picker.chmod(mode)
+            picker.write_bytes(original_picker); picker.chmod(mode)
     else:
         result = subprocess.run(['runuser', '-u', 'dpad', '--', '/usr/bin/python3', '-I',
                                  str(Path(__file__).with_name('dpad_epic_installation.py')), 'register'],
@@ -85,7 +85,7 @@ with tempfile.TemporaryDirectory() as temp:
     code = "from pathlib import Path; p=Path('/opt/dpad-instant/official-game'); (p/'Game.exe.new').write_bytes(b'private replacement'); (p/'Game.exe.new').replace(p/'Game.exe'); (p/'private-save').write_text('session-only')"
     subprocess.run(['runuser', '-u', 'dpad', '--', 'python3', '-I', '-c', code], check=True)
     assert (merged / 'Game.exe').read_bytes() == b'private replacement'
-    assert (source / 'Game.exe').read_bytes() == original
+    assert (source / 'Game.exe').read_bytes() == original_game
     assert stat.S_IMODE(source.stat().st_mode) == 0o555
     assert stat.S_IMODE((source / 'Game.exe').stat().st_mode) == 0o444
     assert sorted(p.name for p in source.iterdir()) == ['Game.exe']
