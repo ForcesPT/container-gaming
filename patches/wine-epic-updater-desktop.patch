@@ -1,0 +1,22 @@
+diff --git a/programs/services/services.c b/programs/services/services.c
+--- a/programs/services/services.c
++++ b/programs/services/services.c
+@@ -1024,7 +1024,17 @@
+     ZeroMemory(&si, sizeof(STARTUPINFOW));
+     si.cb = sizeof(STARTUPINFOW);
+     if (!(service_entry->config.dwServiceType & SERVICE_INTERACTIVE_PROCESS)
+-        && service_entry->config.lpDisplayName && wcscmp(service_entry->config.lpDisplayName, L"Arc Service"))
++        && service_entry->config.lpDisplayName && wcscmp(service_entry->config.lpDisplayName, L"Arc Service")
++        /* Epic's D3D11 updater needs the desktop Vulkan surface path. Keep
++         * its vendor service configuration unchanged and scope the exception
++         * to the installed service name, display name and exact executable. */
++        && (wcscmp(service_entry->name, L"EpicGamesUpdater")
++            || wcscmp(service_entry->config.lpDisplayName, L"Epic Games Updater")
++            || !service_entry->config.lpBinaryPathName
++            || (wcsicmp(service_entry->config.lpBinaryPathName,
++                        L"C:\\Program Files\\Epic Games\\Launcher\\Portal\\Binaries\\Win64\\EpicGamesUpdater.exe")
++                && wcsicmp(service_entry->config.lpBinaryPathName,
++                           L"\"C:\\Program Files\\Epic Games\\Launcher\\Portal\\Binaries\\Win64\\EpicGamesUpdater.exe\""))))
+     {
+         si.lpDesktop = (WCHAR *)L"__wineservice_winstation\\Default";
+     }

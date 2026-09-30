@@ -1140,3 +1140,31 @@ actual installed Faugus hook retaining a detached marked child until it exited
 before its quiet-period cleanup (30 seconds total). This is a process identity
 fix, not a claim that the updater/client graphics handoff is automatic.
 No image publication, production change or new cloud VM occurred.
+
+## Updater service graphics proof — 2026-09-30
+
+The owner's request to establish stronger evidence before another paid login
+test was handled with account-free local diagnostics. Removing just Mesa's
+headless Vulkan surface capability reproduced `wine_vkCreateInstance res=-7`
+in a noninteractive Wine service while desktop D3D11 continued working. A
+targeted pinned-Wine desktop exception for Epic's exact updater service made
+that fixture pass; unrelated services retained the original behavior.
+
+The actual official MSI and Faugus/UMU update then completed locally with DXVK:
+`selfupdateinstall` exited 0, the service/application reported success, the
+current launcher manifest existed, and the client reported up to date. Epic's
+service type remained `0x10`. This removes the need for a broad service setting
+change in the candidate. An earlier interactive-service experiment returned
+installation-query code 4 and was discarded.
+
+Local Xvfb caused a separate zero-refresh DXGI divide-by-zero; a disposable
+Labwc/Xwayland software display removed that diagnostic obstacle. Production
+Sway remains unchanged. The updated client logged a handled EOS minimum-version
+warning after its installer reported `spawn UNKNOWN`; sign-in UI, account
+operation, GPU extension capability and reopen acceptance are not claimed.
+
+Source patch, narrow packaging recipe, reproducible service fixtures, exact
+limitations and remaining acceptance are in
+[EPIC-SERVICE-DIAGNOSTICS.md](EPIC-SERVICE-DIAGNOSTICS.md). All probe containers
+and temporary prefixes were removed. No publication, production change or paid
+VM occurred.

@@ -1,5 +1,19 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-30 local updater service graphics evidence.** Account-free controlled
+> probes reproduced the GPU's Wine Vulkan `res=-7` by removing only the headless
+> surface capability. A pinned Wine patch gives only the exact official Epic
+> updater service desktop graphics, preserving its vendor service type. The
+> matching fixture passed; an unrelated service remained unchanged. A real
+> Faugus/UMU installation with patched Wine and software Vulkan completed its
+> official update: service child exit 0, current manifest present, vendor
+> up-to-date marker. The full client also logged an EOS prerequisite failure
+> (`spawn UNKNOWN`, `MinimumVersionNotSatisfied`); this is not qualified login.
+> No publication, deployment or paid VM occurred. The actual NVIDIA extension
+> list and GPU sign-in/reopen behavior still require verification. See
+> [EPIC-SERVICE-DIAGNOSTICS.md](EPIC-SERVICE-DIAGNOSTICS.md). Do not repeat the old
+> renderer-switching test or promote this candidate as proven login.
+
 > **2026-09-30 local process-identity correction.** Docker is responding again.
 > Two account-free, bounded local probes completed Epic's silent MSI install;
 > the updater still repeated child exit `777006`, even while reporting
