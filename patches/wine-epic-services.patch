@@ -1,0 +1,151 @@
+diff --git a/programs/services/services.c b/programs/services/services.c
+index b76e8de..847633b 100644
+--- a/programs/services/services.c
++++ b/programs/services/services.c
+@@ -909,6 +909,80 @@ error:
+     return ERROR_NOT_ENOUGH_SERVER_MEMORY;
+ }
+ 
++
++/* Wine currently starts user-mode services with the caller's token. EOS
++ * distinguishes its main service from its per-user starter using LocalSystem
++ * identity. Restore that identity only for this exact vendor service. The
++ * Unix account and prefix boundary remain unchanged. */
++static BOOL is_epic_eos_system_service(const struct service_entry *service)
++{
++    const WCHAR *binary = service->config.lpBinaryPathName;
++    return !wcscmp(service->name, L"EpicOnlineServices")
++        && service->config.dwServiceType == SERVICE_WIN32_OWN_PROCESS
++        && service->config.lpDisplayName
++        && !wcscmp(service->config.lpDisplayName, L"Epic Online Services")
++        && service->config.lpServiceStartName
++        && !wcsicmp(service->config.lpServiceStartName, L"LocalSystem")
++        && binary
++        && (!wcsicmp(binary, L"C:\\Program Files (x86)\\Epic Games\\Epic Online Services\\service\\EpicOnlineServicesHost.exe")
++            || !wcsicmp(binary, L"\"C:\\Program Files (x86)\\Epic Games\\Epic Online Services\\service\\EpicOnlineServicesHost.exe\""));
++}
++
++static void *epic_token_information(HANDLE token, TOKEN_INFORMATION_CLASS type)
++{
++    DWORD size = 0;
++    void *data;
++    GetTokenInformation(token, type, NULL, 0, &size);
++    if (!size || !(data = malloc(size))) return NULL;
++    if (!GetTokenInformation(token, type, data, size, &size))
++    {
++        free(data);
++        return NULL;
++    }
++    return data;
++}
++
++static DWORD create_epic_system_token(HANDLE *result)
++{
++    HANDLE current;
++    BYTE sid[SECURITY_MAX_SID_SIZE];
++    DWORD size = sizeof(sid), err = ERROR_NOT_ENOUGH_MEMORY;
++    TOKEN_USER user = {{sid, 0}};
++    TOKEN_OWNER owner = {sid};
++    TOKEN_GROUPS *groups;
++    TOKEN_PRIVILEGES *privileges;
++    TOKEN_PRIMARY_GROUP *primary_group;
++    TOKEN_DEFAULT_DACL *dacl;
++    TOKEN_SOURCE source = {{'W','i','n','e','E','O','S',0}, {0,0}};
++    LUID luid = {0x3e7, 0};
++    LARGE_INTEGER expiration;
++    OBJECT_ATTRIBUTES attributes;
++    NTSTATUS status;
++
++    *result = NULL;
++    if (!CreateWellKnownSid(WinLocalSystemSid, NULL, sid, &size)) return GetLastError();
++    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &current)) return GetLastError();
++    groups = epic_token_information(current, TokenGroups);
++    privileges = epic_token_information(current, TokenPrivileges);
++    primary_group = epic_token_information(current, TokenPrimaryGroup);
++    dacl = epic_token_information(current, TokenDefaultDacl);
++    if (groups && privileges && primary_group && dacl)
++    {
++        expiration.QuadPart = MAXLONGLONG;
++        InitializeObjectAttributes(&attributes, NULL, 0, NULL, NULL);
++        status = NtCreateToken(result, TOKEN_ALL_ACCESS, &attributes, TokenPrimary,
++                               &luid, &expiration, &user, groups, privileges,
++                               &owner, primary_group, dacl, &source);
++        err = RtlNtStatusToDosError(status);
++    }
++    free(groups);
++    free(privileges);
++    free(primary_group);
++    free(dacl);
++    CloseHandle(current);
++    return err;
++}
++
+ static DWORD service_start_process(struct service_entry *service_entry, struct process_entry **new_process,
+                                    BOOL *shared_process)
+ {
+@@ -916,7 +990,8 @@ static DWORD service_start_process(struct service_entry *service_entry, struct p
+     PROCESS_INFORMATION pi;
+     STARTUPINFOW si;
+     BOOL is_wow64 = FALSE;
+-    HANDLE token;
++    HANDLE token, epic_token = NULL;
++    BOOL epic_system_service;
+     WCHAR *path;
+     DWORD err;
+     BOOL r;
+@@ -1012,10 +1087,19 @@ found:
+         return ERROR_SUCCESS;
+     }
+ 
++    epic_system_service = is_epic_eos_system_service(service_entry);
++    if (epic_system_service && (err = create_epic_system_token(&epic_token)))
++    {
++        service_unlock(service_entry);
++        free(path);
++        return err;
++    }
++
+     if ((err = process_create(service_get_pipe_name(), &process)))
+     {
+         WINE_ERR("failed to create process object for %s, error = %lu\n",
+                  wine_dbgstr_w(service_entry->name), err);
++        if (epic_token) CloseHandle(epic_token);
+         service_unlock(service_entry);
+         free(path);
+         return err;
+@@ -1024,7 +1108,17 @@ found:
+     ZeroMemory(&si, sizeof(STARTUPINFOW));
+     si.cb = sizeof(STARTUPINFOW);
+     if (!(service_entry->config.dwServiceType & SERVICE_INTERACTIVE_PROCESS)
+-        && service_entry->config.lpDisplayName && wcscmp(service_entry->config.lpDisplayName, L"Arc Service"))
++        && service_entry->config.lpDisplayName && wcscmp(service_entry->config.lpDisplayName, L"Arc Service")
++        /* Epic's D3D11 updater needs the desktop Vulkan surface path. Keep
++         * its vendor service configuration unchanged and scope the exception
++         * to the installed service name, display name and exact executable. */
++        && (wcscmp(service_entry->name, L"EpicGamesUpdater")
++            || wcscmp(service_entry->config.lpDisplayName, L"Epic Games Updater")
++            || !service_entry->config.lpBinaryPathName
++            || (wcsicmp(service_entry->config.lpBinaryPathName,
++                        L"C:\\Program Files\\Epic Games\\Launcher\\Portal\\Binaries\\Win64\\EpicGamesUpdater.exe")
++                && wcsicmp(service_entry->config.lpBinaryPathName,
++                           L"\"C:\\Program Files\\Epic Games\\Launcher\\Portal\\Binaries\\Win64\\EpicGamesUpdater.exe\""))))
+     {
+         si.lpDesktop = (WCHAR *)L"__wineservice_winstation\\Default";
+     }
+@@ -1071,6 +1165,16 @@ found:
+     process->use_count++;
+     service_unlock(service_entry);
+ 
++    if (epic_system_service)
++    {
++        r = CreateProcessAsUserW(epic_token, NULL, path, NULL, NULL, FALSE,
++                                 CREATE_UNICODE_ENVIRONMENT | DETACHED_PROCESS,
++                                 environment, NULL, &si, &pi);
++        err = r ? ERROR_SUCCESS : GetLastError();
++        CloseHandle(epic_token);
++        if (!r) SetLastError(err);
++    }
++    else
+     r = CreateProcessW(NULL, path, NULL, NULL, FALSE, CREATE_UNICODE_ENVIRONMENT | DETACHED_PROCESS, environment, NULL, &si, &pi);
+     free(path);
+     if (!r)

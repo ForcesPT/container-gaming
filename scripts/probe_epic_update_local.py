@@ -74,6 +74,42 @@ def collect_runtime_errors(root):
     return stages[-30:]
 
 
+def online_services_evidence(prefix, launched_ns=0):
+    """Vendor pre-login markers only; never emit account or environment values."""
+    evidence = dict(installed_host=False, installer_success=False,
+                    system_service_child=False, service_update_success=False,
+                    main_service_ready=False, host_success=False,
+                    missing_session_guid=False, starter_init_error=False,
+                    minimum_version_not_satisfied=False)
+    evidence['installed_host'] = (prefix / 'drive_c/Program Files (x86)/Epic Games/'
+                                  'Epic Online Services/service/EpicOnlineServicesHost.exe').is_file()
+    for path in prefix.rglob('*.log'):
+        if path.is_symlink() or not path.is_file():
+            continue
+        info = path.stat()
+        if info.st_size > 8 * 1024 * 1024 or info.st_mtime_ns < launched_ns:
+            continue
+        text = path.read_text(errors='replace')
+        evidence['installer_success'] |= 'Epic Online Services installer completed with return code: 0' in text
+        evidence['minimum_version_not_satisfied'] |= 'MinimumVersionNotSatisfied' in text
+        if 'EpicOnlineServices' not in str(path):
+            continue
+        evidence['system_service_child'] |= bool(re.search(r'"isSystemUser"\s*:\s*true', text))
+        evidence['service_update_success'] |= "Outcome: 'DC_UPDATE_SUCCESS'" in text
+        evidence['main_service_ready'] |= 'MAINSERVICE_READY' in text
+        evidence['host_success'] |= ('EpicOnlineServicesHost-' in path.name
+                                     and 'Application finished with code 0' in text)
+        evidence['missing_session_guid'] |= 'EOS_SESSION_GUID environment variable is required' in text
+        evidence['starter_init_error'] |= 'STARTER_INIT_ERROR' in text
+    evidence['local_eos_initialization_passed'] = (
+        all(evidence[k] for k in ('installed_host', 'installer_success', 'system_service_child',
+                                  'service_update_success', 'main_service_ready', 'host_success'))
+        and not any(evidence[k] for k in ('missing_session_guid', 'starter_init_error',
+                                         'minimum_version_not_satisfied')))
+    evidence['gpu_login_qualified'] = False
+    return evidence
+
+
 def epic_service_configuration(prefix):
     """Fresh account-free prefix only: whitelist service configuration fields."""
     registry = prefix / 'system.reg'
@@ -168,6 +204,8 @@ def main():
     parser.add_argument('--interactive-service', action='store_true')
     parser.add_argument('--direct-proton', action='store_true', help='diagnostic comparison outside the Steam runtime; not production acceptance')
     parser.add_argument('--epic-service-identity', action='store_true', help='fake graphics service at the exact Epic identity, fresh prefix only')
+    parser.add_argument('--hold-prefix-seconds', type=int, default=0,
+                        help='retain the account-free temporary prefix for bounded same-container diagnosis')
     args = parser.parse_args()
     if (args.without_headless or args.interactive_service or args.direct_proton or args.epic_service_identity) and not args.graphics_service_probe:
         parser.error('service comparison options require --graphics-service-probe')
@@ -175,6 +213,8 @@ def main():
         parser.error('the fault ICD is validated only outside the Steam runtime; use --direct-proton')
     if not 30 <= args.observe_seconds <= 180:
         raise SystemExit('observation must be between 30 and 180 seconds')
+    if not 0 <= args.hold_prefix_seconds <= 1800:
+        parser.error('temporary prefix hold must be between 0 and 1800 seconds')
     if (os.geteuid() == 0 or not os.environ.get('DISPLAY')
             or not Path('/.dockerenv').is_file()):
         raise SystemExit('run as the image user under Xvfb in a disposable container')
@@ -319,11 +359,19 @@ def main():
                                   'runtime_errors': collect_runtime_errors(root)}), flush=True)
                 print(json.dumps({'stage': 'official_update_evidence',
                                   **official_update_evidence(prefix, launched_ns)}), flush=True)
+                print(json.dumps({'stage': 'online_services_evidence',
+                                  **online_services_evidence(prefix, launched_ns)}), flush=True)
             finally:
                 if child.poll() is None:
                     stop_probe_tree(child)
         print(json.dumps({'stage': 'epic_service_configuration_final',
                           'services': epic_service_configuration(prefix)}), flush=True)
+        if args.hold_prefix_seconds:
+            print(json.dumps({'stage': 'account_free_prefix_diagnostic_hold',
+                              'seconds': args.hold_prefix_seconds, 'prefix': str(prefix)}), flush=True)
+            hold_deadline = time.monotonic() + args.hold_prefix_seconds
+            while time.monotonic() < hold_deadline and not (root / 'end-diagnostic-hold').exists():
+                time.sleep(1)
         print('ACCOUNT_FREE_EPIC_UPDATE_PROBE_COMPLETE', flush=True)
 
 

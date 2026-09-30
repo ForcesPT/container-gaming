@@ -1,5 +1,21 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-30 local EOS service identity correction.** The official installer
+> and DXVK update now complete in a fresh account-free prefix. Wine started
+> Epic's LocalSystem Online Services child with the interactive user's token;
+> it selected the wrong role and exited 91 because `EOS_SESSION_GUID` was absent.
+> A pinned, exact-service Wine patch supplies a Windows LocalSystem token while
+> leaving the Linux UID and private prefix unchanged. Real EOS now reports
+> `isSystemUser: true`, completes its managed update, and exits 0; the previous
+> GUID and prerequisite errors are absent. The official sign-in page renders
+> and accepts pointer focus and dummy keyboard input. Six native SCM cases prove
+> that only the exact target receives the changed identity. A local minimized
+> pre-login window experiment did not qualify hidden-window restoration; an
+> experimental restore-verb change was reverted. No account sign-in, GPU acceptance,
+> publication, production deployment or paid VM occurred. See
+> [EPIC-SERVICE-DIAGNOSTICS.md](EPIC-SERVICE-DIAGNOSTICS.md) for the final local
+> package receipt and remaining owner/GPU acceptance. Public Heroic is unchanged.
+
 > **2026-09-30 local updater service graphics evidence.** Account-free controlled
 > probes reproduced the GPU's Wine Vulkan `res=-7` by removing only the headless
 > surface capability. A pinned Wine patch gives only the exact official Epic

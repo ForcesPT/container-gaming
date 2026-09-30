@@ -1,5 +1,16 @@
 # Faugus official Epic candidate — 2026-09-27
 
+> **2026-09-30 local service candidate.** Fresh official MSI, automatic DXVK
+> updating and EOS initialization passed without an account or graphics
+> switching. The official sign-in page renders and accepts pointer focus and
+> dummy typing. Wine's exact EOS LocalSystem service now supplies the correct
+> Windows identity; five nonmatching service controls stay unchanged. The
+> existing restore wrapper is retained after an unsuccessful minimized-window
+> experiment. Production Sway hidden-window behavior and
+> signed-in GPU operation remain unqualified. The private local package and
+> acceptance details are in [EPIC-SERVICE-DIAGNOSTICS.md](EPIC-SERVICE-DIAGNOSTICS.md).
+> No publication, deployment or paid VM occurred; public Heroic is unchanged.
+
 ## Scope
 
 Separate Dockerfile.faugus extends the exact accepted gaming runtime digest

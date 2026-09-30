@@ -151,3 +151,101 @@ window without manual renderer changes. Only then should the owner sign in.
 Require responsive Library/Store, stable post-verification operation and two
 clean reopen checks. Cross-VM login persistence and ABZÛ installation metadata
 remain separate unverified work.
+
+## EOS service identity: 2026-09-30 local follow-up
+
+The earlier `spawn UNKNOWN` result was not the persistent failure in this run.
+The current bundled installer installed EOS 5.8.0 successfully. The installed
+service had name `EpicOnlineServices`, display `Epic Online Services`, type
+`0x10`, account `LocalSystem` and the exact default host path. Its Windows
+service child nevertheless reported `isSystemUser: false`, selected `starter`,
+and exited 91 with `STARTER_INIT_ERROR` / missing `EOS_SESSION_GUID`.
+
+Inspection of pinned Wine's `service_start_process` showed ordinary
+`CreateProcessW` regardless of the configured LocalSystem account. A disposable
+native token proof confirmed `NtCreateToken` plus `CreateProcessAsUserW` could
+provide the System SID without changing the Linux user. The combined patch
+`patches/wine-epic-services.patch` retains the earlier updater desktop exception
+and adds this identity change only when all five EOS checks match: service
+name, display, exact quoted/unquoted host binary, own-process service type and
+LocalSystem account. Failure to create its token fails the start rather than
+silently falling back to the wrong identity. Other services keep Wine's current
+behavior. No invented GUID, development-mode EOS, credential bypass or modified
+Epic executable is used. This is a Wine compatibility change, not a claim of
+complete native Windows service-session emulation.
+
+The installed prefix contains a copied `services.exe`, not a link to the runner
+payload. An initial hot-copy into the runner alone did not update the retained
+prefix; its results do not qualify the patch. The actual acceptance used a
+newly built local image and a **fresh** prefix, whose copied service PE SHA256
+was `05f9926b559e14df0abcc9a479d62dff7ce89145770b87ddf138ceac5fbd8826`.
+
+That fresh Faugus/UMU/DXVK run completed the official launcher update and EOS
+installer automatically. Vendor evidence showed:
+
+- EOS installer return code 0 and the installed service host present.
+- System service child metadata `isSystemUser: true`.
+- `DC_UPDATE_SUCCESS`, main-service readiness, and service-host exit 0.
+- No missing-GUID, starter-initialization or minimum-version failure.
+- Current launcher manifest, successful update commandlet and up-to-date marker.
+- A visible official sign-in page, without changing graphics backends.
+
+The page accepted a pointer click in its email field and a dummy
+`qa-input-check` string; the text was cleared and never submitted. These are
+headless local Labwc/software-Vulkan results. No account was used. Screenshots
+are local QA artifacts under `test-results`, not files included in the image.
+
+The native SCM fixture `scripts/epic_service_identity_probe.c` creates a fake
+executable **only in a fresh test prefix**. It refuses to overwrite an installed
+host. Exact target case 0 reports System identity; five independent controls
+(wrong name, display, binary, account or service type) report ordinary identity.
+The fixture and its six JSON reports passed. Build it in the pinned compiler:
+
+```text
+x86_64-w64-mingw32-gcc -Wall -Wextra -Werror -O2 \
+  /workspace/scripts/epic_service_identity_probe.c \
+  -o /workspace/test-results/epic_service_identity_probe.exe -ladvapi32
+```
+
+Run `scripts/run_epic_service_identity_probe.sh` via `xvfb-run -a /bin/bash` as
+`dpad` in an `--rm` candidate container with a read-only workspace mount and
+120-second outer timeout. It asserts all six reports and removes its prefix.
+The fake executable is never packaged into the gaming image.
+
+The real-updater probe now reports EOS evidence as booleans without exposing
+environment values or account material. Optional `--hold-prefix-seconds` is
+bounded to 1,800 seconds for account-free diagnostics only. Increase the outer
+container timeout accordingly; signal completion with the exact temporary
+root's `end-diagnostic-hold` file. Always use `--rm` and no user state mounts.
+
+### Restore dispatch
+
+UMU defaults to Proton's `waitforexitandrun`, which waits for the Wine server
+before invoking the client. A second-instance restore needs `run` instead.
+An experimental `PROTON_VERB=run` change did not qualify restoration of the
+minimized pre-login window and was reverted. The existing UID, private-prefix,
+marker, exact-executable and updater exclusion checks remain, and their six
+tests passed. Ordinary fresh launches and restore behavior remain as in the
+reviewed base. This candidate changes only Wine's service implementation.
+
+Minimizing the pre-login window under local Labwc did not automatically reveal
+it through second-instance dispatch; compositor focus restored it. This does
+not qualify hidden-window restoration in production Sway. The GPU test must
+verify the actual picker action after account login. Do not claim the local
+minimize experiment as a successful hidden-window acceptance.
+
+A clean local close/reopen reached sign-in again without a renderer change.
+An additional two-cycle assertion did not pass: the observed client did not
+exit within the 20-second close wait. Repeated close/reopen is therefore still
+unqualified. The bounded diagnostic container subsequently ended and was
+removed automatically. Do not describe this as two successful reopen checks.
+
+### Next GPU acceptance
+
+This candidate addresses the two concrete local startup failures. Publication
+and a new bounded VM require new owner authorization. Verify the immutable
+digest and NVIDIA ICD first. Require automatic fresh startup and EOS success
+without manual renderer changes, then owner sign-in, stable verification,
+responsive Store/Library and two signed-in picker reopen checks. Stop the test
+if those pre-login gates fail; do not repeat account login attempts. Shared
+ABZÛ installation metadata and cross-VM account persistence remain later work.

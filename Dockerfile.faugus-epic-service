@@ -3,10 +3,10 @@
 ARG EPIC_WINE_BUILDER
 ARG EPIC_RUNTIME_BASE
 FROM ${EPIC_WINE_BUILDER} AS service-builder
-COPY patches/wine-epic-updater-desktop.patch /tmp/epic-updater-desktop.patch
+COPY patches/wine-epic-services.patch /tmp/epic-services.patch
 RUN test "$(git -C /src/wine rev-parse HEAD)" = 1729f00e17e879f98f9df1f2bca86bc5d21a65df \
-    && git -C /src/wine apply --check /tmp/epic-updater-desktop.patch \
-    && git -C /src/wine apply /tmp/epic-updater-desktop.patch \
+    && git -C /src/wine apply --check /tmp/epic-services.patch \
+    && git -C /src/wine apply /tmp/epic-services.patch \
     && make -C /src/wine-build -j4 programs/services/x86_64-windows/services.exe
 
 FROM ${EPIC_RUNTIME_BASE}
@@ -17,6 +17,6 @@ LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
 COPY --from=service-builder /src/wine-build/programs/services/x86_64-windows/services.exe \
     /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34/files/lib/wine/x86_64-windows/services.exe
 COPY --from=service-builder /src/wine/programs/services/services.c /src/wine/LICENSE \
-    /src/wine/COPYING.LIB /tmp/epic-updater-desktop.patch /usr/share/doc/dpadplay/epic-service/
+    /src/wine/COPYING.LIB /tmp/epic-services.patch /usr/share/doc/dpadplay/epic-service/
 RUN chown dpad:dpad \
     /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34/files/lib/wine/x86_64-windows/services.exe
