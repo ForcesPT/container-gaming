@@ -130,6 +130,18 @@ arguments. Use immutable reviewed references before any publication. It checks
 the exact Wine source revision before applying and building the patch, and
 includes corresponding modified source and license files.
 
+Packaged locally from source `fcae0b1` as `dpadplay/faugus-epic-service:local`,
+image `sha256:94ec2a1002af15a65e2f88a11815ff21951b0f002409d42bd9330631f05b6b37`.
+Its qualification label is `official-epic-service-local-candidate`.
+The packaged PE SHA256 is
+`49254510115d8d913e898efedcd07b91a69ea755d9b981defc6f3afef15e303f`.
+It differs from the directly tested PE in four bytes only: the COFF build
+timestamp and PE checksum. After zeroing those two metadata fields, all bytes
+match. This verifies the packaged code without claiming a new GPU run. No push
+was performed. Docker's two default-FROM argument warnings reflect the explicit
+base-reference requirement; both supplied bases resolved to the reviewed local
+digests during this build.
+
 ## Remaining acceptance
 
 Do not promote or claim reliable login from these local results. A future,
