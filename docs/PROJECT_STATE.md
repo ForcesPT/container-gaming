@@ -1,5 +1,17 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-30 unattended recognition hardening, local only.** While owner
+> account tests wait, the official installation helper now serializes game
+> imports, preflights conflicts before creating game records and publishes
+> complete new files without overwriting existing records. Ten offline tests
+> passed, including concurrent two-game inventory preservation and injected
+> write failure; actual FUSE/non-root registration and unchanged shared-lower
+> storage passed again. See [OFFICIAL-EPIC-INSTALLATION.md](OFFICIAL-EPIC-INSTALLATION.md).
+> This source candidate does not establish ABZÛ recognition. The qualified
+> six-store image `d785c94` is unchanged; no registry push, deploy, account login
+> or cloud spend occurred. Owner sign-in and genuine installation metadata are
+> still needed for the next acceptance step.
+
 > **2026-09-30 local six-store window gates passed; private canary prepared.**
 > Steam, official Epic, GOG Galaxy, Battle.net, EA and Ubisoft sign-in windows,
 > dummy input and reopening passed on the assembled local runtime. EA's stale
