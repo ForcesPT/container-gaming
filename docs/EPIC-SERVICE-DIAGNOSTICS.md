@@ -249,3 +249,24 @@ without manual renderer changes, then owner sign-in, stable verification,
 responsive Store/Library and two signed-in picker reopen checks. Stop the test
 if those pre-login gates fail; do not repeat account login attempts. Shared
 ABZÛ installation metadata and cross-VM account persistence remain later work.
+
+### Final local package receipt
+
+- Source: `cc952c5c58a29a8984c7276229813ce8aa48bb9b`.
+- Local tag: `dpadplay/faugus-epic-eos:local`.
+- Image: `sha256:cc58f0f2fa167ba464a4c5634076d3e8720e07f890118692fa332a26ff27f4ff`.
+- Qualification: `official-epic-service-local-candidate`.
+- Packaged service PE: `05f9926b559e14df0abcc9a479d62dff7ce89145770b87ddf138ceac5fbd8826`.
+- Reviewed-base wrapper retained: SHA256 `c7946062f8a9e048f125b81f72aecee4526bfe5522b067dc750f010e61d508e4`.
+
+The packaged service PE exactly matches the fresh-prefix real-Epic run, not
+just a normalized comparison. All six native SCM reports passed again against
+this final image: case 0 System, cases 1–5 ordinary user. Source label and
+payload hashes were inspected. The source/patch/licenses are included in the
+image. Both account-free Epic diagnostic containers and the scope fixture were
+removed; no user state was attached. No push or paid resource was created.
+
+This is ready for a **focused GPU startup/login acceptance test**, not public
+promotion or a claim that repeated reopening already works. Publish only as a
+private canary after owner authorization. Check pre-login gates before asking
+for account input, and record reopening failures separately from startup.
