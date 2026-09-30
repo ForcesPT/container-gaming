@@ -68,6 +68,24 @@ class KeyboardLayoutTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported"):
             KEYBOARD.apply("not-a-layout", available)
 
+    def test_timeout_restores_saved_layout_and_removes_temporary_files(self):
+        available = KEYBOARD.layouts()
+        KEYBOARD.initialize()
+        original = KEYBOARD.CONFIG.read_bytes()
+        with mock.patch.object(KEYBOARD.subprocess, "run", side_effect=subprocess.TimeoutExpired('labwc', 5)):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                KEYBOARD.apply("pt", available)
+        self.assertEqual(KEYBOARD.CONFIG.read_bytes(), original)
+        self.assertEqual(KEYBOARD.current(available), "us")
+        self.assertEqual(list(KEYBOARD.CONFIG.parent.iterdir()), [KEYBOARD.CONFIG])
+
+    def test_missing_compositor_does_not_leave_a_new_layout_saved(self):
+        with mock.patch.object(KEYBOARD.subprocess, "run", side_effect=FileNotFoundError('labwc')):
+            with self.assertRaises(FileNotFoundError):
+                KEYBOARD.apply("pt", KEYBOARD.layouts())
+        self.assertFalse(KEYBOARD.CONFIG.exists())
+        self.assertEqual(list(KEYBOARD.CONFIG.parent.iterdir()), [])
+
 
 if __name__ == "__main__":
     unittest.main()

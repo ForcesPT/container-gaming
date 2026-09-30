@@ -77,6 +77,19 @@ def initialize() -> None:
             stream.write("XKB_DEFAULT_LAYOUT=us\n")
 
 
+def replace_config(parent: Path, data: bytes) -> None:
+    fd, name = tempfile.mkstemp(prefix=".keyboard-", dir=parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, CONFIG)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
 def apply(code: str, available: dict[str, str]) -> None:
     if code not in available:
         raise ValueError("unsupported keyboard layout")
@@ -86,24 +99,17 @@ def apply(code: str, available: dict[str, str]) -> None:
         raise ValueError("Labwc session is unavailable")
     parent = trusted_parent()
     old = CONFIG.read_bytes() if CONFIG.exists() else None
-    fd, name = tempfile.mkstemp(prefix=".keyboard-", dir=parent)
+    replace_config(parent, f"XKB_DEFAULT_LAYOUT={code}\n".encode("ascii"))
     try:
-        with os.fdopen(fd, "w", encoding="ascii") as stream:
-            stream.write(f"XKB_DEFAULT_LAYOUT={code}\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(name, CONFIG)
-        name = ""
         result = subprocess.run(["labwc", "--reconfigure"], capture_output=True, text=True, timeout=5)
         if result.returncode:
-            if old is None:
-                CONFIG.unlink()
-            else:
-                CONFIG.write_bytes(old)
             raise RuntimeError("Labwc refused the keyboard layout")
-    finally:
-        if name and os.path.exists(name):
-            os.unlink(name)
+    except (OSError, RuntimeError, subprocess.TimeoutExpired):
+        if old is None:
+            CONFIG.unlink()
+        else:
+            replace_config(parent, old)
+        raise
 
 
 def picker(available: dict[str, str]) -> None:

@@ -54,3 +54,20 @@ An interrupted import can be replayed because matching records are retained;
 this is not an all-files filesystem transaction.
 
 Fixtures are synthetic and do not prove Epic UI acceptance. Kernel overlay failed with a Docker writable upper layer, so this candidate uses FUSE. NFS-backed FUSE, genuine ABZÛ record compatibility, official-client recognition, game launch, update behavior and GPU performance still require qualification. No new import image is published or promoted by these local results.
+
+## Startup integration follow-up
+
+The private import branch now runs `faugus-epic-launch --prepare-only` before
+registration. This ensures an empty user prefix receives the installed client
+template before game records make it non-empty. Failed preparation aborts before
+registration and the picker. Registration selects the same prefix precedence as
+the wrapper: explicit `DPAD_FAUGUS_STATE_ROOT`, then
+`DPAD_VOLUME_MOUNT/faugus`, then `HOME/Faugus`.
+
+The offline installation suite passed eleven tests. Two disposable-container
+launcher-shell behavior tests passed preparation/registration/picker ordering
+and failure isolation using fake client processes, without an account or
+network. These are source changes; they have not been baked into the qualified
+six-store artifact. Import-image and host-mount integration remain separate
+unpublished working changes and must be assembled from a clean source revision
+before genuine game acceptance.

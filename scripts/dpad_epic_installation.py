@@ -332,6 +332,14 @@ def register_locked(prefix, game, capsule_dir, binding, capsule_digest):
     return 'official_epic_registered'
 
 
+def session_prefix():
+    """Use the same explicit-state/volume/home precedence as faugus-epic-launch."""
+    state = os.environ.get('DPAD_FAUGUS_STATE_ROOT')
+    if not state and os.environ.get('DPAD_VOLUME_MOUNT'):
+        state = os.environ['DPAD_VOLUME_MOUNT'] + '/faugus'
+    return Path(state) / 'prefixes/epic-games' if state else Path(os.environ['HOME']) / 'Faugus/epic-games'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='operation', required=True)
@@ -352,8 +360,7 @@ def main():
         raise ValueError('root overlay receipt required')
     if receipt != {'releaseId': binding['releaseId'], 'game': '/opt/dpad-instant/official-game'}:
         raise ValueError('overlay ownership mismatch')
-    state = os.environ.get('DPAD_FAUGUS_STATE_ROOT')
-    prefix = state + '/prefixes/epic-games' if state else os.environ['HOME'] + '/Faugus/epic-games'
+    prefix = session_prefix()
     print('DPAD_INSTANT_INSTALLATION ' + register(prefix, receipt['game'],
           '/opt/dpad-instant/epic', binding, os.environ['DPAD_EPIC_INSTALLATION_SHA256']))
 

@@ -1,5 +1,15 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-09-30 local startup/input fixes, source only.** The private Epic
+> registration route prepares the official client before creating game records,
+> so a fresh prefix can clone its installed template. Registration now shares
+> the wrapper's explicit-state/volume/home prefix selection. Eleven installation
+> tests and two disposable-container startup ordering/failure tests passed.
+> Keyboard layout changes now restore the previous saved choice on compositor
+> timeout or invocation failure as well as nonzero exit; all five keyboard tests
+> passed. No account, cloud resource or deployment was used. The published/private
+> image tuple is unchanged; these new changes still need clean image assembly.
+
 > **2026-09-30 unattended recognition hardening, local only.** While owner
 > account tests wait, the official installation helper now serializes game
 > imports, preflights conflicts before creating game records and publishes

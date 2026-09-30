@@ -61,6 +61,14 @@ def concurrent_register(prefix, record, ready, release, done, results, pause=Fal
 
 
 class OfficialInstallationTests(unittest.TestCase):
+    def test_registration_selects_the_launchers_explicit_volume_or_home_prefix(self):
+        with patch.dict(m.os.environ, {'HOME': '/private/home'}, clear=True):
+            self.assertEqual(m.session_prefix(), Path('/private/home/Faugus/epic-games'))
+            m.os.environ['DPAD_VOLUME_MOUNT'] = '/private/volume'
+            self.assertEqual(m.session_prefix(), Path('/private/volume/faugus/prefixes/epic-games'))
+            m.os.environ['DPAD_FAUGUS_STATE_ROOT'] = '/private/explicit'
+            self.assertEqual(m.session_prefix(), Path('/private/explicit/prefixes/epic-games'))
+
     def test_inventory_conflict_does_not_create_partial_game_records(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); prefix = root / 'prefix'; prefix.mkdir(mode=0o700)

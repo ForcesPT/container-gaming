@@ -28,11 +28,18 @@ fi
 # Login, Wine setup and Play remain the customer's normal in-session store flow.
 if [ -n "${DPAD_INSTANT_APP:-}${DPAD_INSTANT_METADATA:-}" ]; then
     if [ "${DPAD_EPIC_BACKEND:-heroic}" = faugus ]; then
-        if [ "${DPAD_FAUGUS_CLIENT_ONLY_TEST:-}" != 1 ]; then
+        if [ "${DPAD_FAUGUS_INSTANT_TEST:-}" = 1 ] && [ -n "${DPAD_EPIC_INSTALLATION_SHA256:-}" ]; then
+            # Clone/install the official client before adding game records.
+            # Otherwise registration makes an empty prefix non-empty and the
+            # wrapper must preserve it instead of cloning its installed template.
+            timeout --kill-after=15s 330s "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/faugus-epic-launch" --prepare-only >>/tmp/instant-registration.log 2>&1 || exit 1
+            timeout 15s python3 -I "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/dpad_epic_installation.py" register >>/tmp/instant-registration.log 2>&1 || exit 1
+        elif [ "${DPAD_FAUGUS_CLIENT_ONLY_TEST:-}" != 1 ]; then
             echo 'launcher-shell: official Epic Instant import is not qualified; use a Cloud Compute candidate session' >&2
             exit 1
+        else
+            echo 'launcher-shell: Faugus client-only canary; shared game import is not registered' >&2
         fi
-        echo 'launcher-shell: Faugus client-only canary; shared game import is not registered' >&2
     else
         if ! timeout 15s python3 -I "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/dpad_instant_register.py" >>/tmp/instant-registration.log 2>&1; then
             echo "launcher-shell: Instant registration refused" >&2
