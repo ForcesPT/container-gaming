@@ -8,9 +8,11 @@ USER root
 ARG WINDOWS_STORES=epic,gog,battlenet,ea,ubisoft
 COPY scripts/dpad-sanitize-store-prefix /opt/dpadcloud/dpad-sanitize-store-prefix
 COPY scripts/dpad-verify-store-templates /opt/dpadcloud/dpad-verify-store-templates
-COPY scripts/faugus-epic-launch /opt/dpadcloud/faugus-epic-launch
 COPY --from=templates --chown=dpad:dpad /opt/dpadcloud/ /opt/dpadcloud/
 COPY --from=templates --chown=dpad:dpad /home/dpad/.local/share/umu/ /home/dpad/.local/share/umu/
+# Apply the reviewed wrapper after installation archives so an older template
+# snapshot cannot replace the current runtime/account-state routing.
+COPY scripts/faugus-epic-launch /opt/dpadcloud/faugus-epic-launch
 RUN sed -i 's/\r$//' /opt/dpadcloud/dpad-sanitize-store-prefix \
     && chmod +x /opt/dpadcloud/dpad-sanitize-store-prefix \
     && sed -i 's/\r$//' /opt/dpadcloud/dpad-verify-store-templates /opt/dpadcloud/faugus-epic-launch \
