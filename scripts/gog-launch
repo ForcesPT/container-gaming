@@ -79,6 +79,9 @@ if [ -z "$client" ]; then
     test -n "$client" || { echo 'Official GOG Galaxy installation did not complete' >&2; exit 1; }
 fi
 [ "$mode" != --prepare-only ] || exit 0
+# Wine prefix boot can launch Galaxy's Windows Run entry before the picker,
+# leaving a hidden duplicate client. Change only that exact idle registry entry.
+python3 -I /opt/dpadcloud/dpad_gog_autostart.py "$WINEPREFIX"
 # Pass the native Windows path: a Unix path adds Proton's umu.exe bridge,
 # which produced intermittent cold-start heap failures in local Galaxy tests.
 # The executable above is already verified inside this private prefix.

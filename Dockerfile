@@ -884,6 +884,7 @@ COPY scripts/launcher-shell /opt/dpadcloud/launcher-shell
 COPY scripts/steam-desktop /usr/local/bin/steam
 COPY scripts/dpad_steam_proton_default.py /opt/dpadcloud/dpad_steam_proton_default.py
 COPY scripts/dpad_publish_proton.py /opt/dpadcloud/dpad_publish_proton.py
+COPY scripts/dpad_gog_autostart.py /opt/dpadcloud/dpad_gog_autostart.py
 COPY scripts/launcher-toggle /opt/dpadcloud/launcher-toggle
 COPY scripts/dpad-labwc-set-output-mode /opt/dpadcloud/dpad-labwc-set-output-mode
 COPY scripts/dpad-publish-desktop-config /opt/dpadcloud/dpad-publish-desktop-config

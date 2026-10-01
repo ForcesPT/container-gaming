@@ -50,7 +50,7 @@ COPY --from=store-service-builder /src/wine/dlls/kernelbase/process.c /src/wine/
     /tmp/chromium-flags.patch /tmp/scope-gog-chromium.py /tmp/soju-LICENSE \
     /tmp/ncrypt-persisted-keys.patch /src/wine/dlls/ncrypt/main.c /src/wine/dlls/ncrypt/ncrypt_internal.h \
     /tmp/store-wine-source.tar.gz /usr/share/doc/dpadplay/official-store-services/
-COPY scripts/gog-launch scripts/dpad_faugus_prepare.py scripts/dpad_steam_proton_default.py scripts/dpad_publish_proton.py /opt/dpadcloud/
+COPY scripts/gog-launch scripts/dpad_faugus_prepare.py scripts/dpad_steam_proton_default.py scripts/dpad_publish_proton.py scripts/dpad_gog_autostart.py /opt/dpadcloud/
 COPY scripts/steam-desktop /usr/local/bin/steam
 COPY scripts/ea-launch /opt/dpadcloud/ea-launch
 COPY scripts/battlenet-launch scripts/ubisoft-launch scripts/dpad-clone-prefix-template /opt/dpadcloud/

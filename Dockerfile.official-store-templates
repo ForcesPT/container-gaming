@@ -3,25 +3,28 @@
 ARG STORE_IMAGE=dpadplay/official-stores:local
 ARG TEMPLATE_IMAGE=dpadplay/gog-template:local
 FROM ${TEMPLATE_IMAGE} AS templates
+FROM ${STORE_IMAGE} AS selected-templates
+USER root
+COPY --from=templates /opt/dpadcloud/ /dpad-template-input/
 ARG WINDOWS_STORES=epic,gog,battlenet,ea,ubisoft
 # Import installation files only. A template must never replace runtime code,
 # runner patches or the launcher with files from its older build image.
 RUN test -n "$WINDOWS_STORES" && mkdir /dpad-store-templates \
     && for store in $(printf '%s' "$WINDOWS_STORES" | tr ',' ' '); do \
          case "$store" in epic|gog|battlenet|ea|ubisoft) ;; *) exit 1 ;; esac; \
-         cp -a "/opt/dpadcloud/$store-prefix" /dpad-store-templates/; \
+         cp -a "/dpad-template-input/$store-prefix" /dpad-store-templates/; \
        done
 FROM ${STORE_IMAGE}
 USER root
 ARG WINDOWS_STORES=epic,gog,battlenet,ea,ubisoft
 COPY scripts/dpad-sanitize-store-prefix /opt/dpadcloud/dpad-sanitize-store-prefix
 COPY scripts/dpad-verify-store-templates /opt/dpadcloud/dpad-verify-store-templates
-COPY --from=templates --chown=dpad:dpad /dpad-store-templates/ /opt/dpadcloud/
+COPY --from=selected-templates --chown=dpad:dpad /dpad-store-templates/ /opt/dpadcloud/
 COPY --from=templates --chown=dpad:dpad /home/dpad/.local/share/umu/ /home/dpad/.local/share/umu/
 # Apply the reviewed wrapper after installation archives so an older template
 # snapshot cannot replace the current runtime/account-state routing.
 COPY scripts/faugus-epic-launch scripts/dpad_faugus_prepare.py scripts/gog-launch scripts/battlenet-launch scripts/ea-launch scripts/ubisoft-launch \
-    scripts/dpad_steam_proton_default.py scripts/dpad_publish_proton.py /opt/dpadcloud/
+    scripts/dpad_steam_proton_default.py scripts/dpad_publish_proton.py scripts/dpad_gog_autostart.py /opt/dpadcloud/
 COPY scripts/steam-desktop /usr/local/bin/steam
 RUN sed -i 's/\r$//' /opt/dpadcloud/dpad-sanitize-store-prefix \
     && chmod +x /opt/dpadcloud/dpad-sanitize-store-prefix \
