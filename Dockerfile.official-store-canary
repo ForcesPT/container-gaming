@@ -1,0 +1,17 @@
+# Metadata-only private canary over an already verified account-free image.
+# The release operator must verify STORE_IMAGE's exact local ID before building.
+ARG STORE_IMAGE=dpadplay/official-stores:ge117-complete
+FROM ${STORE_IMAGE}
+ARG DPAD_SOURCE_REVISION
+ARG DPAD_RUNTIME_SOURCE_REVISION
+ARG DPAD_VERIFIED_BASE_IMAGE_ID
+RUN printf '%s\n' "$DPAD_SOURCE_REVISION" | grep -Eq '^[a-f0-9]{40}$' \
+    && printf '%s\n' "$DPAD_RUNTIME_SOURCE_REVISION" | grep -Eq '^[a-f0-9]{40}$' \
+    && printf '%s\n' "$DPAD_VERIFIED_BASE_IMAGE_ID" | grep -Eq '^sha256:[a-f0-9]{64}$'
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
+      com.dpadplay.runtime.source-revision=$DPAD_RUNTIME_SOURCE_REVISION \
+      com.dpadplay.release.verified-base-image=$DPAD_VERIFIED_BASE_IMAGE_ID \
+      com.dpadplay.release.channel="private-admin-canary" \
+      com.dpadplay.launcher.qualification="official-clients-local;provider-acceptance-pending"
+# Retain the verified production entrypoint and client-only Instant test setting.
+# No owner volume, local viewer, game metadata or account data is imported.
