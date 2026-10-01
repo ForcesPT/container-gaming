@@ -1,0 +1,26 @@
+ARG SERVICE_BUILDER_IMAGE=dpadplay/store-wine-builder:ge117
+FROM ${SERVICE_BUILDER_IMAGE}
+COPY patches/wine-epic-services.patch /tmp/epic-services.patch
+COPY scripts/patch_gog_service_identity.py /tmp/patch-gog.py
+COPY scripts/scope_gog_chromium_patch.py /tmp/scope-gog-chromium.py
+RUN test "$(git -C /src/wine rev-parse HEAD)" = 46b29104e3741fe23bf5e2547196a253aab88c89 \
+    && git -C /src/wine apply --check /tmp/epic-services.patch \
+    && git -C /src/wine apply /tmp/epic-services.patch \
+    && python3 /tmp/patch-gog.py /src/wine/programs/services/services.c /src/wine/server/token.c
+RUN curl -fLsS --retry 3 https://raw.githubusercontent.com/BCD1210/soju/f482f2b607e3374163e8a5e47a75f422b3d332b6/patches/ncrypt-persisted-keys.patch -o /tmp/ncrypt-persisted-keys.patch \
+    && echo '6283b3637b1d98bf43f68618c0991ee23e719c8bddaed05eff05e3989c954efe  /tmp/ncrypt-persisted-keys.patch' | sha256sum -c - \
+    && curl -fLsS --retry 3 https://raw.githubusercontent.com/BCD1210/soju/54c6c10a77e72c05d048090526af000748729d88/patches/chromium-flags-append.patch -o /tmp/chromium-flags.patch \
+    && echo '94ba9d7bc69fc97636a2c249cd40cbc8c62d0f835d5edbcda5e9f5d38afeec38  /tmp/chromium-flags.patch' | sha256sum -c - \
+    && curl -fLsS https://raw.githubusercontent.com/BCD1210/soju/54c6c10a77e72c05d048090526af000748729d88/LICENSE -o /tmp/soju-LICENSE \
+    && echo '3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986  /tmp/soju-LICENSE' | sha256sum -c - \
+    && git -C /src/wine apply --check /tmp/ncrypt-persisted-keys.patch \
+    && git -C /src/wine apply /tmp/ncrypt-persisted-keys.patch \
+    && git -C /src/wine apply --check /tmp/chromium-flags.patch \
+    && git -C /src/wine apply /tmp/chromium-flags.patch \
+    && python3 /tmp/scope-gog-chromium.py \
+    && make -C /src/store-wine-build -j4 server/wineserver \
+       programs/services/x86_64-windows/services.exe dlls/ncrypt/x86_64-windows/ncrypt.dll \
+       dlls/kernelbase/x86_64-windows/kernelbase.dll \
+       dlls/ucrtbase/x86_64-windows/ucrtbase.dll dlls/msvcrt/x86_64-windows/msvcrt.dll \
+    && tar --exclude=.git -czf /tmp/store-wine-source.tar.gz -C /src wine ge/patches wine-staging \
+       -C /tmp ncrypt-persisted-keys.patch chromium-flags.patch scope-gog-chromium.py patch-gog.py epic-services.patch soju-LICENSE
