@@ -71,11 +71,39 @@ def disable(prefix, active=prefix_in_use):
         os.close(fd)
 
 
+def clear_instance_lock(prefix, active=prefix_in_use):
+    prefix = Path(prefix).resolve(strict=True)
+    if active(prefix):
+        return False
+    lock = prefix / 'drive_c/ProgramData/GOG.com/Galaxy/lock-files/GalaxyClient.exe-galaxy-client.lock'
+    if not lock.exists() and not lock.is_symlink():
+        return False
+    if not lock.parent.resolve().is_relative_to(prefix):
+        raise ValueError('GOG instance lock escapes the prefix')
+    fd = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_size > 32:
+            raise ValueError('Untrusted GOG instance lock')
+        value = os.read(fd, 33)
+        if value and not re.fullmatch(rb'[0-9]+\s*', value):
+            raise ValueError('Unknown GOG instance lock format')
+        latest = lock.lstat()
+        if active(prefix) or (latest.st_dev, latest.st_ino) != (info.st_dev, info.st_ino):
+            raise ValueError('GOG instance lock became active or changed')
+        lock.unlink()
+        return True
+    finally:
+        os.close(fd)
+
+
 if __name__ == '__main__':
     try:
         if len(sys.argv) != 2:
             raise ValueError('GOG prefix is required')
         if disable(sys.argv[1]):
             print('GOG_PICKER_MANAGED_STARTUP_READY')
+        if clear_instance_lock(sys.argv[1]):
+            print('GOG_STALE_INSTANCE_LOCK_CLEARED')
     except (OSError, ValueError) as error:
         raise SystemExit(f'GOG startup preparation refused: {error}')

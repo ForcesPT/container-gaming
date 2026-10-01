@@ -12,6 +12,7 @@ cat >/usr/bin/umu-run <<'STUB'
 #!/bin/bash
 set -euo pipefail
 test "$PROTONPATH" = /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7
+test "$DPAD_GOG_NATIVE64" = 1
 test "$WINEPREFIX" = /tmp/dpad-gog-runtime-prefix
 test "$1" = 'C:\Program Files\GOG Galaxy\GalaxyClient.exe'
 test "$2" = --in-process-gpu && test "$3" = /deelevated && test "$#" = 3

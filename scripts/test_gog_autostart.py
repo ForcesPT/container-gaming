@@ -2,7 +2,7 @@
 from pathlib import Path
 import tempfile
 import unittest
-from dpad_gog_autostart import disable, RUN_KEY
+from dpad_gog_autostart import disable, clear_instance_lock, RUN_KEY
 
 
 class GalaxyStartupTests(unittest.TestCase):
@@ -28,6 +28,30 @@ class GalaxyStartupTests(unittest.TestCase):
             (root / 'user.reg').write_text(content)
             self.assertFalse(disable(root, active=lambda p: False))
             self.assertEqual((root / 'user.reg').read_text(), content)
+
+    def test_volatile_pid_only_and_never_active_prefix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lock = root / 'drive_c/ProgramData/GOG.com/Galaxy/lock-files/GalaxyClient.exe-galaxy-client.lock'
+            lock.parent.mkdir(parents=True)
+            lock.write_text('224')
+            account = root / 'account-marker'
+            account.write_text('keep')
+            self.assertFalse(clear_instance_lock(root, active=lambda p: True))
+            self.assertEqual(lock.read_text(), '224')
+            self.assertTrue(clear_instance_lock(root, active=lambda p: False))
+            self.assertFalse(lock.exists())
+            self.assertEqual(account.read_text(), 'keep')
+
+    def test_unknown_lock_format_is_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lock = root / 'drive_c/ProgramData/GOG.com/Galaxy/lock-files/GalaxyClient.exe-galaxy-client.lock'
+            lock.parent.mkdir(parents=True)
+            lock.write_text('unknown')
+            with self.assertRaisesRegex(ValueError, 'format'):
+                clear_instance_lock(root, active=lambda p: False)
+            self.assertEqual(lock.read_text(), 'unknown')
 
 
 if __name__ == '__main__':
