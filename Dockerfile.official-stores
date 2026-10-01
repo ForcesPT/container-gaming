@@ -80,7 +80,8 @@ RUN sed -i 's/\r$//' /opt/dpadcloud/gog-launch \
     && echo 'd6166eb2bc3affcea7e0160c08abdfba255a1df4aba960f5bf6b3fb77ce020aa  /opt/dpadcloud/installers/GOGGalaxy-2.1.9.27.exe' | sha256sum -c - \
     && /opt/dpadcloud/dpad-verify-windows-binary --publisher 'GOG  sp. z o.o' /opt/dpadcloud/installers/GOGGalaxy-2.1.9.27.exe \
     && bash -n /opt/dpadcloud/gog-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ubisoft-launch
-ENV DPAD_GOG_BACKEND=official
+ENV DPAD_GOG_BACKEND=official \
+    DPAD_BATTLENET_PROTON_VERSION=GE-Proton10-34
 # GPU runtime hooks can regenerate ld.so.cache with the older host library first.
 # Keep the compositor's bundled Wayland 1.23 ABI ahead of that cache.
 ENV LD_LIBRARY_PATH=/usr/local/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}

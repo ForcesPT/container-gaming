@@ -12,12 +12,12 @@ COPY --from=templates --chown=dpad:dpad /opt/dpadcloud/ /opt/dpadcloud/
 COPY --from=templates --chown=dpad:dpad /home/dpad/.local/share/umu/ /home/dpad/.local/share/umu/
 # Apply the reviewed wrapper after installation archives so an older template
 # snapshot cannot replace the current runtime/account-state routing.
-COPY scripts/faugus-epic-launch /opt/dpadcloud/faugus-epic-launch
+COPY scripts/faugus-epic-launch scripts/battlenet-launch /opt/dpadcloud/
 RUN sed -i 's/\r$//' /opt/dpadcloud/dpad-sanitize-store-prefix \
     && chmod +x /opt/dpadcloud/dpad-sanitize-store-prefix \
-    && sed -i 's/\r$//' /opt/dpadcloud/dpad-verify-store-templates /opt/dpadcloud/faugus-epic-launch \
-    && chmod +x /opt/dpadcloud/dpad-verify-store-templates /opt/dpadcloud/faugus-epic-launch \
-    && bash -n /opt/dpadcloud/faugus-epic-launch \
+    && sed -i 's/\r$//' /opt/dpadcloud/dpad-verify-store-templates /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/battlenet-launch \
+    && chmod +x /opt/dpadcloud/dpad-verify-store-templates /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/battlenet-launch \
+    && bash -n /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/battlenet-launch \
     && /opt/dpadcloud/dpad-verify-store-templates --stores "$WINDOWS_STORES" \
     && test -f /home/dpad/.local/share/umu/steamrt3/.installed.ok \
     && test -x /home/dpad/.local/share/umu/steamrt3/run \

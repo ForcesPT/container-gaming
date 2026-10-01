@@ -1,5 +1,36 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-10-01 Battle.net post-login crash mitigated in local runner comparison.**
+> Owner corrected the initial Home report: Battle.net disappeared after login
+> and displayed Blizzard's unexpected-error reporter. Authenticated Home has
+> not passed. A local, sanitized minidump inspection found `0xc0000005` at
+> `battle.net.dll+0xf08ab5`, a read of `0x1de` with EAX zero. Public DLL
+> disassembly places the caller near its threaded DNS resolver path; that is
+> a diagnostic lead, not an established cause. No dump or account state was
+> exported, and the error reporter was closed with Send to Blizzard unchecked.
+> The same local container now runs a test-only copy of the Battle.net wrapper
+> selecting already installed GE-Proton10-34 instead of GE-Proton11-3. Its
+> owner signed in successfully and Home and My Games navigation responded.
+> Normal Exit was selected. Full container restart acceptance remains pending.
+> The official-store candidate now selects GE-Proton10-34 through the
+> Battle.net-specific runner setting; legacy base images keep their bundled
+> GE-Proton11-3 default. Template assembly reapplies the reviewed wrapper after
+> copying installation archives. Preserve the private prefix. No push,
+> website deployment, or paid VM was started.
+>
+> Owner signed into official GOG. Owned games navigation responded before and
+> after a full container restart. Login was retained, but the first launch
+> after restart exited silently; one controlled relaunch was needed. GOG's
+> reliable first-start gate remains open. Its container is stopped; preserve
+> `dpad-owner-gog-local-20261001-6e001d4` and do not export its account prefix.
+> Current viewer: port 5805, `dpad-local-owner-battlenet-6e001d4`. Official
+> Battle.net sign-in is visually verified; authenticated acceptance is failing
+> on GE-Proton11-3; sign-in/navigation pass on the local GE-Proton10-34 comparison.
+> Private volume `dpad-owner-battlenet-local-20261001-6e001d4` mounts at
+> `/home/dpad/owner-battlenet`, with `battlenet` child prefix; offline template
+> preparation passed. Portuguese input is set. Receipt:
+> `test-results/owner-battlenet-local-6e001d4.json`. No cloud resource or push.
+
 > **2026-10-01 GOG account handoff after Steam acceptance.** Steam's remembered
 > login survived a full container restart and Library responded. Its completed
 > container is stopped; preserve `dpad-owner-steam-local-20261001-6e001d4`.

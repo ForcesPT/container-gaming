@@ -1,5 +1,5 @@
 #!/bin/bash
-# battlenet-launch — launch the Battle.net Windows client under GE-Proton11-3
+# battlenet-launch — launch the Battle.net Windows client under its pinned runner
 # via umu-launcher (the Steam Linux Runtime container) in the headless
 # cloud-gaming session. The dpad-launcher's "Battle.net" store card
 # (launcher/src/main.js) spawns this; it runs IN THE SAME sway/XWayland
@@ -71,14 +71,15 @@ if ! test -O "$PREFIX" || ! chmod 700 -- "$PREFIX"; then
     exit 1
 fi
 
-# GE-Proton11-3 — the Battle.net white-screen fix is in (GE-Proton11-2
-# changelog: "Battle.net: fixed Wine Wayland white-screen behavior" +
-# "--in-process-gpu handling for Wine Wayland launchers") + it bundles the
-# NVIDIA compat libs (NVAPI/CUDA/NVENC/NVML) + umu.exe. All Windows launchers
-# run via Xwayland (PROTON_ENABLE_WAYLAND unset) per STORES-PLAN §5.
-GP_DIR="${HOME}/.steam/debian-installation/compatibilitytools.d/GE-Proton11-3"
+# The official-store candidate selects GE-Proton10-34: owner-assisted local
+# sign-in and Games navigation passed there after GE-Proton11-3 crashed after
+# login. Keep the original runner as the legacy base-image default, since that
+# image does not include GE-Proton10-34. This setting affects Battle.net only.
+# All Windows launchers run via Xwayland per STORES-PLAN §5.
+GP_VERSION="${DPAD_BATTLENET_PROTON_VERSION:-GE-Proton11-3}"
+GP_DIR="${HOME}/.steam/debian-installation/compatibilitytools.d/$GP_VERSION"
 if [ ! -x "$GP_DIR/proton" ]; then
-    echo "[battlenet-launch] FATAL: GE-Proton11-3 not found at $GP_DIR (no proton binary)" | tee -a "$LOG" >&2
+    echo "[battlenet-launch] FATAL: $GP_VERSION not found at $GP_DIR (no proton binary)" | tee -a "$LOG" >&2
     exit 1
 fi
 export PROTONPATH="$GP_DIR"

@@ -37,9 +37,38 @@ was verified present with networking disabled. The local GUI container
 first launch exited before sign-in with `double free or corruption (fasttop)`.
 One initialized-prefix relaunch rendered official GOG sign-in; owner account
 acceptance is requested. The packaged msvcrt/ucrtbase hashes match the earlier
-qualified d1a4c6c image. The first-launch crash remains unresolved and must be
-investigated before claiming reliable fresh GOG startup or publishing.
+qualified d1a4c6c image. The owner then signed in; Owned games opened and
+navigation responded. A full container restart preserved login, but its first
+client launch exited without a window. One controlled relaunch reopened signed
+in, and Owned games responded again. Login-state retention passes with that
+qualification; reliable first launch remains unresolved and must be fixed
+before publishing. The completed account-test container is stopped and its
+private prefix is preserved. No GOG game was installed or played.
 Receipt: `test-results/owner-gog-local-6e001d4.json`.
+
+Official Battle.net is the next local account check. Its sanitized installation
+template was cloned offline into private volume
+`dpad-owner-battlenet-local-20261001-6e001d4`, with child prefix
+`/home/dpad/owner-battlenet/battlenet`. Container
+`dpad-local-owner-battlenet-6e001d4` uses localhost viewer port 5805 and
+Portuguese input. Receipt: `test-results/owner-battlenet-local-6e001d4.json`.
+
+The owner corrected the initial Home report: the client disappeared after
+login and showed Blizzard's unexpected-error reporter. Authenticated Home is
+not verified. The reporter was closed without sending a report. A local
+sanitized minidump inspection recorded access violation `0xc0000005` at
+`battle.net.dll+0xf08ab5`, reading `0x1de` with EAX zero. Public vendor DLL
+disassembly places a caller near its threaded DNS resolver code; this does
+not establish the cause. No private dump, authenticated log, or account
+prefix was exported. A test-only wrapper copy now selects the already
+installed GE-Proton10-34 runner on this same local container. The owner signed
+in successfully; Home and My Games opened and navigation responded. No new
+crash dump appeared during this check. Normal Exit was selected; full
+container-restart acceptance remains pending. The official-store Dockerfile
+now selects `DPAD_BATTLENET_PROTON_VERSION=GE-Proton10-34`; the wrapper retains
+GE-Proton11-3 as its legacy base-image default. Template assembly reapplies the
+reviewed Battle.net wrapper after older installation archives. Packaging and
+restart checks are in progress; no publication or production change occurred.
 
 The owner signed in inside official Epic on the local GUI harness built from
 `dpadplay/official-stores:d1a4c6c-all`. Its private state is in a dedicated Docker
