@@ -51,7 +51,14 @@ if not stat.S_ISREG(s.st_mode) or s.st_uid != os.getuid() or s.st_nlink != 1 or 
 os.close(f)
 PY
 exec 9<"$lock_dir/gog.lock"
-flock -n 9 || { echo 'GOG Galaxy is already starting or running' >&2; exit 1; }
+restore=0
+if ! flock -n 9; then
+    [ "$mode" = --launch ] || { echo 'GOG Galaxy is already preparing or running' >&2; exit 1; }
+    # Galaxy keeps its client alive when the window closes. Its second-instance
+    # command restores that window; runinprefix avoids waiting for it to exit.
+    restore=1
+    export PROTON_VERB=runinprefix
+fi
 verify=/opt/dpadcloud/dpad-verify-windows-binary
 resolve_client() {
     local candidate
@@ -64,6 +71,9 @@ resolve_client() {
     return 1
 }
 client="$(resolve_client || true)"
+if [ -z "$client" ] && [ "$restore" = 1 ]; then
+    echo 'GOG Galaxy installation is already in progress' >&2; exit 1
+fi
 template=/opt/dpadcloud/gog-prefix
 if [ -z "$client" ] && [ -f "$template/.dpad-preinstalled" ] && [ -z "$(ls -A "$WINEPREFIX")" ]; then
     /opt/dpadcloud/dpad-clone-prefix-template "$template" "$WINEPREFIX" \
@@ -86,7 +96,9 @@ fi
 [ "$mode" != --prepare-only ] || exit 0
 # Wine prefix boot can launch Galaxy's Windows Run entry before the picker,
 # leaving a hidden duplicate client. Change only that exact idle registry entry.
-python3 -I /opt/dpadcloud/dpad_gog_autostart.py "$WINEPREFIX"
+if [ "$restore" = 0 ]; then
+    python3 -I /opt/dpadcloud/dpad_gog_autostart.py "$WINEPREFIX"
+fi
 # Pass the native Windows path: a Unix path adds Proton's umu.exe bridge,
 # which produced intermittent cold-start heap failures in local Galaxy tests.
 # The executable above is already verified inside this private prefix.
@@ -94,7 +106,9 @@ windows_client="C:\\${client#"$WINEPREFIX/drive_c/"}"
 windows_client="${windows_client//\//\\}"
 # Native launch can emit vendor account diagnostics to stdout. Keep those in
 # an owner-only file instead of the session/container log.
-exec python3 -I - "$lock_dir/gog-launch.log" "$windows_client" <<'PY'
+log_file="$lock_dir/gog-launch.log"
+[ "$restore" = 0 ] || log_file="$lock_dir/gog-restore.log"
+exec python3 -I - "$log_file" "$windows_client" <<'PY'
 import os, stat, sys
 fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
 info = os.fstat(fd)
