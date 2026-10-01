@@ -18,9 +18,14 @@
 > Fresh volume startup also exposed UMU downloading steamrt3 because Faugus's
 > XDG data root hides the baked home runtime. The wrapper now pins UMU's supported
 > folders path to the baked home runtime; a real offline UMU/Proton console probe
-> with a fresh private data root passed. Actual Faugus child-path verification
-> and local packaging are in progress. No cloud VM, push or deployment. Details
-> in LOCAL-OFFICIAL-STORES.
+> with a fresh private data root passed. Actual Faugus child-path reuse passed
+> without downloading. Clean source `6e001d4` produced fixed store image
+> `sha256:a0436bd0…0fdb150` and private import image `sha256:fafd0500…1b72638`.
+> Template assembly cannot overwrite the current wrapper. Both package checks
+> passed, with qualified picker/Wine binaries unchanged and no owner/viewer
+> state packaged. Receipt: `test-results/official-stores-6e001d4-receipt.json`.
+> Other-store account acceptance, NFS and native streaming/performance remain.
+> No cloud VM, push or deployment. Details in LOCAL-OFFICIAL-STORES.
 
 > **2026-10-01 packaged local follow-up complete.** Clean source `d1a4c6c`
 > built the six-store image `sha256:7f765863…7641ee16` and FUSE import extension

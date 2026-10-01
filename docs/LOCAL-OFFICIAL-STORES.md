@@ -59,6 +59,30 @@ data. This gate uses a fake Faugus controller to execute the real console probe;
 the actual Faugus child path is checked separately before packaging.
 No cloud VM, registry push or deployment was performed.
 
+The actual account-free Faugus child also resolved the baked home runtime,
+reported no runtime download, and created no UMU tree under private account
+data with networking disabled. This is a runtime-path check, not an offline
+Epic sign-in assertion. The baked and downloaded runtimes' `VERSIONS.txt`
+metadata is identical. Commit `6e001d4` also applies the reviewed wrapper after
+template archives, so an older snapshot cannot replace it during assembly.
+
+Final local packages from clean source `6e001d472a3b63465b17f2f6d55574ff97fa265e`:
+
+| Artifact | Local image ID |
+| --- | --- |
+| `dpadplay/official-stores:6e001d4-all` | `sha256:a0436bd0ed80e99a412168562d5222940208d3614a4874bac7c50c1940fdb150` |
+| `dpadplay/epic-instant:6e001d4-local` | `sha256:fafd0500d75ee6d411a32ed03716bcced0b781bcdface325595154ba81b72638` |
+
+Both source labels match. All five Windows template gates passed. Both images
+contain the tested clean-source wrapper with SHA-256
+`e381e119d0aa51892e8ae4f7e62f840bd1c4dec16085f6bbbc6b0cdb745538e3`.
+The qualified picker, Wine server and service executable remain byte-identical.
+Neither private owner storage nor the local viewer is packaged. Build logs and
+hashes are recorded in `test-results/official-stores-6e001d4-receipt.json`.
+The successful owner-assisted game session remains on the earlier local import
+harness; the fixed runtime route was checked independently above. Other-store
+authenticated acceptance, NFS and native streaming/performance remain gates.
+
 ## October 1 packaged follow-up
 
 The startup, registration and keyboard rollback fixes are now built from clean
@@ -113,7 +137,7 @@ remain acceptance gates before public Instant Play promotion.
 | Client | Local evidence | Remaining gate |
 | --- | --- | --- |
 | Steam Linux | Official sign-in, pointer/input and reopening passed on the assembled runtime after the normal client update | Account, library and gameplay acceptance |
-| Epic Windows | Preinstalled-template DXVK sign-in/input, clean initial close and normal reopening passed on the assembled runtime without installation/runtime download | Local account and gameplay acceptance |
+| Epic Windows | Owner sign-in and container-restart persistence passed; genuine ABZÛ install and fresh-prefix shared-file gameplay passed locally; fixed private-volume runtime startup passed offline | NFS-backed storage and native streaming/performance acceptance |
 | GOG Galaxy Windows | Official 2.1.9.27 sign-in/input, clean close and reopening passed on the assembled runtime | Account, library and gameplay acceptance |
 | Battle.net Windows | Preinstalled-template sign-in/input, initial exit 0 and reopening passed on the assembled runtime | Account, library and gameplay acceptance |
 | EA App Windows | Preinstalled-template sign-in, clean close and reopening passed with the service-path repair; input passed in the fresh repair test | Account, library and gameplay acceptance |
