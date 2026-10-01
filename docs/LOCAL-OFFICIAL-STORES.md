@@ -6,6 +6,35 @@ qualification did not enter credentials. Owner-assisted account checks are
 recorded separately below; login-window qualification alone does not prove
 authenticated libraries, game installation, gameplay, or cross-session tokens.
 
+## GE-Proton11-7 default — source `66613ff`
+
+The owner requested GE-Proton11-7 as the default after the local EA/Battle.net
+comparison. Source now applies it to base builds, bootstrap installers and
+EA/Battle.net/Ubisoft wrappers, with per-store overrides taking priority over
+`DPAD_PROTON_VERSION`. Epic/GOG retain their patched Proton 10 compatibility
+overrides. The account-free official base build and local GUI canary completed.
+The offline base probe verified actual selection/override cases, wrapper hashes,
+runner availability and absence of owner state/local viewer. The final template
+image `dpadplay/official-stores:66613ff-all` completed as
+`sha256:05c6d8044259457a95e291cb4d375011e689234628e17619e3abdaec14788a45`.
+All five installation-only template gates and the final offline default/wrapper
+probe passed. Receipt: `test-results/official-stores-66613ff-receipt.json`.
+
+| Client | Owner account acceptance on 11-7 | Full container restart |
+|---|---|---|
+| EA | Verification input, Home and Library passed | Reopened signed in; Library responded |
+| Battle.net | Home and My Games passed; zero minidumps | Stable password prompt, email retained; remembered login unchecked |
+| Ubisoft | Home and Library passed | Reopened signed in; Library loaded |
+
+Ubisoft container `dpad-local-owner-ubisoft-ge117-66613ff` used localhost port
+5808 with private volume `dpad-owner-ubisoft-ge117-local-20261001-66613ff`.
+Its template was cloned offline and Portuguese input configured. It is stopped,
+as are the completed EA/Battle.net tests; preserve all private volumes.
+No game installation/gameplay was tested for these three clients. GOG reliable
+cold start and native GPU streaming/NFS qualification remain open. No push,
+deployment or paid cloud test. Receipt:
+`test-results/owner-ubisoft-ge117-66613ff.json`.
+
 ## October 1 owner-assisted Epic check
 
 The completed shared-game Epic container was stopped at the owner's request.

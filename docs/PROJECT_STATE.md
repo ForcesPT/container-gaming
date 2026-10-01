@@ -1,5 +1,29 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-10-01 owner-requested default runner changed in source `66613ff`.**
+> GE-Proton11-7 is the base/build/bootstrap and EA/Battle.net/Ubisoft default.
+> The local GUI canary `dpadplay/local-proton-canary:ge11-7-66613ff` built as
+> `sha256:fdaf6ca3…7827831`; it is never a publishable image. EA, Battle.net and
+> Ubisoft passed owner sign-in and responsive authenticated navigation on 11-7.
+> EA/Ubisoft also reopened signed in after a full container restart. Battle.net
+> reopened a stable password prompt with email retained and remembered login
+> unchecked; automatic-login acceptance remains intentionally unclaimed.
+> All completed account-test containers are stopped and private volumes preserved.
+> Ubisoft receipt: `test-results/owner-ubisoft-ge117-66613ff.json`.
+>
+> The account-free official base `dpadplay/official-stores:66613ff-base` also built
+> locally. Its offline probe passes default selection, global override and
+> per-store override precedence, current wrapper hashes, runner availability,
+> syntax and absence of owner prefixes/local viewer. The final installation
+> template image `dpadplay/official-stores:66613ff-all` completed as
+> `sha256:05c6d8044259457a95e291cb4d375011e689234628e17619e3abdaec14788a45`.
+> All five sanitized template gates and the final offline default/wrapper probe
+> passed. Receipt: `test-results/official-stores-66613ff-receipt.json`.
+> Epic/GOG retain their qualified patched GE-Proton10-34 overrides. GOG reliable
+> cold start and native GPU streaming/NFS validation remain release gates.
+> No registry push, website deployment or paid VM occurred. The completed viewer
+> on localhost port 5808 is retained for the next turn, but its container is stopped.
+
 > **2026-10-01 EA GE-Proton11-7 owner acceptance passed locally.** Clean source
 > `febce34` produced local GUI canary `dpadplay/local-proton-canary:ge11-7-febce34`,
 > image `sha256:2469548f…2faab0c`. The official release archive SHA-256 was verified,
