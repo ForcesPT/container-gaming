@@ -1,6 +1,10 @@
 #!/usr/bin/python3
 """Run the pinned upstream Wine preparation, excluding unrelated submodules."""
 from pathlib import Path
+import sys
+
+profile = sys.argv[1] if len(sys.argv) == 2 else 'ge10'
+assert profile in ('ge10', 'ge11-7')
 
 upstream = Path('/src/ge/patches/protonprep-valve-staging.sh').read_text()
 start = upstream.index('### (2) WINE PATCHING ###')
@@ -13,8 +17,14 @@ wine = wine.replace('git revert --no-commit e813ca5771658b00875924ab88d525322e50
 # in the pinned tree. It affects only the gameinput DLL, which we never rebuild.
 # The published runner's DLL remains intact; keep server changes fail-closed.
 gameinput = '    apply_patch "../patches/game-patches/lemansultimate-gameinput.patch"'
-assert wine.count(gameinput) == 1
-wine = wine.replace(gameinput, '    echo "Retaining published gameinput DLL"')
+if profile == 'ge10':
+    assert wine.count(gameinput) == 1
+    wine = wine.replace(gameinput, '    echo "Retaining published gameinput DLL"')
+else:
+    assert gameinput not in wine
+    # GE 11 embeds wineopenxr in its source tree. The prep script still expects
+    # the sibling checkout that the upstream full build normally prepares.
+    Path('/src/wineopenxr').symlink_to('/src/ge/wineopenxr', target_is_directory=True)
 Path('/src/patches').symlink_to('/src/ge/patches', target_is_directory=True)
 Path('/tmp/prepare-store-wine.sh').write_text(
     '#!/bin/bash\nset -euo pipefail\n'
