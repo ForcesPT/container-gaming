@@ -1,0 +1,20 @@
+# Local comparison only: no user prefixes, registry publication or public viewer.
+ARG HARNESS_IMAGE=dpadplay/local-store-test:6e001d4-all
+FROM ${HARNESS_IMAGE}
+USER root
+# Official x86_64 release asset; digest from the vendor GitHub release API.
+RUN curl -fLsS --retry 3 \
+      https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton11-7/GE-Proton11-7-x86_64.tar.gz \
+      -o /tmp/ge-proton-canary.tar.gz \
+    && echo 'c5448b76a230384e2d7bc6beb5ccb97bafb7e2c3b6c527cb03a1a546bbcb00a0  /tmp/ge-proton-canary.tar.gz' | sha256sum -c - \
+    && install -d -o dpad -g dpad /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7 \
+    && runuser -u dpad -- tar -xzf /tmp/ge-proton-canary.tar.gz --strip-components=1 \
+       -C /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7 \
+    && test -x /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7/proton \
+    && rm -f /tmp/ge-proton-canary.tar.gz
+COPY scripts/battlenet-launch /opt/dpadcloud/battlenet-launch
+RUN sed -i 's/\r$//' /opt/dpadcloud/battlenet-launch \
+    && chmod +x /opt/dpadcloud/battlenet-launch \
+    && bash -n /opt/dpadcloud/battlenet-launch
+ENV DPAD_BATTLENET_PROTON_VERSION=GE-Proton11-7
+LABEL com.dpadplay.launcher.qualification="local-ge-proton11-7-comparison"
