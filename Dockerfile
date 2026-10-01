@@ -745,6 +745,7 @@ RUN chmod +x /opt/dpadcloud/launcher/dpad-launcher
 #        directory but did not discover this Steam path in the Instant canary;
 #        expose the same checked runner there without duplicating its payload.
 ARG GE_PROTON_VERSION=GE-Proton11-7
+COPY scripts/patch_gog_proton_loader.py /opt/dpadcloud/patch_gog_proton_loader.py
 ARG GE_PROTON_ASSET=GE-Proton11-7-x86_64.tar.gz
 ARG GE_PROTON_SHA256=c5448b76a230384e2d7bc6beb5ccb97bafb7e2c3b6c527cb03a1a546bbcb00a0
 ENV DPAD_PROTON_VERSION=${GE_PROTON_VERSION}
@@ -766,6 +767,9 @@ RUN set -e; \
     && mkdir -p /opt/dpadcloud/proton \
     && mv "${GP_DIR}" "/opt/dpadcloud/proton/${GE_PROTON_VERSION}" \
     && ln -s "/opt/dpadcloud/proton/${GE_PROTON_VERSION}" "${GP_DIR}"
+RUN if [ "$GE_PROTON_VERSION" = GE-Proton11-7 ]; then \
+      python3 /opt/dpadcloud/patch_gog_proton_loader.py /opt/dpadcloud/proton/GE-Proton11-7/proton; \
+    fi
 
 #    (d) libSDL3 for dpad-launcher's gamepad input (koffi FFI dlopen). SDL3
 #        is NOT in Noble repos; the oracular libsdl3-0 .deb churns the pinned

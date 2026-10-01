@@ -22,7 +22,7 @@ COPY --from=store-compat /src/store-wine-build/programs/services/x86_64-windows/
     /src/store-wine-build/dlls/ucrtbase/x86_64-windows/ucrtbase.dll \
     /src/store-wine-build/dlls/msvcrt/x86_64-windows/msvcrt.dll \
     /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7/files/lib/wine/x86_64-windows/
-COPY scripts/faugus-epic-launch scripts/dpad_faugus_prepare.py scripts/gog-launch \
+COPY scripts/patch_gog_proton_loader.py scripts/faugus-epic-launch scripts/dpad_faugus_prepare.py scripts/gog-launch \
     scripts/dpad_steam_proton_default.py scripts/dpad_publish_proton.py scripts/dpad_gog_autostart.py scripts/battlenet-launch scripts/ea-launch scripts/ubisoft-launch /opt/dpadcloud/
 COPY scripts/steam-desktop /usr/local/bin/steam
 RUN sed -i 's/\r$//' /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
@@ -34,4 +34,5 @@ ENV DPAD_PROTON_VERSION=GE-Proton11-7
 RUN mkdir -p /opt/dpadcloud/proton \
     && mv /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7 /opt/dpadcloud/proton/GE-Proton11-7 \
     && ln -s /opt/dpadcloud/proton/GE-Proton11-7 /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7
+RUN python3 /opt/dpadcloud/patch_gog_proton_loader.py /opt/dpadcloud/proton/GE-Proton11-7/proton
 LABEL com.dpadplay.launcher.qualification="local-ge-proton11-7-comparison"

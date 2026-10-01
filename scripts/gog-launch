@@ -21,6 +21,11 @@ export WINEDEBUG="${WINEDEBUG:--all}"
 # Galaxy overwrites Qt's Chromium flags. The patched Wine CRT preserves this
 # exact executable's CPU web renderer; games and other stores are unaffected.
 export DPAD_GOG_SOFTWARE_RENDERING="${DPAD_GOG_SOFTWARE_RENDERING:-1}"
+# Avoid the legacy Unix loader's reproduced native heap crash in this runner.
+# The build-time selector applies only to GalaxyClient.exe, never its games.
+if [ "$GP_VERSION" = GE-Proton11-7 ]; then
+    export DPAD_GOG_NATIVE64="${DPAD_GOG_NATIVE64:-1}"
+fi
 unset LD_PRELOAD
 mode="${1:---launch}"
 [[ "$#" -le 1 && "$mode" =~ ^--(launch|prepare-only)$ ]] || { echo 'usage: gog-launch [--prepare-only]' >&2; exit 2; }
