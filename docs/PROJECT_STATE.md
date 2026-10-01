@@ -1,5 +1,35 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-10-01 GOG account handoff after Steam acceptance.** Steam's remembered
+> login survived a full container restart and Library responded. Its completed
+> container is stopped; preserve `dpad-owner-steam-local-20261001-6e001d4`.
+> Current viewer is port 5804, container `dpad-local-owner-gog-6e001d4`.
+> Private GOG volume `dpad-owner-gog-local-20261001-6e001d4` mounts at
+> `/home/dpad/owner-gog`; prefix is its `gog-galaxy` child. Official GOG sign-in
+> is visible after one relaunch; owner account acceptance is requested.
+> First launch failed before sign-in with a heap corruption marker. That
+> fresh-start issue remains unresolved; unchanged qualified CRT hashes were
+> confirmed. Keep it as a release gate. Receipt:
+> `test-results/owner-gog-local-6e001d4.json`. No paid resource, push or deploy.
+
+> **2026-10-01 local Steam account handoff.** Completed Epic shared-game
+> container is stopped; both private account volumes and the game-only capture
+> are preserved. Official Steam sign-in is visually verified in
+> `dpad-local-owner-steam-6e001d4` at localhost port 5803. Clean source
+> `6e001d4` local GUI harness image is `sha256:f0e9c9a7…6823e8313`.
+> Private volume `dpad-owner-steam-local-20261001-6e001d4` is UID 1001, mode
+> 0700, and holds the Steam client/install root through production's
+> `~/.steam/debian-installation` symlink contract. Portuguese (Portugal) input
+> is set. Owner sign-in and Library navigation passed. Normal Steam Exit plus
+> container restart returned to sign-in. Account/config records survived on
+> the private volume, but a sanitized probe found RememberPassword=0. Owner
+> sign-in with Remember me checked changed the saved flag to 1. Normal Steam
+> Exit plus another full container restart reopened signed in, with responsive
+> Library navigation. Local account and restart acceptance pass; Steam game
+> installation/gameplay remain untested in this pass.
+> Receipt: `test-results/owner-steam-local-6e001d4.json`. No cloud resource,
+> registry push or deployment. Never export the private volume.
+
 > **2026-10-01 owner-assisted local Epic/ABZÛ acceptance in progress.** Official
 > Epic signed in and retained login through a full local container restart.
 > Library navigation responded. Owner reported ABZÛ worked after official
@@ -9,8 +39,8 @@
 > packaged preparation and registration. Owner signed in and confirmed ABZÛ
 > gameplay worked, then exited. Fourteen shared-lower files still matched
 > their original payload/vendor hashes; mount flags confirmed read-only lower
-> and writable private view. Current container is
-> `dpad-local-abzu-import-d1a4c6c`, viewer port 5802. Preserve both private volumes
+> and writable private view. The completed container
+> `dpad-local-abzu-import-d1a4c6c` is stopped at the owner's request. Preserve both private volumes
 > (`dpad-owner-epic-local-20261001-a80d319f` and
 > `dpad-owner-epic-import-local-20261001-8562197e`) and game-only volume
 > `dpad-abzu-game-only-local-20261001-4e879fc2`. Never package/export account

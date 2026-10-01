@@ -8,6 +8,39 @@ authenticated libraries, game installation, gameplay, or cross-session tokens.
 
 ## October 1 owner-assisted Epic check
 
+The completed shared-game Epic container was stopped at the owner's request.
+Both private Epic volumes and the game-only capture volume are preserved.
+The next local account check uses a separate Steam container
+`dpad-local-owner-steam-6e001d4`, built from the qualified
+`dpadplay/official-stores:6e001d4-all` image. Its localhost viewer uses port
+5803. The private volume `dpad-owner-steam-local-20261001-6e001d4` holds the
+Steam install root, with the same `~/.steam/debian-installation` symlink
+contract as production. Portuguese (Portugal) input is configured. Account
+sign-in and Library navigation passed. After normal Steam Exit and a full
+container restart, the client returned to sign-in. A sanitized probe confirmed
+the account record and configuration survived on the private volume, but the
+saved `RememberPassword` flag was `0`. The owner signed in again with Remember
+me enabled, and the flag changed to `1`. Normal Steam Exit followed by another
+full container restart reopened the client signed in, and Library navigation
+responded. Local authenticated Library and container-restart login acceptance
+pass. No Steam game installation or gameplay was tested in this account pass.
+The ignored receipt is
+`test-results/owner-steam-local-6e001d4.json`. No private state was packaged.
+
+The next GOG account test is prepared offline in private volume
+`dpad-owner-gog-local-20261001-6e001d4`. Mount its parent at
+`/home/dpad/owner-gog` and use child prefix `/home/dpad/owner-gog/gog-galaxy`;
+the template cloner atomically replaces an empty destination, so the prefix
+itself must not be a Docker mount point. The official preinstalled executable
+was verified present with networking disabled. The local GUI container
+`dpad-local-owner-gog-6e001d4` uses viewer port 5804 and Portuguese input. Its
+first launch exited before sign-in with `double free or corruption (fasttop)`.
+One initialized-prefix relaunch rendered official GOG sign-in; owner account
+acceptance is requested. The packaged msvcrt/ucrtbase hashes match the earlier
+qualified d1a4c6c image. The first-launch crash remains unresolved and must be
+investigated before claiming reliable fresh GOG startup or publishing.
+Receipt: `test-results/owner-gog-local-6e001d4.json`.
+
 The owner signed in inside official Epic on the local GUI harness built from
 `dpadplay/official-stores:d1a4c6c-all`. Its private state is in a dedicated Docker
 volume, separate from the release image and build context. Library opened.
