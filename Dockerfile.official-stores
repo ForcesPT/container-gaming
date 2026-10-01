@@ -1,10 +1,10 @@
 # Account-free official store candidate. No local test viewer or user prefixes.
 ARG STORE_IMAGE=forcespt/dpadcloud-gaming@sha256:cc58f0f2fa167ba464a4c5634076d3e8720e07f890118692fa332a26ff27f4ff
-ARG SERVICE_BUILDER_IMAGE=dpadplay/store-wine-builder:repro
+ARG STORE_COMPAT_IMAGE=dpadplay/store-compat:ge117
 FROM ${STORE_IMAGE} AS runtime-base
 FROM runtime-base AS current-store-runner
 USER root
-# Qualified for EA and Battle.net locally. Keep the patched Epic/GOG runner.
+# Every Windows store uses the pinned GE11 runner with matching compatibility components.
 RUN curl -fLsS --retry 3 \
       https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton11-7/GE-Proton11-7-x86_64.tar.gz \
       -o /tmp/ge-proton-store.tar.gz \
@@ -26,26 +26,7 @@ RUN ./node_modules/.bin/asar extract resources/app.asar unpacked \
     && node --check unpacked/src/main.js \
     && node --check unpacked/src/store_lifecycle.cjs \
     && ./node_modules/.bin/asar pack unpacked output/app.asar --unpack-dir node_modules
-FROM ${SERVICE_BUILDER_IMAGE} AS store-service-builder
-COPY patches/wine-epic-services.patch /tmp/epic-services.patch
-COPY scripts/patch_gog_service_identity.py /tmp/patch-gog.py
-COPY scripts/scope_gog_chromium_patch.py /tmp/scope-gog-chromium.py
-RUN test "$(git -C /src/wine rev-parse HEAD)" = 1729f00e17e879f98f9df1f2bca86bc5d21a65df \
-    && git -C /src/wine apply --check /tmp/epic-services.patch \
-    && git -C /src/wine apply /tmp/epic-services.patch \
-    && python3 /tmp/patch-gog.py /src/wine/programs/services/services.c /src/wine/server/token.c \
-    && make -C /src/store-wine-build -j4 programs/services/x86_64-windows/services.exe server/wineserver
-RUN curl -fLsS https://raw.githubusercontent.com/BCD1210/soju/54c6c10a77e72c05d048090526af000748729d88/patches/chromium-flags-append.patch -o /tmp/chromium-flags.patch \
-    && echo '94ba9d7bc69fc97636a2c249cd40cbc8c62d0f835d5edbcda5e9f5d38afeec38  /tmp/chromium-flags.patch' | sha256sum -c - \
-    && curl -fLsS https://raw.githubusercontent.com/BCD1210/soju/54c6c10a77e72c05d048090526af000748729d88/LICENSE -o /tmp/soju-LICENSE \
-    && echo '3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986  /tmp/soju-LICENSE' | sha256sum -c - \
-    && git -C /src/wine apply --check /tmp/chromium-flags.patch \
-    && git -C /src/wine apply /tmp/chromium-flags.patch \
-    && python3 /tmp/scope-gog-chromium.py \
-    && make -C /src/store-wine-build -j4 dlls/kernelbase/x86_64-windows/kernelbase.dll \
-       dlls/ucrtbase/x86_64-windows/ucrtbase.dll dlls/msvcrt/x86_64-windows/msvcrt.dll \
-    && tar --exclude=.git -czf /tmp/store-wine-source.tar.gz -C /src wine ge/patches wine-staging \
-       -C /tmp chromium-flags.patch scope-gog-chromium.py patch-gog.py epic-services.patch soju-LICENSE
+FROM ${STORE_COMPAT_IMAGE} AS store-service-builder
 FROM runtime-base
 USER root
 ARG DPAD_SOURCE_REVISION
@@ -54,19 +35,23 @@ LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
 COPY --from=current-store-runner --chown=dpad:dpad /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7/ \
     /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7/
 COPY --from=store-service-builder /src/store-wine-build/programs/services/x86_64-windows/services.exe \
-    /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34/files/lib/wine/x86_64-windows/services.exe
+    /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7/files/lib/wine/x86_64-windows/services.exe
 COPY --from=store-service-builder /src/store-wine-build/server/wineserver \
-    /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34/files/bin/wineserver
+    /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7/files/bin/wineserver
+COPY --from=store-service-builder /src/store-wine-build/dlls/ncrypt/x86_64-windows/ncrypt.dll \
+    /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7/files/lib/wine/x86_64-windows/ncrypt.dll
 COPY --from=store-service-builder /src/store-wine-build/dlls/kernelbase/x86_64-windows/kernelbase.dll \
     /src/store-wine-build/dlls/ucrtbase/x86_64-windows/ucrtbase.dll \
     /src/store-wine-build/dlls/msvcrt/x86_64-windows/msvcrt.dll \
-    /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34/files/lib/wine/x86_64-windows/
+    /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7/files/lib/wine/x86_64-windows/
 COPY --from=store-service-builder /src/wine/programs/services/services.c /src/wine/LICENSE /src/wine/COPYING.LIB \
     /src/wine/server/token.c /tmp/epic-services.patch /tmp/patch-gog.py /usr/share/doc/dpadplay/official-store-services/
 COPY --from=store-service-builder /src/wine/dlls/kernelbase/process.c /src/wine/dlls/msvcrt/environ.c \
     /tmp/chromium-flags.patch /tmp/scope-gog-chromium.py /tmp/soju-LICENSE \
+    /tmp/ncrypt-persisted-keys.patch /src/wine/dlls/ncrypt/main.c /src/wine/dlls/ncrypt/ncrypt_internal.h \
     /tmp/store-wine-source.tar.gz /usr/share/doc/dpadplay/official-store-services/
-COPY scripts/gog-launch /opt/dpadcloud/gog-launch
+COPY scripts/gog-launch scripts/dpad_faugus_prepare.py scripts/dpad_steam_proton_default.py /opt/dpadcloud/
+COPY scripts/steam-desktop /usr/local/bin/steam
 COPY scripts/ea-launch /opt/dpadcloud/ea-launch
 COPY scripts/battlenet-launch scripts/ubisoft-launch scripts/dpad-clone-prefix-template /opt/dpadcloud/
 COPY scripts/dpad-sanitize-store-prefix /opt/dpadcloud/dpad-sanitize-store-prefix
@@ -82,12 +67,13 @@ RUN sed -i 's/\r$//' /opt/dpadcloud/gog-launch \
     && chmod +x /opt/dpadcloud/dpad-sanitize-store-prefix \
     && sed -i 's/\r$//' /opt/dpadcloud/dpad-keyboard-layout /opt/dpadcloud/launcher-shell /opt/dpadcloud/faugus-epic-launch \
     && chmod +x /opt/dpadcloud/dpad-keyboard-layout /opt/dpadcloud/launcher-shell /opt/dpadcloud/faugus-epic-launch \
-    && bash -n /opt/dpadcloud/launcher-shell /opt/dpadcloud/faugus-epic-launch \
+    && sed -i 's/\r$//' /usr/local/bin/steam && chmod +x /usr/local/bin/steam \
+    && bash -n /usr/local/bin/steam /opt/dpadcloud/launcher-shell /opt/dpadcloud/faugus-epic-launch \
     && sed -i 's/\r$//' /usr/local/bin/swaymsg && chmod +x /usr/local/bin/swaymsg \
     && test -s /usr/local/cuda-12.5/targets/x86_64-linux/lib/libnvrtc.so.12 \
     && ln -sf libnvrtc.so.12 /usr/local/cuda-12.5/targets/x86_64-linux/lib/libnvrtc.so \
     && ldconfig \
-    && chown dpad:dpad /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34/files/lib/wine/x86_64-windows/services.exe \
+    && chown dpad:dpad /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7/files/lib/wine/x86_64-windows/services.exe \
     && mkdir -p /opt/dpadcloud/installers \
     && curl -fLsS --retry 3 'https://content-system.gog.com/open_link/download?path=/open/galaxy/client/setup_galaxy_2.1.9.27.exe' \
        -o /opt/dpadcloud/installers/GOGGalaxy-2.1.9.27.exe \

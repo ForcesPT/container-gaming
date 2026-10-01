@@ -2,4 +2,5 @@
 # Stable launcher target for Valve's standard desktop Steam client.
 # Ignore launcher-supplied presentation flags so old cached launcher bundles
 # cannot select an alternate Steam shell.
+python3 -I /opt/dpadcloud/dpad_steam_proton_default.py || exit 1
 exec /usr/bin/steam

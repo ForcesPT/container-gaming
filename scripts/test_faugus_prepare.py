@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from dpad_faugus_prepare import PREVIOUS_RUNNER, prepare
+from dpad_faugus_prepare import PREVIOUS_RUNNERS, prepare
 
 
 class PreparationTests(unittest.TestCase):
@@ -71,13 +71,15 @@ class PreparationTests(unittest.TestCase):
     def test_previous_pinned_runner_migrates_without_losing_playtime(self):
         self.prep()
         games = json.loads(self.inventory().read_text())
-        games[0]['runner'] = PREVIOUS_RUNNER
-        games[0]['playtime'] = 17
-        self.inventory().write_text(json.dumps(games))
-        self.prep()
-        migrated = json.loads(self.inventory().read_text())[0]
-        self.assertEqual(migrated['runner'], str(self.runner))
-        self.assertEqual(migrated['playtime'], 17)
+        for previous in PREVIOUS_RUNNERS:
+            with self.subTest(previous=previous):
+                games[0]['runner'] = previous
+                games[0]['playtime'] = 17
+                self.inventory().write_text(json.dumps(games))
+                self.prep()
+                migrated = json.loads(self.inventory().read_text())[0]
+                self.assertEqual(migrated['runner'], str(self.runner))
+                self.assertEqual(migrated['playtime'], 17)
 
     def test_inventory_symlink_is_refused_without_changing_target(self):
         self.prep()

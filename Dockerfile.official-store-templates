@@ -12,12 +12,16 @@ COPY --from=templates --chown=dpad:dpad /opt/dpadcloud/ /opt/dpadcloud/
 COPY --from=templates --chown=dpad:dpad /home/dpad/.local/share/umu/ /home/dpad/.local/share/umu/
 # Apply the reviewed wrapper after installation archives so an older template
 # snapshot cannot replace the current runtime/account-state routing.
-COPY scripts/faugus-epic-launch scripts/battlenet-launch scripts/ea-launch scripts/ubisoft-launch /opt/dpadcloud/
+COPY scripts/faugus-epic-launch scripts/dpad_faugus_prepare.py scripts/gog-launch scripts/battlenet-launch scripts/ea-launch scripts/ubisoft-launch \
+    scripts/dpad_steam_proton_default.py /opt/dpadcloud/
+COPY scripts/steam-desktop /usr/local/bin/steam
 RUN sed -i 's/\r$//' /opt/dpadcloud/dpad-sanitize-store-prefix \
     && chmod +x /opt/dpadcloud/dpad-sanitize-store-prefix \
     && sed -i 's/\r$//' /opt/dpadcloud/dpad-verify-store-templates /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
     && chmod +x /opt/dpadcloud/dpad-verify-store-templates /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
-    && bash -n /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
+    && sed -i 's/\r$//' /opt/dpadcloud/gog-launch /usr/local/bin/steam \
+    && chmod +x /opt/dpadcloud/gog-launch /usr/local/bin/steam \
+    && bash -n /opt/dpadcloud/gog-launch /usr/local/bin/steam /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
     && /opt/dpadcloud/dpad-verify-store-templates --stores "$WINDOWS_STORES" \
     && test -f /home/dpad/.local/share/umu/steamrt3/.installed.ok \
     && test -x /home/dpad/.local/share/umu/steamrt3/run \

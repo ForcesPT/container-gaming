@@ -1,5 +1,7 @@
 # Local comparison only: no user prefixes, registry publication or public viewer.
 ARG HARNESS_IMAGE=dpadplay/local-store-test:6e001d4-all
+ARG STORE_COMPAT_IMAGE=dpadplay/store-compat:ge117
+FROM ${STORE_COMPAT_IMAGE} AS store-compat
 FROM ${HARNESS_IMAGE}
 USER root
 # Official x86_64 release asset; digest from the vendor GitHub release API.
@@ -12,10 +14,22 @@ RUN curl -fLsS --retry 3 \
        -C /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7 \
     && test -x /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7/proton \
     && rm -f /tmp/ge-proton-canary.tar.gz
-COPY scripts/battlenet-launch scripts/ea-launch scripts/ubisoft-launch /opt/dpadcloud/
+COPY --from=store-compat /src/store-wine-build/server/wineserver \
+    /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7/files/bin/wineserver
+COPY --from=store-compat /src/store-wine-build/programs/services/x86_64-windows/services.exe \
+    /src/store-wine-build/dlls/ncrypt/x86_64-windows/ncrypt.dll \
+    /src/store-wine-build/dlls/kernelbase/x86_64-windows/kernelbase.dll \
+    /src/store-wine-build/dlls/ucrtbase/x86_64-windows/ucrtbase.dll \
+    /src/store-wine-build/dlls/msvcrt/x86_64-windows/msvcrt.dll \
+    /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7/files/lib/wine/x86_64-windows/
+COPY scripts/faugus-epic-launch scripts/dpad_faugus_prepare.py scripts/gog-launch \
+    scripts/dpad_steam_proton_default.py scripts/battlenet-launch scripts/ea-launch scripts/ubisoft-launch /opt/dpadcloud/
+COPY scripts/steam-desktop /usr/local/bin/steam
 RUN sed -i 's/\r$//' /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
     && chmod +x /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch \
-    && bash -n /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch
+    && sed -i 's/\r$//' /usr/local/bin/steam /opt/dpadcloud/gog-launch /opt/dpadcloud/faugus-epic-launch \
+    && chmod +x /usr/local/bin/steam /opt/dpadcloud/gog-launch /opt/dpadcloud/faugus-epic-launch \
+    && bash -n /usr/local/bin/steam /opt/dpadcloud/gog-launch /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch
 ENV DPAD_PROTON_VERSION=GE-Proton11-7 \
     DPAD_BATTLENET_PROTON_VERSION=GE-Proton11-7 \
     DPAD_EA_PROTON_VERSION=GE-Proton11-7 \

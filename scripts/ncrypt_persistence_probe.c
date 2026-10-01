@@ -6,9 +6,13 @@
 #include <stdio.h>
 #include <string.h>
 
+static FILE *report;
+
 static int fail(const char *step, SECURITY_STATUS status)
 {
     fprintf(stderr, "%s failed: 0x%08lx\n", step, (unsigned long)status);
+    fprintf(report, "%s failed: 0x%08lx\n", step, (unsigned long)status);
+    fclose(report);
     return 1;
 }
 
@@ -31,6 +35,9 @@ int main(int argc, char **argv)
         return 2;
     }
     create = !strcmp(argv[1], "create");
+    /* Windows GUI runners can discard stdio. Keep a dummy-key-only receipt. */
+    report = fopen("C:\\dpad-ncrypt-probe.txt", "w");
+    if (!report) return 3;
     memset(hash, 0x5a, sizeof(hash));
 
     status = NCryptOpenStorageProvider(&provider, MS_KEY_STORAGE_PROVIDER, 0);
@@ -68,8 +75,15 @@ int main(int argc, char **argv)
     }
 
     printf("public=");
-    for (i = 0; i < public_size; ++i) printf("%02x", public_blob[i]);
+    fprintf(report, "public=");
+    for (i = 0; i < public_size; ++i)
+    {
+        printf("%02x", public_blob[i]);
+        fprintf(report, "%02x", public_blob[i]);
+    }
     printf("\nsignature_bytes=%lu\n", (unsigned long)signature_size);
+    fprintf(report, "\nsignature_bytes=%lu\n", (unsigned long)signature_size);
+    fclose(report);
     NCryptFreeObject(key);
     NCryptFreeObject(provider);
     return 0;

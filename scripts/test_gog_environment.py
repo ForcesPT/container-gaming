@@ -8,7 +8,8 @@ import sys
 import tempfile
 
 binary = Path(sys.argv[1])
-runner = Path.home() / '.steam/debian-installation/compatibilitytools.d/GE-Proton10-34'
+version = os.environ.get('DPAD_GOG_PROTON_VERSION') or os.environ.get('DPAD_PROTON_VERSION') or 'GE-Proton11-7'
+runner = Path.home() / '.steam/debian-installation/compatibilitytools.d' / version
 with tempfile.TemporaryDirectory(prefix='dpad-gog-gate-') as directory:
     prefix = Path(directory) / 'prefix'
     drive = prefix / 'drive_c'

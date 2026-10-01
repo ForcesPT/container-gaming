@@ -13,7 +13,8 @@ if [ "$backend" = heroic ]; then
 fi
 [ "$backend" = official ] || { echo 'Unknown GOG backend' >&2; exit 2; }
 export WINEPREFIX="${WINEPREFIX:-${HOME}/Games/gog-galaxy}"
-export PROTONPATH="${HOME}/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34"
+GP_VERSION="${DPAD_GOG_PROTON_VERSION:-${DPAD_PROTON_VERSION:-GE-Proton11-7}}"
+export PROTONPATH="${HOME}/.steam/debian-installation/compatibilitytools.d/$GP_VERSION"
 export GAMEID=umu-default STORE=gog UMU_RUNTIME_UPDATE=0 PROTON_ENABLE_WAYLAND=0
 export WINEDEBUG="${WINEDEBUG:--all}"
 # Galaxy overwrites Qt's Chromium flags. The patched Wine CRT preserves this

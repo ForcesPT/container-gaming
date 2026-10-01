@@ -193,7 +193,7 @@ RUN dpkg --add-architecture i386 && \
       libxcomposite1 libxdamage1 libnss3 libgbm1 \
       libgtk-3-0t64 libasound2t64 libc6:i386 libgl1:i386 \
       coturn \
-      python3 python3-pip python3-gi python3-gi-cairo \
+      python3 python3-pip python3-gi python3-gi-cairo python3-vdf \
       gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
       glib-networking libgudev-1.0-0 libgcrypt20 libjack-jackd2-0 \
       alsa-utils x264 x265 aom-tools libopenh264-dev \
@@ -879,6 +879,7 @@ RUN set -e; \
 #    consolidated into one layer group for cache efficiency.
 COPY scripts/launcher-shell /opt/dpadcloud/launcher-shell
 COPY scripts/steam-desktop /usr/local/bin/steam
+COPY scripts/dpad_steam_proton_default.py /opt/dpadcloud/dpad_steam_proton_default.py
 COPY scripts/launcher-toggle /opt/dpadcloud/launcher-toggle
 COPY scripts/dpad-labwc-set-output-mode /opt/dpadcloud/dpad-labwc-set-output-mode
 COPY scripts/dpad-publish-desktop-config /opt/dpadcloud/dpad-publish-desktop-config

@@ -7,8 +7,9 @@ import stat
 import tempfile
 import sys
 
-RUNNER = '/home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34'
+RUNNER = '/home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7'
 PREVIOUS_RUNNER = '/home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-3'
+PREVIOUS_RUNNERS = (PREVIOUS_RUNNER, '/home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34')
 
 def private_directory(path):
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -100,7 +101,7 @@ def prepare(home, runner=RUNNER, umu='/usr/bin/umu-run', state_root=None):
         for key in ('path', 'prefix'):
             if matches[0].get(key) != entry[key]:
                 raise ValueError('conflicting Epic record')
-        if matches[0].get('runner') not in (runner, PREVIOUS_RUNNER):
+        if matches[0].get('runner') not in (runner, *PREVIOUS_RUNNERS):
             raise ValueError('conflicting Epic runner')
         entry['playtime'] = matches[0].get('playtime', 0)
         games[games.index(matches[0])] = entry
@@ -114,7 +115,8 @@ if __name__ == '__main__':
         if sys.argv[1:] == ['--lock-only']:
             prepare_lock(os.environ['HOME'], os.environ.get('DPAD_FAUGUS_STATE_ROOT'))
         elif not sys.argv[1:]:
-            prepare(os.environ['HOME'], state_root=os.environ.get('DPAD_FAUGUS_STATE_ROOT'))
+            prepare(os.environ['HOME'], runner=os.environ.get('PROTONPATH', RUNNER),
+                    state_root=os.environ.get('DPAD_FAUGUS_STATE_ROOT'))
         else:
             raise ValueError('unknown preparation option')
     except (OSError, ValueError, KeyError) as error:

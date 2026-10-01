@@ -7,7 +7,8 @@ export UMU_RUNTIME_UPDATE=0
 # Faugus account data may live on a private volume. Keep UMU's account-free
 # runtime at the image's validated home location even when XDG_DATA_HOME moves.
 export UMU_FOLDERS_PATH=/home/dpad/.local/share
-export PROTONPATH=/home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34
+GP_VERSION="${DPAD_EPIC_PROTON_VERSION:-${DPAD_PROTON_VERSION:-GE-Proton11-7}}"
+export PROTONPATH="${HOME}/.steam/debian-installation/compatibilitytools.d/$GP_VERSION"
 export PROTON_ENABLE_WAYLAND=0
 # The authenticated Epic client repeatedly lost its graphics device under
 # WineD3D. Its DXVK/Vulkan path remained signed in on the Paris L4 canary.
