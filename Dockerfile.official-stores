@@ -56,7 +56,7 @@ COPY scripts/gog-launch /opt/dpadcloud/gog-launch
 COPY scripts/ea-launch /opt/dpadcloud/ea-launch
 COPY scripts/battlenet-launch scripts/ubisoft-launch scripts/dpad-clone-prefix-template /opt/dpadcloud/
 COPY scripts/dpad-sanitize-store-prefix /opt/dpadcloud/dpad-sanitize-store-prefix
-COPY scripts/dpad-keyboard-layout scripts/launcher-shell scripts/dpad_epic_installation.py /opt/dpadcloud/
+COPY scripts/dpad-keyboard-layout scripts/launcher-shell scripts/faugus-epic-launch scripts/dpad_epic_installation.py /opt/dpadcloud/
 COPY scripts/swaymsg-desktop-compat /usr/local/bin/swaymsg
 COPY --from=picker-adapter /work/output/ /opt/dpadcloud/launcher/resources/
 RUN sed -i 's/\r$//' /opt/dpadcloud/gog-launch \
@@ -66,9 +66,9 @@ RUN sed -i 's/\r$//' /opt/dpadcloud/gog-launch \
     && chmod +x /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ubisoft-launch /opt/dpadcloud/dpad-clone-prefix-template \
     && sed -i 's/\r$//' /opt/dpadcloud/dpad-sanitize-store-prefix \
     && chmod +x /opt/dpadcloud/dpad-sanitize-store-prefix \
-    && sed -i 's/\r$//' /opt/dpadcloud/dpad-keyboard-layout /opt/dpadcloud/launcher-shell \
-    && chmod +x /opt/dpadcloud/dpad-keyboard-layout /opt/dpadcloud/launcher-shell \
-    && bash -n /opt/dpadcloud/launcher-shell \
+    && sed -i 's/\r$//' /opt/dpadcloud/dpad-keyboard-layout /opt/dpadcloud/launcher-shell /opt/dpadcloud/faugus-epic-launch \
+    && chmod +x /opt/dpadcloud/dpad-keyboard-layout /opt/dpadcloud/launcher-shell /opt/dpadcloud/faugus-epic-launch \
+    && bash -n /opt/dpadcloud/launcher-shell /opt/dpadcloud/faugus-epic-launch \
     && sed -i 's/\r$//' /usr/local/bin/swaymsg && chmod +x /usr/local/bin/swaymsg \
     && test -s /usr/local/cuda-12.5/targets/x86_64-linux/lib/libnvrtc.so.12 \
     && ln -sf libnvrtc.so.12 /usr/local/cuda-12.5/targets/x86_64-linux/lib/libnvrtc.so \

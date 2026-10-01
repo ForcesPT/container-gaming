@@ -1,5 +1,27 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-10-01 owner-assisted local Epic/ABZÛ acceptance in progress.** Official
+> Epic signed in and retained login through a full local container restart.
+> Library navigation responded. Owner reported ABZÛ worked after official
+> installation and exited it. With the original container stopped, an offline
+> helper verified all fourteen vendor-listed game files and exported genuine
+> allowlisted installation records. A fresh local FUSE import then passed real
+> packaged preparation and registration. Owner signed in and confirmed ABZÛ
+> gameplay worked, then exited. Fourteen shared-lower files still matched
+> their original payload/vendor hashes; mount flags confirmed read-only lower
+> and writable private view. Current container is
+> `dpad-local-abzu-import-d1a4c6c`, viewer port 5802. Preserve both private volumes
+> (`dpad-owner-epic-local-20261001-a80d319f` and
+> `dpad-owner-epic-import-local-20261001-8562197e`) and game-only volume
+> `dpad-abzu-game-only-local-20261001-4e879fc2`. Never package/export account
+> prefixes. Resource receipt: `test-results/owner-epic-local-d1a4c6c.json`.
+> Fresh volume startup also exposed UMU downloading steamrt3 because Faugus's
+> XDG data root hides the baked home runtime. The wrapper now pins UMU's supported
+> folders path to the baked home runtime; a real offline UMU/Proton console probe
+> with a fresh private data root passed. Actual Faugus child-path verification
+> and local packaging are in progress. No cloud VM, push or deployment. Details
+> in LOCAL-OFFICIAL-STORES.
+
 > **2026-10-01 packaged local follow-up complete.** Clean source `d1a4c6c`
 > built the six-store image `sha256:7f765863…7641ee16` and FUSE import extension
 > `sha256:e96b48f5…e19bf17f`. Packaged helpers match source; qualified picker

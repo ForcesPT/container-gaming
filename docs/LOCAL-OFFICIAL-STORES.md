@@ -1,9 +1,63 @@
 # Local official-store qualification — 2026-10-01
 
 Owner scope: use the Windows PC and RTX 4070 Ti, with no paid cloud VM.
-Publish/deploy only after the local store gates pass. No account credentials
-were entered during these checks. Login-window qualification does not prove
+Publish/deploy only after the local store gates pass. The earlier account-free
+qualification did not enter credentials. Owner-assisted account checks are
+recorded separately below; login-window qualification alone does not prove
 authenticated libraries, game installation, gameplay, or cross-session tokens.
+
+## October 1 owner-assisted Epic check
+
+The owner signed in inside official Epic on the local GUI harness built from
+`dpadplay/official-stores:d1a4c6c-all`. Its private state is in a dedicated Docker
+volume, separate from the release image and build context. Library opened.
+After a full restart of the same test container and reopening the official
+client, it returned signed in without another credential prompt. Library
+navigation then responded. A separate window-only close/reopen check remains
+pending; early viewer clicks did not activate the close control.
+
+The private volume must be preserved and must never be exported or packaged.
+The resource/acceptance receipt is ignored under
+`test-results/owner-epic-local-d1a4c6c.json`; it contains no account details.
+No raw authentication logs or signed-in prefix were copied. Official Epic
+finished installing ABZÛ, showed Launch, and the owner reported the game worked
+and that they exited it. This is local functional launch evidence, not native
+Linux streaming, NFS or GPU-performance qualification.
+
+After stopping the container, an offline helper mounted the owner's source
+volume read-only with networking disabled. It copied only the fourteen
+vendor-listed game files and verified their sizes and hashes against the
+genuine official `.egstore` manifest. Payload size is 4,818,969,865 bytes.
+The packaged exporter accepted the real completed `.item` record. The
+game-only capture receipt is `test-results/abzu-genuine-capture-receipt.json`:
+
+- Local release: `8562197e-690b-4eee-9034-fa574d421863`.
+- Payload manifest: `a1b9a8af9df8ebfe4c338785f009a41eae8014120a07413f86fc5892e8658592`.
+- Vendor manifest: `948f8707e8b3c24b43bc349386880ffe8b70896371cb5991b0c4915f8fa14b3c`.
+- Installation capsule: `7ac68a36c101d3eca98a0de7bfb9a60de9892c87616e4a40ca503267be014c6d`.
+
+A fresh local import harness then mounted that game-only volume read-only,
+prepared the packaged private FUSE view, cloned the preinstalled official
+client, and successfully registered the genuine records before starting Epic.
+Its prefix is fresh; the original account prefix was not copied. The owner
+signed in and confirmed ABZÛ gameplay worked, then exited normally. All fourteen
+shared lower files were reverified against the captured payload manifest and
+Epic vendor hashes while this private-overlay test was running. Mount flags
+confirmed the shared lower was read-only and the private view was writable.
+This passes genuine local shared-file recognition and functional game launch;
+it does not establish NFS-backed FUSE or native streaming/performance.
+
+This fresh volume also exposed a startup gap: setting Faugus's XDG data root
+on the volume made UMU miss the baked home runtime and download steamrt3.
+The recognition test proceeded to sign-in and gameplay. The source fix pins
+`UMU_FOLDERS_PATH=/home/dpad/.local/share`, independently of the private Faugus
+data root. The disposable image integration gate
+`scripts/test_epic_runtime_location.py` passed an actual UMU/Proton console
+probe with networking disabled, a fresh private-volume prefix and an initially
+wrong inherited runtime path. It verified no runtime tree appeared in account
+data. This gate uses a fake Faugus controller to execute the real console probe;
+the actual Faugus child path is checked separately before packaging.
+No cloud VM, registry push or deployment was performed.
 
 ## October 1 packaged follow-up
 
