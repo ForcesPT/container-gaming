@@ -30,8 +30,5 @@ RUN sed -i 's/\r$//' /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /o
     && sed -i 's/\r$//' /usr/local/bin/steam /opt/dpadcloud/gog-launch /opt/dpadcloud/faugus-epic-launch \
     && chmod +x /usr/local/bin/steam /opt/dpadcloud/gog-launch /opt/dpadcloud/faugus-epic-launch \
     && bash -n /usr/local/bin/steam /opt/dpadcloud/gog-launch /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/ubisoft-launch
-ENV DPAD_PROTON_VERSION=GE-Proton11-7 \
-    DPAD_BATTLENET_PROTON_VERSION=GE-Proton11-7 \
-    DPAD_EA_PROTON_VERSION=GE-Proton11-7 \
-    DPAD_UBISOFT_PROTON_VERSION=GE-Proton11-7
+ENV DPAD_PROTON_VERSION=GE-Proton11-7
 LABEL com.dpadplay.launcher.qualification="local-ge-proton11-7-comparison"

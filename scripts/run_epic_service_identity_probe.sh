@@ -5,7 +5,7 @@ set -euo pipefail
 umask 077
 test "$(id -u)" -ne 0 && test -f /.dockerenv && test -n "${DISPLAY:-}"
 task_prefix="$(mktemp -d /tmp/dpad-eos-identity.XXXXXX)"
-task_proton=/home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34
+task_proton="${HOME}/.steam/debian-installation/compatibilitytools.d/${DPAD_PROTON_VERSION:-GE-Proton11-7}"
 cleanup() {
     WINEPREFIX="$task_prefix/pfx" "$task_proton/files/bin/wineserver" -k 2>/dev/null || true
     case "$task_prefix" in /tmp/dpad-eos-identity.*) rm -rf -- "$task_prefix" ;; esac

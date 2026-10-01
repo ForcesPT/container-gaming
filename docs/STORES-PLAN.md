@@ -1,5 +1,13 @@
 # DpadCloud Container Gaming — Multi-Store Plan (the dpad-launcher shell)
 
+> **2026-10-01 current local candidate:** Steam is the native official client;
+> Epic, GOG Galaxy, Battle.net, EA and Ubisoft are their official Windows
+> clients on GE-Proton11-7. Steam uses the same runner for Windows games.
+> Epic/GOG compatibility components are rebuilt against the full GE11 source,
+> with account-free API/service/renderer tests before owner acceptance. Older
+> Heroic and GE10 decisions below are historical. Publication remains gated by
+> the acceptance evidence in PROJECT_STATE.
+
 > **2026-08-16 CURRENT DECISION — DpadPlay launcher only.** The session shell is
 > always the custom `dpad-launcher` Electron store picker. The runtime is
 > `gst-wayland-display` + nested Sway/XWayland; there is no shell/compositor

@@ -1,5 +1,16 @@
 # DpadPlay Gaming Image Runbook
 
+> **2026-10-01 local official-store candidate:** every Windows store defaults to
+> GE-Proton11-7 via `DPAD_PROTON_VERSION`. Overrides are
+> `DPAD_EPIC_PROTON_VERSION`, `DPAD_GOG_PROTON_VERSION`,
+> `DPAD_BATTLENET_PROTON_VERSION`, `DPAD_EA_PROTON_VERSION`, and
+> `DPAD_UBISOFT_PROTON_VERSION`. Steam stays native Linux; its Windows-game
+> fallback uses the same global setting or `DPAD_STEAM_PROTON_VERSION` and
+> preserves per-game choices. Build the GE11 source toolchain, then scoped
+> compatibility image, then `Dockerfile.official-stores` and sanitized templates.
+> See PROJECT_STATE for acceptance and open gates. The older canary recipes
+> below do not qualify this new runner. Nothing has been promoted live.
+
 > **2026-09-27 experimental store backend:** the separately built
 > [Faugus candidate](FAUGUS-CANDIDATE.md) uses the accepted transport digest,
 > official Epic and pinned GE-Proton11-3. Local preparation and runner smoke

@@ -22,7 +22,8 @@ RUN mkdir -p /src/ge /src/wine-staging \
     && echo 'dc863a602638557496bf63d56c1d9bbbfbb44936652f4ecc36f6dd19517c649f  /tmp/restore-configure.patch' | sha256sum -c -
 COPY scripts/prepare_store_wine.py /tmp/prepare-store-wine.py
 RUN python3 /tmp/prepare-store-wine.py ge11-7 \
-    && cd /src && bash /tmp/prepare-store-wine.sh
+    && cd /src && bash /tmp/prepare-store-wine.sh \
+    && grep -q '#define SERVER_PROTOCOL_VERSION 938' /src/wine/include/wine/server_protocol.h
 RUN cd /src/wine/dlls/winevulkan && python3 make_vulkan \
     && cd /src/wine && ./tools/make_specfiles \
     && mkdir -p /src/store-wine-build/include/wine \

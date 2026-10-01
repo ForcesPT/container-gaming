@@ -1,5 +1,29 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-10-01 all-store GE-Proton11-7 migration (local only).** Source
+> `a6bf7d5` makes Epic/GOG use the same default as EA/Battle.net/Ubisoft, and
+> Steam's native client sets GE-Proton11-7-x86_64 as its Windows-game fallback
+> without replacing per-game selections. Known Faugus GE10/11-3 records migrate
+> without losing playtime. The runner's exact full Wine/staging patch series is
+> rebuilt by `Dockerfile.store-wine-builder-ge117` and
+> `Dockerfile.store-compat-ge117`; protocol 938 is required. Never copy old GE10
+> components into GE11. Rebuilt NCrypt, service identity, updater desktop and
+> scoped Galaxy renderer components are packaged with corresponding source.
+> Dummy key create/sign/open after a wineserver restart passed. Six account-free
+> service identity cases passed, as did all three renderer boundaries. Faugus
+> stub controller/wrapper and Steam settings-preservation checks passed.
+>
+> The local `ge117-all` account-free image built and passed sanitized templates,
+> wrapper/source parity, all-store selectors/overrides and Steam's actual tool
+> name. Later changes are pending a final rebuild. GOG initially reached sign-in
+> but then reproduced a native allocator error after a cold restart. A narrow
+> candidate passes its verified executable as a Windows path instead of adding
+> Proton's Unix-path umu.exe bridge, and keeps vendor output in a private 0600
+> launch log. That path reached sign-in on its first launch and after a full
+> container restart; it is a mitigation with further acceptance pending, not a
+> proven upstream root-cause fix. Existing owner Epic/GOG volumes are preserved
+> for GE11 retention checks. No push, deployment or paid resource was used.
+
 > **2026-10-01 owner-requested default runner changed in source `66613ff`.**
 > GE-Proton11-7 is the base/build/bootstrap and EA/Battle.net/Ubisoft default.
 > The local GUI canary `dpadplay/local-proton-canary:ge11-7-66613ff` built as

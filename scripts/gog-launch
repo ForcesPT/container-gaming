@@ -78,4 +78,23 @@ if [ -z "$client" ]; then
     test -n "$client" || { echo 'Official GOG Galaxy installation did not complete' >&2; exit 1; }
 fi
 [ "$mode" != --prepare-only ] || exit 0
-exec umu-run "$client" --in-process-gpu /deelevated
+# Pass the native Windows path: a Unix path adds Proton's umu.exe bridge,
+# which produced intermittent cold-start heap failures in local Galaxy tests.
+# The executable above is already verified inside this private prefix.
+windows_client="C:\\${client#"$WINEPREFIX/drive_c/"}"
+windows_client="${windows_client//\//\\}"
+# Native launch can emit vendor account diagnostics to stdout. Keep those in
+# an owner-only file instead of the session/container log.
+exec python3 -I - "$lock_dir/gog-launch.log" "$windows_client" <<'PY'
+import os, stat, sys
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+info = os.fstat(fd)
+if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o022:
+    raise SystemExit('Untrusted GOG launch log')
+os.fchmod(fd, 0o600)
+os.ftruncate(fd, 0)
+os.dup2(fd, 1)
+os.dup2(fd, 2)
+os.close(fd)
+os.execvp('umu-run', ['umu-run', sys.argv[2], '--in-process-gpu', '/deelevated'])
+PY
