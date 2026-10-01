@@ -1,5 +1,26 @@
 # DpadPlay Gaming Image Runbook
 
+> **2026-10-01 GOG/default-runner update:** source `460ca0b` qualifies GOG's
+> native64 cold-start mitigation and official warm window restoration locally.
+> `DPAD_GOG_NATIVE64=1` is the GE-Proton11-7 default only for GalaxyClient.exe;
+> use `0` only for a diagnostic comparison. Other clients/installers/games retain
+> their loader selection. Startup cleanup runs only on idle prefixes and changes
+> only the exact GOG autostart command and numeric volatile client PID lock.
+> `gog-launch --prepare-only` refuses a concurrent launch; normal warm launch
+> restores the existing client via `PROTON_VERB=runinprefix`. Vendor stdout goes
+> to private `~/.local/state/dpad-stores/gog-launch.log` or `gog-restore.log` (0600).
+> Never include these logs in generic session output or release receipts.
+> Image runners live in `/opt/dpadcloud/proton`; each wrapper republishes the
+> selected image tool into the current Steam install root before using it.
+> Installation template imports must copy only selected `*-prefix` folders,
+> never old `/opt/dpadcloud` runtime scripts/components. See PROJECT_STATE for
+> actual acceptance and remaining native GPU/cloud release gates.
+> Local Xorg qualification must wait for both `xdpyinfo -display :99` and
+> `pgrep -x openbox` before starting a store after container creation/restart.
+> The final GOG image passed signed-in cold startup with this readiness gate;
+> an earlier immediate launch exited before frontend initialization. Do not
+> substitute this Xorg check for production Sway/gstWayland readiness.
+
 > **2026-10-01 local official-store candidate:** every Windows store defaults to
 > GE-Proton11-7 via `DPAD_PROTON_VERSION`. Overrides are
 > `DPAD_EPIC_PROTON_VERSION`, `DPAD_GOG_PROTON_VERSION`,

@@ -1,5 +1,56 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-10-01 GE-Proton11-7 default and GOG startup fixes, source `460ca0b` (local only).**
+> Every Windows store now uses the rebuilt GE-Proton11-7 runner. Steam remains
+> Valve's native Linux client and uses `GE-Proton11-7-x86_64` for Windows games,
+> preserving per-game selections. The image runner lives under `/opt/dpadcloud/proton`;
+> wrappers expose it into Steam's actual install root even when an existing user
+> volume replaces the image's home directory. Previous/custom tool files are
+> preserved outside Steam's scan. The real stopped owner Steam volume passed
+> this publication/default update with networking disabled.
+>
+> GOG needed three separate startup protections: its verified executable uses a
+> Windows path; the scoped Proton selector uses GE11's native 64-bit Unix loader
+> only for `GalaxyClient.exe`; and idle-prefix preparation removes only Galaxy's
+> exact Windows Run entry and verified numeric instance PID lock. A stale PID 224
+> survived a container restart with no Wine process present and caused false
+> second-instance detection. Active prefixes and unknown lock contents are never
+> changed. WoW64 alone failed a repeated cold test and was not kept. Native64
+> passed two account-free cold launches; the preserved owner profile reopened
+> signed in and its Library responded. Cold restart retained login. Normal close
+> keeps GOG alive, so a locked launch now uses `runinprefix` and Galaxy's own
+> RestoreClientMessage. Actual close/reopen passed without another sign-in.
+> These are qualified local mitigations, not a claim of an upstream heap fix.
+> Final `ge117-complete` image: an immediate first owner launch exited before
+> frontend initialization without an allowlisted crash marker. After explicitly
+> waiting for Xorg `:99` and Openbox readiness, a retry and a subsequent full
+> container restart both opened signed in; Owned games navigation responded.
+> This supports a local harness readiness requirement, but does not prove the
+> cause of that first exit or qualify production cold-start reliability.
+>
+> Epic also reopened signed in and its Library responded after a full restart on
+> the rebuilt GE11 components. EA/Ubisoft had already passed GE11 sign-in and
+> restart retention; Battle.net passed sign-in/Home with email retained and
+> remembered login unchecked. That optional remembered-login test remains skipped.
+> No new GE11 ABZÛ gameplay acceptance is claimed here; prior game/shared-file
+> acceptance used the older qualified runner.
+>
+> Package checks cover wrapper/helper parity, selectors/override precedence,
+> existing-volume topology, Steam's actual tool name, sanitized installation
+> templates, absence of owner state/local viewer, and five actual vendor loader
+> constructor boundaries. Nine startup/publisher/Steam preservation checks pass.
+> The actual GOG wrapper cold/restore test passes with private 0600 logs.
+> Required Epic NCrypt/service and Galaxy renderer boundaries were tested earlier
+> against these same rebuilt compatibility components (server protocol 938).
+>
+> Build tags: `dpadplay/local-proton-canary:ge117-complete` (GUI, never publish)
+> and `dpadplay/official-stores:ge117-complete` (account-free local candidate).
+> Receipts and final image IDs are recorded under `test-results/ge117-complete-*`.
+> No registry/Git push, website deployment or paid resource was used. The desktop
+> harness uses software Xorg/lavapipe; native NVIDIA/EGL/WebRTC, cloud/NFS and
+> game acceptance on this runner remain release gates. Preserve private volumes;
+> do not export account state, vendor authentication logs or authenticated screenshots.
+
 > **2026-10-01 all-store GE-Proton11-7 migration (local only).** Source
 > `a6bf7d5` makes Epic/GOG use the same default as EA/Battle.net/Ubisoft, and
 > Steam's native client sets GE-Proton11-7-x86_64 as its Windows-game fallback

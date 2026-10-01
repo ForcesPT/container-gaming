@@ -1,5 +1,15 @@
 # DpadCloud Container Gaming — Multi-Store Plan (the dpad-launcher shell)
 
+> **2026-10-01 source `460ca0b`:** GE-Proton11-7 is the common Windows-store
+> default and Steam Windows-game fallback. GOG's cold-start mitigation selects
+> the vendor native64 loader only for its client, clears its verified volatile
+> PID lock only while idle, and disables its exact duplicate Windows autostart.
+> A second warm launch restores the official client's hidden window, preserving
+> login. Existing Steam volumes receive the image runner without deleting old
+> tools/account files or overriding per-game choices. Local acceptance and the
+> remaining GPU/game/cloud gates are documented in PROJECT_STATE; production
+> has not been promoted.
+
 > **2026-10-01 current local candidate:** Steam is the native official client;
 > Epic, GOG Galaxy, Battle.net, EA and Ubisoft are their official Windows
 > clients on GE-Proton11-7. Steam uses the same runner for Windows games.
