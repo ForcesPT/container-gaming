@@ -8,6 +8,7 @@ export UMU_RUNTIME_UPDATE=0
 # runtime at the image's validated home location even when XDG_DATA_HOME moves.
 export UMU_FOLDERS_PATH=/home/dpad/.local/share
 GP_VERSION="${DPAD_EPIC_PROTON_VERSION:-${DPAD_PROTON_VERSION:-GE-Proton11-7}}"
+python3 -I /opt/dpadcloud/dpad_publish_proton.py "$GP_VERSION"
 export PROTONPATH="${HOME}/.steam/debian-installation/compatibilitytools.d/$GP_VERSION"
 export PROTON_ENABLE_WAYLAND=0
 # The authenticated Epic client repeatedly lost its graphics device under

@@ -2,5 +2,7 @@
 # Stable launcher target for Valve's standard desktop Steam client.
 # Ignore launcher-supplied presentation flags so old cached launcher bundles
 # cannot select an alternate Steam shell.
+version="${DPAD_STEAM_PROTON_VERSION:-${DPAD_PROTON_VERSION:-GE-Proton11-7}}"
+python3 -I /opt/dpadcloud/dpad_publish_proton.py "$version" || exit 1
 python3 -I /opt/dpadcloud/dpad_steam_proton_default.py || exit 1
 exec /usr/bin/steam

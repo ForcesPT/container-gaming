@@ -75,6 +75,7 @@ fi
 # override can select the retained GE-Proton10-34 fallback if needed.
 # All Windows launchers run via Xwayland per STORES-PLAN §5.
 GP_VERSION="${DPAD_BATTLENET_PROTON_VERSION:-${DPAD_PROTON_VERSION:-GE-Proton11-7}}"
+python3 -I /opt/dpadcloud/dpad_publish_proton.py "$GP_VERSION"
 GP_DIR="${HOME}/.steam/debian-installation/compatibilitytools.d/$GP_VERSION"
 if [ ! -x "$GP_DIR/proton" ]; then
     echo "[battlenet-launch] FATAL: $GP_VERSION not found at $GP_DIR (no proton binary)" | tee -a "$LOG" >&2

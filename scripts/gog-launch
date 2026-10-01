@@ -14,6 +14,7 @@ fi
 [ "$backend" = official ] || { echo 'Unknown GOG backend' >&2; exit 2; }
 export WINEPREFIX="${WINEPREFIX:-${HOME}/Games/gog-galaxy}"
 GP_VERSION="${DPAD_GOG_PROTON_VERSION:-${DPAD_PROTON_VERSION:-GE-Proton11-7}}"
+python3 -I /opt/dpadcloud/dpad_publish_proton.py "$GP_VERSION"
 export PROTONPATH="${HOME}/.steam/debian-installation/compatibilitytools.d/$GP_VERSION"
 export GAMEID=umu-default STORE=gog UMU_RUNTIME_UPDATE=0 PROTON_ENABLE_WAYLAND=0
 export WINEDEBUG="${WINEDEBUG:--all}"

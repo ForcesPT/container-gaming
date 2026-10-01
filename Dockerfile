@@ -762,7 +762,10 @@ RUN set -e; \
     && mkdir -p "${HOME}/.config/heroic/tools/proton" \
     && ln -s "${GP_DIR}" "${HOME}/.config/heroic/tools/proton/${GE_PROTON_VERSION}" \
     && chown -R ${USERNAME}:${USERNAME} "${HOME}/.config/heroic/tools" \
-    && test -x "${HOME}/.config/heroic/tools/proton/${GE_PROTON_VERSION}/proton"
+    && test -x "${HOME}/.config/heroic/tools/proton/${GE_PROTON_VERSION}/proton" \
+    && mkdir -p /opt/dpadcloud/proton \
+    && mv "${GP_DIR}" "/opt/dpadcloud/proton/${GE_PROTON_VERSION}" \
+    && ln -s "/opt/dpadcloud/proton/${GE_PROTON_VERSION}" "${GP_DIR}"
 
 #    (d) libSDL3 for dpad-launcher's gamepad input (koffi FFI dlopen). SDL3
 #        is NOT in Noble repos; the oracular libsdl3-0 .deb churns the pinned
@@ -880,6 +883,7 @@ RUN set -e; \
 COPY scripts/launcher-shell /opt/dpadcloud/launcher-shell
 COPY scripts/steam-desktop /usr/local/bin/steam
 COPY scripts/dpad_steam_proton_default.py /opt/dpadcloud/dpad_steam_proton_default.py
+COPY scripts/dpad_publish_proton.py /opt/dpadcloud/dpad_publish_proton.py
 COPY scripts/launcher-toggle /opt/dpadcloud/launcher-toggle
 COPY scripts/dpad-labwc-set-output-mode /opt/dpadcloud/dpad-labwc-set-output-mode
 COPY scripts/dpad-publish-desktop-config /opt/dpadcloud/dpad-publish-desktop-config

@@ -50,7 +50,7 @@ COPY --from=store-service-builder /src/wine/dlls/kernelbase/process.c /src/wine/
     /tmp/chromium-flags.patch /tmp/scope-gog-chromium.py /tmp/soju-LICENSE \
     /tmp/ncrypt-persisted-keys.patch /src/wine/dlls/ncrypt/main.c /src/wine/dlls/ncrypt/ncrypt_internal.h \
     /tmp/store-wine-source.tar.gz /usr/share/doc/dpadplay/official-store-services/
-COPY scripts/gog-launch scripts/dpad_faugus_prepare.py scripts/dpad_steam_proton_default.py /opt/dpadcloud/
+COPY scripts/gog-launch scripts/dpad_faugus_prepare.py scripts/dpad_steam_proton_default.py scripts/dpad_publish_proton.py /opt/dpadcloud/
 COPY scripts/steam-desktop /usr/local/bin/steam
 COPY scripts/ea-launch /opt/dpadcloud/ea-launch
 COPY scripts/battlenet-launch scripts/ubisoft-launch scripts/dpad-clone-prefix-template /opt/dpadcloud/
@@ -82,6 +82,9 @@ RUN sed -i 's/\r$//' /opt/dpadcloud/gog-launch \
     && bash -n /opt/dpadcloud/gog-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ubisoft-launch
 ENV DPAD_GOG_BACKEND=official \
     DPAD_PROTON_VERSION=GE-Proton11-7
+RUN mkdir -p /opt/dpadcloud/proton \
+    && mv /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7 /opt/dpadcloud/proton/GE-Proton11-7 \
+    && ln -s /opt/dpadcloud/proton/GE-Proton11-7 /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7
 # GPU runtime hooks can regenerate ld.so.cache with the older host library first.
 # Keep the compositor's bundled Wayland 1.23 ABI ahead of that cache.
 ENV LD_LIBRARY_PATH=/usr/local/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}

@@ -3,6 +3,7 @@
 set -euo pipefail
 export HOME=/home/dpad
 task_prefix=/tmp/dpad-gog-runtime-prefix
+install -d -m 700 -o dpad -g dpad "$task_prefix"
 install -d -m 700 -o dpad -g dpad "$task_prefix/drive_c/Program Files/GOG Galaxy"
 cp '/opt/dpadcloud/gog-prefix/drive_c/Program Files/GOG Galaxy/GalaxyClient.exe' \
    "$task_prefix/drive_c/Program Files/GOG Galaxy/GalaxyClient.exe"
