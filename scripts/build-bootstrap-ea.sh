@@ -42,7 +42,7 @@ set -u
 USERNAME="dpad"
 PUID="1001"
 HOME_DIR="/home/dpad"
-GP_DIR="${HOME_DIR}/.steam/debian-installation/compatibilitytools.d/GE-Proton11-3"
+GP_DIR="${HOME_DIR}/.steam/debian-installation/compatibilitytools.d/${DPAD_EA_PROTON_VERSION:-${DPAD_PROTON_VERSION:-GE-Proton11-7}}"
 PREFIX_SRC="/opt/dpadcloud/ea-prefix"
 MARKER="${PREFIX_SRC}/.dpad-prebaked"
 

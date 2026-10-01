@@ -731,7 +731,7 @@ RUN mkdir -p "${HOME}/.config/heroic/store" && \
 COPY --from=forcespt/dpadcloud-launcher:0.1.7 /opt/dpadcloud/launcher /opt/dpadcloud/launcher
 RUN chmod +x /opt/dpadcloud/launcher/dpad-launcher
 
-#    (a) GE-Proton11-3 into compatibilitytools.d. The Battle.net white-screen
+#    (a) GE-Proton11-7 into compatibilitytools.d. The Battle.net white-screen
 #        fix is in (GE-Proton11-2 changelog: "Battle.net: fixed Wine Wayland
 #        white-screen behavior" + "--in-process-gpu handling for Wine Wayland
 #        launchers"); 11-3 is the hotfix on top. Also bundles the NVIDIA
@@ -744,13 +744,15 @@ RUN chmod +x /opt/dpadcloud/launcher/dpad-launcher
 #        together when upgrading the runner. Heroic scans its own tools/proton
 #        directory but did not discover this Steam path in the Instant canary;
 #        expose the same checked runner there without duplicating its payload.
-ARG GE_PROTON_VERSION=GE-Proton11-3
-ARG GE_PROTON_SHA256=861c2edc8d40d051fb1e7a692deb953be52bd339c46d90f2b7dde50ddad91266
+ARG GE_PROTON_VERSION=GE-Proton11-7
+ARG GE_PROTON_ASSET=GE-Proton11-7-x86_64.tar.gz
+ARG GE_PROTON_SHA256=c5448b76a230384e2d7bc6beb5ccb97bafb7e2c3b6c527cb03a1a546bbcb00a0
+ENV DPAD_PROTON_VERSION=${GE_PROTON_VERSION}
 RUN set -e; \
     GP_DIR="${HOME}/.steam/debian-installation/compatibilitytools.d/${GE_PROTON_VERSION}"; \
     mkdir -p "${GP_DIR}"; \
     curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o /tmp/ge-proton.tar.gz \
-      "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/${GE_PROTON_VERSION}/${GE_PROTON_VERSION}.tar.gz" \
+      "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/${GE_PROTON_VERSION}/${GE_PROTON_ASSET}" \
     && echo "${GE_PROTON_SHA256}  /tmp/ge-proton.tar.gz" | sha256sum -c - \
        || { echo "FATAL: GE-Proton SHA256 mismatch — download may be corrupted or tampered"; exit 1; } \
     && tar -xzf /tmp/ge-proton.tar.gz -C "${GP_DIR}" --strip-components=1 \

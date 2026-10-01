@@ -2,6 +2,18 @@
 ARG STORE_IMAGE=forcespt/dpadcloud-gaming@sha256:cc58f0f2fa167ba464a4c5634076d3e8720e07f890118692fa332a26ff27f4ff
 ARG SERVICE_BUILDER_IMAGE=dpadplay/store-wine-builder:repro
 FROM ${STORE_IMAGE} AS runtime-base
+FROM runtime-base AS current-store-runner
+USER root
+# Qualified for EA and Battle.net locally. Keep the patched Epic/GOG runner.
+RUN curl -fLsS --retry 3 \
+      https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton11-7/GE-Proton11-7-x86_64.tar.gz \
+      -o /tmp/ge-proton-store.tar.gz \
+    && echo 'c5448b76a230384e2d7bc6beb5ccb97bafb7e2c3b6c527cb03a1a546bbcb00a0  /tmp/ge-proton-store.tar.gz' | sha256sum -c - \
+    && install -d -o dpad -g dpad /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7 \
+    && runuser -u dpad -- tar -xzf /tmp/ge-proton-store.tar.gz --strip-components=1 \
+       -C /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7 \
+    && test -x /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7/proton \
+    && rm -f /tmp/ge-proton-store.tar.gz
 FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS picker-adapter
 WORKDIR /work
 RUN npm install --no-audit --no-fund @electron/asar@3.2.17
@@ -39,6 +51,8 @@ USER root
 ARG DPAD_SOURCE_REVISION
 LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
       com.dpadplay.launcher.qualification="official-stores-local-candidate"
+COPY --from=current-store-runner --chown=dpad:dpad /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7/ \
+    /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton11-7/
 COPY --from=store-service-builder /src/store-wine-build/programs/services/x86_64-windows/services.exe \
     /home/dpad/.steam/debian-installation/compatibilitytools.d/GE-Proton10-34/files/lib/wine/x86_64-windows/services.exe
 COPY --from=store-service-builder /src/store-wine-build/server/wineserver \
@@ -81,7 +95,9 @@ RUN sed -i 's/\r$//' /opt/dpadcloud/gog-launch \
     && /opt/dpadcloud/dpad-verify-windows-binary --publisher 'GOG  sp. z o.o' /opt/dpadcloud/installers/GOGGalaxy-2.1.9.27.exe \
     && bash -n /opt/dpadcloud/gog-launch /opt/dpadcloud/ea-launch /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ubisoft-launch
 ENV DPAD_GOG_BACKEND=official \
-    DPAD_BATTLENET_PROTON_VERSION=GE-Proton10-34
+    DPAD_PROTON_VERSION=GE-Proton11-7 \
+    DPAD_BATTLENET_PROTON_VERSION=GE-Proton11-7 \
+    DPAD_EA_PROTON_VERSION=GE-Proton11-7
 # GPU runtime hooks can regenerate ld.so.cache with the older host library first.
 # Keep the compositor's bundled Wayland 1.23 ABI ahead of that cache.
 ENV LD_LIBRARY_PATH=/usr/local/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}

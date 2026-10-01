@@ -63,12 +63,87 @@ not establish the cause. No private dump, authenticated log, or account
 prefix was exported. A test-only wrapper copy now selects the already
 installed GE-Proton10-34 runner on this same local container. The owner signed
 in successfully; Home and My Games opened and navigation responded. No new
-crash dump appeared during this check. Normal Exit was selected; full
-container-restart acceptance remains pending. The official-store Dockerfile
+crash dump appeared during this check. Normal Exit and a full container
+restart reopened sign-in without a crash. The email was retained; Keep me
+logged in was unchecked. The owner chose to continue without another
+automatic-login check, so remembered authentication is not claimed. The
+completed container is stopped and its private volume is preserved.
+The official-store Dockerfile
 now selects `DPAD_BATTLENET_PROTON_VERSION=GE-Proton10-34`; the wrapper retains
 GE-Proton11-3 as its legacy base-image default. Template assembly reapplies the
 reviewed Battle.net wrapper after older installation archives. Packaging and
 restart checks are in progress; no publication or production change occurred.
+
+The next local account check is official EA App in
+`dpad-local-owner-ea-6e001d4`, viewer port 5806. Its dedicated private volume
+`dpad-owner-ea-local-20261001-6e001d4` mounts at `/home/dpad/owner-ea`, with
+child prefix `ea-app`. It was cloned offline from the sanitized EA template;
+the preinstalled executable was verified present. Portuguese input is set.
+The service query reports RUNNING and zero exit codes; the official sign-in
+window was visually verified. Owner reached verification, but could not enter
+the code; refocusing the titlebar/field and using top-row number keys did not
+resolve it. Authenticated EA acceptance remains open. The owner requested a
+GE-Proton11-7 comparison; the old EA container is stopped and its private
+volume is preserved. This test
+uses the earlier qualified GUI harness; EA code/runtime were not changed by
+the Battle.net runner selection. No cloud resource or private-state export.
+
+`Dockerfile.local-proton-canary` is a local GUI comparison only. Source
+`febce34` verifies the official GE-Proton11-7 x86_64 release archive against
+SHA-256 `c5448b76a230384e2d7bc6beb5ccb97bafb7e2c3b6c527cb03a1a546bbcb00a0`.
+It sets independent EA and Battle.net runner settings to GE-Proton11-7 while
+retaining the installed older runners. The earlier built official-store image
+uses the locally successful Battle.net GE-Proton10-34 fallback.
+Do not copy patched GE-Proton10-34 DLLs into the new runner or infer that
+all stores/games pass from its release notes. The completed local canary is
+`dpadplay/local-proton-canary:ge11-7-febce34`, ID
+`sha256:2469548f52d0ad009d6a15f231c41e14a0b6228144cf34b714dec0f692faab0c`.
+Offline checks verified both reviewed wrappers, runner availability and absence
+of owner prefixes. The image includes the local viewer and must never be published.
+
+The owner completed EA verification successfully on GE-Proton11-7. Home and
+Library opened and responded. Normal EA Exit followed by a full container
+restart reopened signed in to Home; Library navigation responded again.
+This qualifies EA account input, navigation and restart retention in the local
+software Xorg harness. EA gameplay and native streaming remain untested.
+The completed `dpad-local-owner-ea-ge117-febce34` container is stopped; its private
+volume is preserved. Receipt: `test-results/owner-ea-ge117-febce34.json`.
+Template assembly now reapplies the reviewed EA wrapper after copying older
+installation archives; official-image integration of its new runner remains open.
+
+Battle.net's GE-Proton11-7 comparison uses a new private prefix, leaving the
+working GE-Proton10-34 prefix untouched. The completed container
+`dpad-local-owner-battlenet-ge117-febce34` exposes only localhost port 5807.
+The sanitized template was cloned offline into
+`dpad-owner-battlenet-ge117-local-20261001-febce34`, with `battlenet` as the child
+of its `/home/dpad/owner-battlenet` mount. Owner sign-in and responsive Home/My
+Games passed. Normal Exit and full container restart reopened the password prompt
+with email retained and Keep me logged in unchecked. Automatic-login testing was
+previously skipped at the owner's request, so it is not claimed. A sanitized
+probe found zero minidumps and confirmed the running UMU process selected the
+GE-Proton11-7 runner. This completed test is stopped; preserve both private prefixes.
+Receipt: `test-results/owner-battlenet-ge117-febce34.json`.
+
+At the owner's request GE-Proton11-7 is now the source default for base builds,
+bootstrap installers and EA/Battle.net/Ubisoft wrappers. `DPAD_PROTON_VERSION`
+sets the default, and each store's own runner override takes priority. Base build
+version, x86_64 asset name and checksum were updated together; custom build
+overrides must supply all three matching values. The official-store source uses
+an account-free stage and copies only the checksum-verified runner directory.
+Epic/GOG retain their qualified patched GE-Proton10-34 runtime. The older runner
+stays available as fallback in the official-store candidate. Template assembly
+reapplies EA/Ubisoft wrappers alongside Epic/Battle.net. Ubisoft's GE-Proton11-7
+owner check is being prepared. The existing EA contract check had stale expected
+paths after its earlier numeric-version resolver change; it was corrected and
+passes. This source has not been published or deployed; native streaming and
+gameplay qualification remain separate gates.
+
+The account-free fallback image from clean source `48d3afb` completed as
+`dpadplay/official-stores:48d3afb-all`, ID
+`sha256:fb3b050190fe2b88353eb309c3e2d1cfd241fc0be42a26fd4f5002c589139052`.
+All five Windows template gates passed. Offline package checks confirmed the
+Battle.net runner setting, executable availability, wrapper syntax, source
+hashes for Battle.net/Epic, and absence of owner prefixes/local viewer.
 
 The owner signed in inside official Epic on the local GUI harness built from
 `dpadplay/official-stores:d1a4c6c-all`. Its private state is in a dedicated Docker

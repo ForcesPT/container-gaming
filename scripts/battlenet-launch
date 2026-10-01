@@ -71,12 +71,10 @@ if ! test -O "$PREFIX" || ! chmod 700 -- "$PREFIX"; then
     exit 1
 fi
 
-# The official-store candidate selects GE-Proton10-34: owner-assisted local
-# sign-in and Games navigation passed there after GE-Proton11-3 crashed after
-# login. Keep the original runner as the legacy base-image default, since that
-# image does not include GE-Proton10-34. This setting affects Battle.net only.
+# GE-Proton11-7 passed owner sign-in and Games navigation locally. A per-store
+# override can select the retained GE-Proton10-34 fallback if needed.
 # All Windows launchers run via Xwayland per STORES-PLAN §5.
-GP_VERSION="${DPAD_BATTLENET_PROTON_VERSION:-GE-Proton11-3}"
+GP_VERSION="${DPAD_BATTLENET_PROTON_VERSION:-${DPAD_PROTON_VERSION:-GE-Proton11-7}}"
 GP_DIR="${HOME}/.steam/debian-installation/compatibilitytools.d/$GP_VERSION"
 if [ ! -x "$GP_DIR/proton" ]; then
     echo "[battlenet-launch] FATAL: $GP_VERSION not found at $GP_DIR (no proton binary)" | tee -a "$LOG" >&2

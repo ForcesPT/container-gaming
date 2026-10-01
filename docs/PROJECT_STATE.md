@@ -1,5 +1,35 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-10-01 EA GE-Proton11-7 owner acceptance passed locally.** Clean source
+> `febce34` produced local GUI canary `dpadplay/local-proton-canary:ge11-7-febce34`,
+> image `sha256:2469548f…2faab0c`. The official release archive SHA-256 was verified,
+> and offline package checks matched the EA/Battle.net wrappers to source.
+> EA's verification field accepted the owner's code; Home and Library opened.
+> Normal Exit plus a full container restart reopened signed in, and Library
+> navigation responded again. No EA game was installed or played. The completed
+> `dpad-local-owner-ea-ge117-febce34` container is stopped; preserve its private
+> volume `dpad-owner-ea-local-20261001-6e001d4`. Receipt:
+> `test-results/owner-ea-ge117-febce34.json`.
+>
+> Battle.net on port 5807, `dpad-local-owner-battlenet-ge117-febce34`, also passed
+> owner sign-in and responsive Home/My Games on GE-Proton11-7. Normal Exit and a
+> full container restart returned to the password prompt with email retained and
+> Keep me logged in unchecked. Automatic login is not claimed; the owner chose
+> to skip that optional test previously. No minidump was found, and the running
+> UMU process selected the exact GE-Proton11-7 path. The completed container is
+> stopped. This comparison uses a fresh private prefix in
+> `dpad-owner-battlenet-ge117-local-20261001-febce34`; the successful GE-Proton10-34
+> prefix remains preserved separately. Do not publish the GUI harness, export
+> either account volume, or claim all-store/latest-runner acceptance. Reviewed
+> EA/Battle.net/Ubisoft wrappers are reapplied after installation templates so an
+> older snapshot cannot replace runner selection. At the owner's request,
+> GE-Proton11-7 is now the source default for base builds, bootstrap installers
+> and EA/Battle.net/Ubisoft wrappers through `DPAD_PROTON_VERSION`; per-store
+> overrides take priority. The official-store source packages its checksum-pinned
+> runner while preserving the patched Epic/GOG GE-Proton10-34 overrides. A local
+> Ubisoft GE-Proton11-7 account comparison is being prepared. Publication and
+> native streaming qualification remain open; no push, deploy, or paid VM.
+
 > **2026-10-01 Battle.net post-login crash mitigated in local runner comparison.**
 > Owner corrected the initial Home report: Battle.net disappeared after login
 > and displayed Blizzard's unexpected-error reporter. Authenticated Home has
@@ -11,19 +41,40 @@
 > The same local container now runs a test-only copy of the Battle.net wrapper
 > selecting already installed GE-Proton10-34 instead of GE-Proton11-3. Its
 > owner signed in successfully and Home and My Games navigation responded.
-> Normal Exit was selected. Full container restart acceptance remains pending.
+> Normal Exit and a full container restart reopened sign-in without a crash.
+> The email was retained; Keep me logged in was unchecked. The owner chose to
+> continue without another automatic-login test, so token retention is not
+> claimed. The completed Battle.net container is stopped; its volume remains.
 > The official-store candidate now selects GE-Proton10-34 through the
 > Battle.net-specific runner setting; legacy base images keep their bundled
 > GE-Proton11-3 default. Template assembly reapplies the reviewed wrapper after
 > copying installation archives. Preserve the private prefix. No push,
 > website deployment, or paid VM was started.
 >
+> Current local viewer is port 5806 for `dpad-local-owner-ea-6e001d4`, using the
+> unchanged qualified EA runtime in the earlier GUI harness. Its dedicated
+> volume `dpad-owner-ea-local-20261001-6e001d4` mounts at `/home/dpad/owner-ea`;
+> the child prefix is `ea-app`. Offline template cloning and official
+> EADesktop.exe presence passed. Portuguese input is set. EA's service reports
+> RUNNING with exit code zero, and official sign-in was visible. Owner reached
+> verification but could not type in its code field; titlebar/field refocus
+> and top-row number keys did not resolve it. Authenticated EA acceptance has
+> not passed. The owner requested testing GE-Proton11-7 now. The old EA test is
+> stopped with its private volume preserved. Local-only canary source
+> `febce34` adds the official x86_64 release, verified against GitHub asset
+> SHA-256 `c5448b76…bbcb00a0`, and selects it independently for EA and Battle.net.
+> Its completed build and EA acceptance are recorded in the newer note above.
+> The working Battle.net fallback image from source `48d3afb` finished locally
+> as `sha256:fb3b0501…89139052`; packaged Battle.net/Epic wrapper hashes match
+> committed source, all five Windows template checks pass, and neither owner
+> state nor the local viewer is present. No private state was exported.
+>
 > Owner signed into official GOG. Owned games navigation responded before and
 > after a full container restart. Login was retained, but the first launch
 > after restart exited silently; one controlled relaunch was needed. GOG's
 > reliable first-start gate remains open. Its container is stopped; preserve
 > `dpad-owner-gog-local-20261001-6e001d4` and do not export its account prefix.
-> Current viewer: port 5805, `dpad-local-owner-battlenet-6e001d4`. Official
+> Earlier viewer: port 5805, `dpad-local-owner-battlenet-6e001d4`. Official
 > Battle.net sign-in is visually verified; authenticated acceptance is failing
 > on GE-Proton11-3; sign-in/navigation pass on the local GE-Proton10-34 comparison.
 > Private volume `dpad-owner-battlenet-local-20261001-6e001d4` mounts at

@@ -53,7 +53,7 @@ set -u
 USERNAME="dpad"
 PUID="1001"
 HOME_DIR="/home/dpad"
-GP_DIR="${HOME_DIR}/.steam/debian-installation/compatibilitytools.d/GE-Proton11-3"
+GP_DIR="${HOME_DIR}/.steam/debian-installation/compatibilitytools.d/${DPAD_BATTLENET_PROTON_VERSION:-${DPAD_PROTON_VERSION:-GE-Proton11-7}}"
 PREFIX_SRC="/opt/dpadcloud/battlenet-prefix"   # the baked copy source (stable image path, NOT ~/Games which setup_stores symlinks to the volume at runtime)
 MARKER="${PREFIX_SRC}/.dpad-prebaked"
 

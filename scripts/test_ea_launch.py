@@ -11,8 +11,8 @@ hint_helper = hint_helper_path.read_text()
 
 required = (
     'resolve_ea_installed_exe()',
-    '"$EA_BASE"/*/"EA Desktop"/EALauncher.exe',
-    '"$EA_BASE"/*/"EA Desktop"/EADesktop.exe',
+    '"$EA_BASE/$version/EA Desktop/EALauncher.exe"',
+    '"$EA_BASE/$version/EA Desktop/EADesktop.exe"',
     'EA_INST="$(resolve_ea_installed_exe 2>/dev/null || true)"',
     '"$UMU_RUN" "$SETUP_EXE" >>"$LOG" 2>&1 &',
     'installer_pid=$!',
@@ -29,8 +29,8 @@ for item in required:
     if item not in script:
         raise SystemExit(f"EA launch contract missing: {item}")
 
-versioned_desktop = '"$EA_BASE"/*/"EA Desktop"/EADesktop.exe'
-versioned_launcher = '"$EA_BASE"/*/"EA Desktop"/EALauncher.exe'
+versioned_desktop = '"$EA_BASE/$version/EA Desktop/EADesktop.exe"'
+versioned_launcher = '"$EA_BASE/$version/EA Desktop/EALauncher.exe"'
 if script.index(versioned_desktop) > script.index(versioned_launcher):
     raise SystemExit("EA must prefer direct EADesktop.exe so CEF flags reach the browser process")
 

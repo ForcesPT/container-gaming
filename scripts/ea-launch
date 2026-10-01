@@ -52,7 +52,7 @@ fi
 # GE-Proton11-3 — same as battlenet-launch. Bundles the NVIDIA compat libs
 # (NVAPI/CUDA/NVENC/NVML) + umu.exe. EA App runs via Xwayland
 # (PROTON_ENABLE_WAYLAND unset) per STORES-PLAN §5.
-GP_VERSION="${DPAD_EA_PROTON_VERSION:-GE-Proton11-3}"
+GP_VERSION="${DPAD_EA_PROTON_VERSION:-${DPAD_PROTON_VERSION:-GE-Proton11-7}}"
 GP_DIR="${HOME}/.steam/debian-installation/compatibilitytools.d/$GP_VERSION"
 if [ ! -x "$GP_DIR/proton" ]; then
     echo "[ea-launch] FATAL: $GP_VERSION not found at $GP_DIR (no proton binary)" | tee -a "$LOG" >&2
