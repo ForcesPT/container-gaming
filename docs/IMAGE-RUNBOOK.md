@@ -1,5 +1,11 @@
 # DpadPlay Gaming Image Runbook
 
+> **2026-10-01 acceptance location:** the owner requested skipping local gameplay
+> and testing games on live providers. Local gameplay is therefore not required
+> before publishing a private canary. Mark gameplay deferred, not passed; verify
+> it together with provider GPU/streaming/storage behavior before broad promotion.
+> Existing paid-resource limits and deployment authorization still apply.
+
 > **2026-10-01 GOG/default-runner update:** source `460ca0b` qualifies GOG's
 > native64 cold-start mitigation and official warm window restoration locally.
 > `DPAD_GOG_NATIVE64=1` is the GE-Proton11-7 default only for GalaxyClient.exe;

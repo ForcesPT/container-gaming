@@ -1,5 +1,10 @@
 # DpadCloud Container Gaming — Multi-Store Plan (the dpad-launcher shell)
 
+> **2026-10-01 owner test-plan change:** defer local gameplay acceptance to live
+> provider canaries. Continue local official-client/package checks; games must
+> still be verified on the provider before broad promotion. No gameplay PASS or
+> paid-resource/deployment action is implied by this test-location change.
+
 > **2026-10-01 source `460ca0b`:** GE-Proton11-7 is the common Windows-store
 > default and Steam Windows-game fallback. GOG's cold-start mitigation selects
 > the vendor native64 loader only for its client, clears its verified volatile

@@ -1,5 +1,12 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+> **2026-10-01 owner acceptance plan update:** local gameplay testing is deferred
+> at the owner's request. Verify gameplay on live provider VMs using a private
+> canary before broad promotion. This is a change of test location, not a gameplay
+> PASS. The local official-client/package results below remain valid. Native
+> NVIDIA/EGL/WebRTC, production cold startup and cloud/NFS checks remain open.
+> This instruction does not start a paid VM or publish/deploy an image.
+
 > **2026-10-01 GE-Proton11-7 default and GOG startup fixes, source `460ca0b` (local only).**
 > Every Windows store now uses the rebuilt GE-Proton11-7 runner. Steam remains
 > Valve's native Linux client and uses `GE-Proton11-7-x86_64` for Windows games,
@@ -48,7 +55,8 @@
 > Receipts and final image IDs are recorded under `test-results/ge117-complete-*`.
 > No registry/Git push, website deployment or paid resource was used. The desktop
 > harness uses software Xorg/lavapipe; native NVIDIA/EGL/WebRTC, cloud/NFS and
-> game acceptance on this runner remain release gates. Preserve private volumes;
+> game acceptance on this runner remain live-provider canary gates (local gameplay
+> is deferred by the owner). Preserve private volumes;
 > do not export account state, vendor authentication logs or authenticated screenshots.
 
 > **2026-10-01 all-store GE-Proton11-7 migration (local only).** Source
