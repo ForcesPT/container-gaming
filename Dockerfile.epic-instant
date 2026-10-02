@@ -11,5 +11,5 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 COPY scripts/dpad_epic_installation.py scripts/dpad_epic_overlay.py scripts/faugus-instant-entrypoint scripts/launcher-shell scripts/faugus-epic-launch /opt/dpadcloud/
 RUN sed -i 's/\r$//' /opt/dpadcloud/faugus-instant-entrypoint /opt/dpadcloud/launcher-shell /opt/dpadcloud/faugus-epic-launch \
     && chmod +x /opt/dpadcloud/faugus-instant-entrypoint /opt/dpadcloud/launcher-shell /opt/dpadcloud/faugus-epic-launch
-ENV DPAD_FAUGUS_INSTANT_TEST=1 DPAD_FAUGUS_CLIENT_ONLY_TEST=1
+ENV DPAD_FAUGUS_INSTANT_TEST=1 DPAD_FAUGUS_CLIENT_ONLY_TEST=0
 ENTRYPOINT ["/opt/dpadcloud/faugus-instant-entrypoint"]

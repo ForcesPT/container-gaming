@@ -200,6 +200,34 @@ def export_capsule(item_path, manifest_path, binding, output):
     return hashlib.sha256(encoded).hexdigest()
 
 
+def rebind_capsule(source, expected_digest, source_binding, target_binding, output):
+    """Reuse verified public records for a new immutable release of identical bytes."""
+    source = Path(source)
+    encoded = read_bytes(source / 'installation.json', MAX_JSON, sealed=True)
+    if (not isinstance(expected_digest, str) or not re.fullmatch(DIGEST, expected_digest)
+            or hashlib.sha256(encoded).hexdigest() != expected_digest):
+        raise ValueError('source capsule digest mismatch')
+    capsule = json.loads(encoded, object_pairs_hook=unique)
+    manifest = read_bytes(source / 'vendor.manifest', MAX_MANIFEST, sealed=True)
+    validate_capsule(capsule, source_binding, manifest)
+    if (not isinstance(target_binding, dict)
+            or set(target_binding) != set(source_binding)
+            or any(target_binding[k] != source_binding[k]
+                   for k in source_binding if k != 'releaseId')
+            or target_binding['releaseId'] == source_binding['releaseId']):
+        raise ValueError('rebinding requires a new release with identical game bytes')
+    capsule = {**capsule, 'releaseId': target_binding['releaseId']}
+    validate_capsule(capsule, target_binding, manifest)
+    output = Path(output)
+    if not output.is_absolute() or output.parent.resolve() != output.parent:
+        raise ValueError('noncanonical output')
+    output.mkdir(mode=0o700)
+    encoded = json.dumps(capsule, sort_keys=True, separators=(',', ':')).encode()
+    new_file(output / 'installation.json', encoded)
+    new_file(output / 'vendor.manifest', manifest)
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def private_dir(path, *, create=True):
     path = Path(path)
     if not path.is_absolute() or path.resolve() != path:
@@ -346,11 +374,20 @@ def main():
     export = commands.add_parser('export')
     for name in ('item', 'manifest', 'binding', 'output'):
         export.add_argument('--' + name, required=True)
+    rebind = commands.add_parser('rebind')
+    for name in ('source', 'source-sha256', 'source-binding', 'binding', 'output'):
+        rebind.add_argument('--' + name, required=True)
     commands.add_parser('register')
     args = parser.parse_args()
     if args.operation == 'export':
         binding = json.loads(read_bytes(Path(args.binding), MAX_JSON), object_pairs_hook=unique)
         print(json.dumps({'capsuleSha256': export_capsule(args.item, args.manifest, binding, args.output)}))
+        return
+    if args.operation == 'rebind':
+        source_binding = json.loads(read_bytes(Path(args.source_binding), MAX_JSON), object_pairs_hook=unique)
+        binding = json.loads(read_bytes(Path(args.binding), MAX_JSON), object_pairs_hook=unique)
+        print(json.dumps({'capsuleSha256': rebind_capsule(args.source, args.source_sha256,
+                         source_binding, binding, args.output)}))
         return
     if os.geteuid() == 0 or os.environ.get('DPAD_FAUGUS_INSTANT_TEST') != '1':
         raise ValueError('private official registration canary required')
