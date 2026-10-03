@@ -1,5 +1,21 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+October 3 local implementation: `dpad_epic_overlay.py` now resumes an exact sealed
+write layer after Docker restart instead of refusing the existing `epic-cow`
+directory. The published private baseline reproduced that refusal locally. The
+local successor `275d846f` passed two real network-disabled Docker/FUSE restarts,
+retained active-session writes, preserved the shared lower and replayed synthetic
+official installation records. Eight unsafe-resumption tests passed. Receipt:
+[local overlay recovery](qualification/epic-overlay-recovery-local-20261003.json).
+No account/UI/gameplay was exercised in this pass; no image was published or
+provider VM started. The companion worker also stages current-boot live readiness
+and exact private signaling-file cleanup, with 31 targeted tests passed.
+Automatic same-VM recovery and full session/media acceptance remain open. The
+local RTX 4070 Ti is visible, but WSL lacks the production compositor's CUDA-EGL
+function. Do not claim a full GPU/WebRTC pass or change provider drivers on that
+basis. Before provider admission, freeze provenance and align the successor's
+exact input-overlay exclusion and immutable runtime bindings.
+
 2026-10-03 planning update: the maintained
 [Instant Play and Cloud Compute implementation checklist](../../instant-admin-release-20261003/docs/INSTANT-PLAY-CLOUD-COMPUTE-IMPLEMENTATION-PLAN.md)
 records the owner decisions and remaining acceptance. Instant uses fresh store

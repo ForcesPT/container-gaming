@@ -1,0 +1,9 @@
+# Account-free local qualification precedes any private provider promotion.
+# Extends the reviewed Epic runtime; no installer/account template is exported.
+ARG EPIC_IMAGE
+FROM ${EPIC_IMAGE}
+USER root
+ARG DPAD_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
+      com.dpadplay.launcher.qualification="epic-overlay-recovery-local-candidate"
+COPY scripts/dpad_epic_overlay.py /opt/dpadcloud/
