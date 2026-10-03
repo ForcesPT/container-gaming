@@ -1,5 +1,14 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+Frozen successor `b6dd109` is built locally as
+`dpadplay/epic-instant:keyboard-refresh-b6dd109`, image
+`sha256:d2955c976a42bef21fa9bc0d5b4155ce976152d64b157a519431fdf192fb6d3f`.
+Eight embedded script hashes, the Epic button label, qualified base layers and
+all runtime settings passed. It is not published or selected publicly. Receipt:
+`epic-keyboard-canary-20261003.json`. Provider checks still needed: Portuguese
+input after switching, the immutable shortcut successor, and uninterrupted
+fresh-auth automatic selected-game activation. No new paid resource was created.
+
 2026-10-03 local follow-up: Instant Epic's Labwc panel now keeps a permanent
 “Epic Games” button before the running-window list. Cloud Compute labels this
 same recovery action “Stores.” It invokes `launcher-toggle`, which validates

@@ -1,0 +1,30 @@
+{
+  "status": "epic-shortcut-and-keyboard-image-built-locally",
+  "source": "b6dd1096620301cd0702d923bb74ff23536a32f0",
+  "localTag": "dpadplay/epic-instant:keyboard-refresh-b6dd109",
+  "imageId": "sha256:d2955c976a42bef21fa9bc0d5b4155ce976152d64b157a519431fdf192fb6d3f",
+  "baseImageId": "sha256:8a18d043bccc4e6e2c65f44cf0d64e63d3abbb9bcf8830eac80e3e638245a4bf",
+  "scriptHashes": {
+    "/opt/dpadcloud/dpad_epic_installation.py": "2c726c36797b7dbc21493e87de639d80a994fc4e1cc4832fffbd371811bf2b46",
+    "/opt/dpadcloud/dpad_faugus_prepare.py": "f31604d3a1ce71c7437465b9844c2d6469a06c4c5b4d1784ce1f97759b3c47e9",
+    "/opt/dpadcloud/launcher-shell": "4656e0e7d35cc1acc303ae90b49f81128e0c6cda94d9134cfc3662f26d926e87",
+    "/opt/dpadcloud/launcher-toggle": "ef4091c5c31f87cd04135852a3a98ad1d1babcbffb6a881df7ba22b83a38ac92",
+    "/opt/dpadcloud/faugus-epic-launch": "db01c74bc87904981e963392ed47d8a3f374f9176053a06637adc6e52b6b1dda",
+    "/opt/dpadcloud/dpad-publish-desktop-config": "09b146bd46601e10232732afe2ab626ce451c373e5547db3082aeb8d6675c84f",
+    "/opt/dpadcloud/dpad-waybar": "6cd3b4378180843a679f227b6f67e02de4eece2a6af989770f8ba7f8fb025903",
+    "/usr/local/lib/python3.12/dist-packages/dpad_input_patch.py": "d05317517b400c0cae395ac680210cbb6e12aac3816833e16123d1242f26b2fd"
+  },
+  "proof": {
+    "scriptHashesVerified": 8
+  },
+  "epicLabelVerified": true,
+  "runtimeConfigurationPreserved": true,
+  "qualifiedBaseLayersPreserved": true,
+  "published": false,
+  "providerAcceptancePending": [
+    "keyboard input after layout selection",
+    "immutable shortcut successor",
+    "fresh-auth automatic selected-game activation"
+  ],
+  "paidResourcesCreated": 0
+}
