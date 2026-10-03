@@ -1,13 +1,37 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+2026-10-03 06:34 UTC: The approved `d2955c97` private Paris L4 test passed
+fresh-sign-in automatic ABZU activation. The owner reported the game working
+and exited. Shared files/official registration passed and the permanent Epic
+button rendered. Seven image scripts matched, but the old VM host input bind
+shadowed packaged `d0531751` with `b0583dd8`; live keyboard acceptance is pending.
+An exact same-VM override correction followed by container restart ended at the
+connection maintenance boundary before input or reopen could be retested.
+Sanitized evidence reports install_start/command_failed and container exit 1;
+the startup exit's cause remains unresolved. The VM and boot volume are deleted,
+inventories are zero, both guards disabled, and wallet debit is $1.29. No public
+promotion occurred. The companion control plane has a locally verified, exact
+digest input-overlay exclusion (15 guest regressions), source `345dce4`, staged
+as worker derivative `14f5ebf5…50f899`. Worker-only scope, baseline configuration
+and the disabled-registry compatibility gate passed; owner deployment approval
+is pending. No further paid test was launched.
+Next acceptance must load the baked input fix from initial startup and verify
+Portuguese symbols and button close/reopen. Do not launch another VM under the
+consumed approval. Control-plane note: INSTANT-EPIC-KEYBOARD-TEST-20261003.md.
+
 Frozen successor `b6dd109` is built locally as
 `dpadplay/epic-instant:keyboard-refresh-b6dd109`, image
 `sha256:d2955c976a42bef21fa9bc0d5b4155ce976152d64b157a519431fdf192fb6d3f`.
 Eight embedded script hashes, the Epic button label, qualified base layers and
-all runtime settings passed. It is not published or selected publicly. Receipt:
+all runtime settings passed. Published with owner approval to
+`forcespt/dpadcloud-gaming:official-epic-keyboard-canary-20261003-b6dd109`;
+the remote index matches the image ID above and Linux manifest is `763a8732…640c5`.
+Source is published on `canary/official-epic-keyboard-20261003-b6dd109`.
+It is not selected publicly. Receipt:
 `epic-keyboard-canary-20261003.json`. Provider checks still needed: Portuguese
-input after switching, the immutable shortcut successor, and uninterrupted
-fresh-auth automatic selected-game activation. No new paid resource was created.
+input after switching and close/reopen on the immutable shortcut successor.
+Uninterrupted fresh-auth automatic selected-game activation passed in the test
+above; the complete image is not yet accepted for public promotion.
 
 2026-10-03 local follow-up: Instant Epic's Labwc panel now keeps a permanent
 “Epic Games” button before the running-window list. Cloud Compute labels this

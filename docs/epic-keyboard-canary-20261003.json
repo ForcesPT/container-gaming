@@ -1,5 +1,5 @@
 {
-  "status": "epic-shortcut-and-keyboard-image-built-locally",
+  "status": "epic-keyboard-canary-published-and-registry-verified",
   "source": "b6dd1096620301cd0702d923bb74ff23536a32f0",
   "localTag": "dpadplay/epic-instant:keyboard-refresh-b6dd109",
   "imageId": "sha256:d2955c976a42bef21fa9bc0d5b4155ce976152d64b157a519431fdf192fb6d3f",
@@ -20,11 +20,18 @@
   "epicLabelVerified": true,
   "runtimeConfigurationPreserved": true,
   "qualifiedBaseLayersPreserved": true,
-  "published": false,
+  "published": true,
   "providerAcceptancePending": [
     "keyboard input after layout selection",
     "immutable shortcut successor",
     "fresh-auth automatic selected-game activation"
   ],
-  "paidResourcesCreated": 0
+  "paidResourcesCreated": 0,
+  "registryTag": "forcespt/dpadcloud-gaming:official-epic-keyboard-canary-20261003-b6dd109",
+  "registryDigest": "sha256:d2955c976a42bef21fa9bc0d5b4155ce976152d64b157a519431fdf192fb6d3f",
+  "linuxAmd64Manifest": "sha256:763a8732117deed9082aae665a6323bc58234d9564bf6010aa31cd5b0df640c5",
+  "configDigest": "sha256:fd8bb5f86e627dfe64fa2bbce81fdf03a262f68b5135b273bf42da77c206453f",
+  "sourceBranch": "canary/official-epic-keyboard-20261003-b6dd109",
+  "sourceBranchVerified": true,
+  "publicRuntimeChanged": false
 }
