@@ -1,5 +1,12 @@
 # Direct Epic Instant Play candidate
 
+Published with owner approval on October 3 to
+`forcespt/dpadcloud-gaming:official-epic-direct-canary-20261003-10f1991` at immutable
+digest `sha256:8a18d043bccc4e6e2c65f44cf0d64e63d3abbb9bcf8830eac80e3e638245a4bf`.
+Remote Linux manifest `e969f906…e7a0b` and index match the frozen image. Source is
+recoverable on `canary/instant-epic-direct-20261003-10f1991`. This is a private
+candidate; no public runtime binding was changed and no paid VM was started.
+
 Instant startup with a qualified official Epic capsule now prepares the private
 client, imports only the selected release and invokes official Epic with the
 catalog launch URI derived from that sealed capsule. It does not open the store
