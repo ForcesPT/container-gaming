@@ -1,5 +1,17 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+2026-10-03 planning update: the maintained
+[Instant Play and Cloud Compute implementation checklist](../../instant-admin-release-20261003/docs/INSTANT-PLAY-CLOUD-COMPUTE-IMPLEMENTATION-PLAN.md)
+records the owner decisions and remaining acceptance. Instant uses fresh store
+login and disposable private state, offers only verified cloud/online-save games,
+and keeps the host downloader with genuine official records. Cloud Compute keeps
+the multi-store picker and its separate storage policy. Start with readiness,
+same-VM recovery and cleanup, then save qualification and preparation/update UX.
+Worker source `345dce4` / image `14f5ebf5…50f899` is now live and accepted; the
+older staging note below is historical. Image `d2955c97` remains a private
+candidate, with keyboard/reopen acceptance and the container-restart exit still
+unresolved. No image/runtime change or paid VM was part of saving this plan.
+
 2026-10-03 06:34 UTC: The approved `d2955c97` private Paris L4 test passed
 fresh-sign-in automatic ABZU activation. The owner reported the game working
 and exited. Shared files/official registration passed and the permanent Epic
