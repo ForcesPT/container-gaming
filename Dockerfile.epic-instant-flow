@@ -7,5 +7,6 @@ LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
       com.dpadplay.instant.store="epic" \
       com.dpadplay.launcher.qualification="direct-epic-candidate-needs-provider-test"
 COPY scripts/dpad_epic_installation.py scripts/dpad_faugus_prepare.py scripts/launcher-shell scripts/launcher-toggle scripts/faugus-epic-launch /opt/dpadcloud/
-RUN sed -i 's/\r$//' /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/faugus-epic-launch \
-    && chmod +x /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/faugus-epic-launch
+COPY scripts/dpad-publish-desktop-config scripts/dpad-waybar /opt/dpadcloud/
+RUN sed -i 's/\r$//' /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/dpad-publish-desktop-config /opt/dpadcloud/dpad-waybar \
+    && chmod +x /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/dpad-publish-desktop-config /opt/dpadcloud/dpad-waybar

@@ -20,6 +20,7 @@ with tempfile.TemporaryDirectory() as temporary:
     environment = {**os.environ, 'HOME': str(root / 'home'),
                    'DPAD_FAUGUS_STATE_ROOT': str(root / 'state'),
                    'EPIC_TEST_EVENTS': str(root / 'events')}
+    (root / 'home/.steam/debian-installation').mkdir(mode=0o700, parents=True)
     # This replacement is confined to a --rm test container.
     stub = Path('/usr/bin/umu-run')
     original = stub.read_bytes()

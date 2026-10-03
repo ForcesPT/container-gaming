@@ -37,8 +37,15 @@ with tempfile.TemporaryDirectory() as tmp:
         "passthrough": False,
         "height": 46,
         "spacing": 6,
-        "modules-left": ["wlr/taskbar"],
+        "modules-left": ["custom/store", "wlr/taskbar"],
         "modules-right": ["custom/keyboard", "clock"],
+        "custom/store": {
+            "exec": "/opt/dpadcloud/launcher-toggle --label",
+            "return-type": "json",
+            "interval": 30,
+            "on-click": "/opt/dpadcloud/launcher-toggle",
+            "tooltip": True,
+        },
         "wlr/taskbar": {
             "format": "{icon}  {title}",
             "icon-size": 24,

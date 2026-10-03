@@ -1,5 +1,22 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+2026-10-03 local follow-up: Instant Epic's Labwc panel now keeps a permanent
+“Epic Games” button before the running-window list. Cloud Compute labels this
+same recovery action “Stores.” It invokes `launcher-toggle`, which validates
+the sealed selected release and opens/restores only official Epic for Instant;
+it does not repeat the selected-game URI. `--label` is read-only and never starts
+a store. Publisher and Waybar's exact readiness contract include the shortcut;
+the scoped Instant Dockerfile carries both panel scripts.
+
+Local account-free, network-disabled qualification passes 17 desktop helper
+tests, panel readiness/taskbar checks, three Epic wrapper cases, and the actual
+process/restore-dispatch check. The older dispatch fixture lacked a complete
+temporary Steam install root; that fixture is now corrected. A three-script
+patch was applied to the already approved Paris test
+`67dfb0fb-a857-4f82-bb87-2c834b4ae278` after the owner intentionally closed Epic
+before sign-in. The permanent button is visible. User reopen/login acceptance
+is pending; no new VM or public image promotion is part of this source change.
+
 2026-10-03 published private candidate: direct official Epic Instant startup and client-only
 restore, without the multi-store picker. Cloud Compute retains its picker.
 See `INSTANT-EPIC-DIRECT-20261003.md`. Forty-three offline shell/registration/

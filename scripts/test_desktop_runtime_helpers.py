@@ -74,6 +74,8 @@ class DesktopRuntimeHelpersTests(unittest.TestCase):
             self.assertFalse(waybar["passthrough"])
             self.assertEqual(waybar["height"], 46)
             self.assertIn("wlr/taskbar", waybar["modules-left"])
+            self.assertEqual(waybar["modules-left"][0], "custom/store")
+            self.assertEqual(waybar["custom/store"]["on-click"], "/opt/dpadcloud/launcher-toggle")
             self.assertIn("custom/keyboard", waybar["modules-right"])
             self.assertEqual(waybar["custom/keyboard"]["on-click"], "/opt/dpadcloud/dpad-keyboard-layout picker")
             self.assertEqual(os.readlink(config_dir / "environment"), "/home/dpad/.config/dpadplay/keyboard.env")

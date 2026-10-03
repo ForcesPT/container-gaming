@@ -8,6 +8,18 @@
 # kill), Super+L brings it back.
 set -euo pipefail
 
+# Waybar's permanent store shortcut remains visible after every store window
+# closes. This read-only mode never starts a client or writes account state.
+if [ "${1:-}" = --label ] && [ "$#" -eq 1 ]; then
+  if [ -n "${DPAD_INSTANT_APP:-}${DPAD_INSTANT_METADATA:-}" ] && [ "${DPAD_EPIC_BACKEND:-heroic}" = faugus ]; then
+    printf '%s\n' '{"text":"Epic Games","tooltip":"Open Epic Games Launcher"}'
+  else
+    printf '%s\n' '{"text":"Stores","tooltip":"Open your store launcher"}'
+  fi
+  exit 0
+fi
+[ "$#" -eq 0 ] || { echo 'usage: launcher-toggle [--label]' >&2; exit 2; }
+
 LOG=/tmp/launcher-toggle.log
 echo "$(date -Is) launcher-toggle invoked" >> "$LOG"
 

@@ -79,8 +79,15 @@ LABWCRC
   "passthrough": false,
   "height": 46,
   "spacing": 6,
-  "modules-left": ["wlr/taskbar"],
+  "modules-left": ["custom/store", "wlr/taskbar"],
   "modules-right": ["custom/keyboard", "clock"],
+  "custom/store": {
+    "exec": "/opt/dpadcloud/launcher-toggle --label",
+    "return-type": "json",
+    "interval": 30,
+    "on-click": "/opt/dpadcloud/launcher-toggle",
+    "tooltip": true
+  },
   "wlr/taskbar": {
     "format": "{icon}  {title}",
     "icon-size": 24,
@@ -114,6 +121,16 @@ window#waybar {
 }
 #taskbar {
   padding: 4px 8px;
+}
+#custom-store {
+  margin: 5px 8px;
+  padding: 0 16px;
+  border-radius: 8px;
+  background: #223861;
+  color: #ffffff;
+}
+#custom-store:hover {
+  background: #2d5cff;
 }
 #taskbar button {
   min-width: 132px;
