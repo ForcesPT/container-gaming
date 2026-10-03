@@ -30,19 +30,33 @@ if [ -n "${DPAD_FAUGUS_STATE_ROOT:-}" ]; then
 fi
 script_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 mode="${1:---launch}"
-if [ "$#" -gt 1 ] || [[ "$mode" != --launch && "$mode" != --prepare-only && "$mode" != --resume && "$mode" != --instant && "$mode" != --open ]]; then
-    echo 'usage: faugus-epic-launch [--prepare-only|--resume|--instant|--open]' >&2
+if [ "$#" -gt 1 ] || [[ "$mode" != --launch && "$mode" != --prepare-only && "$mode" != --resume && "$mode" != --instant && "$mode" != --open && "$mode" != --replay ]]; then
+    echo 'usage: faugus-epic-launch [--prepare-only|--resume|--instant|--open|--replay]' >&2
     exit 1
 fi
 # Only the sealed selected release supplies an initial game request. Reopening
 # the client must not relaunch a game or trust a URI inherited from the caller.
 unset DPAD_EPIC_INSTANT_LAUNCH_URI
-if [ "$mode" = --instant ]; then
+if [ "$mode" = --instant ] || [ "$mode" = --replay ]; then
     DPAD_EPIC_INSTANT_LAUNCH_URI="$(python3 -I "${script_dir}/dpad_epic_installation.py" launch-uri)"
     export DPAD_EPIC_INSTANT_LAUNCH_URI
 fi
 python3 -I "${script_dir}/dpad_faugus_prepare.py" --lock-only
 exec 9<"${XDG_STATE_HOME:-${HOME}/.local/state}/faugus-launcher/dpad-epic.lock"
+if [ "$mode" = --replay ]; then
+    exec 8<"${XDG_STATE_HOME:-${HOME}/.local/state}/faugus-launcher/dpad-epic-replay.lock"
+    flock -n 8 || { echo 'Selected game is already being requested' >&2; exit 1; }
+    python3 -I "${script_dir}/dpad_instant_observation.py" --require-stopped
+    if flock -n 9; then
+        mode=--instant
+    else
+        python3 -I "${script_dir}/dpad_epic_resume.py" "$WINEPREFIX"
+        export FAUGUSID=dpad-epic UMU_USE_STEAM=1 UMU_CONTAINER_NSENTER=1
+        # Official Epic receives the same sealed catalog request and checks
+        # entitlement/cloud state. No second Faugus controller is started.
+        exec /usr/bin/umu-run "${WINEPREFIX}/drive_c/Program Files/Epic Games/Launcher/Portal/Binaries/Win64/EpicGamesLauncher.exe" -SkipBuildPatchPrereq "$DPAD_EPIC_INSTANT_LAUNCH_URI"
+    fi
+fi
 if [ "$mode" = --open ]; then
     if flock -n 9; then
         mode=--launch

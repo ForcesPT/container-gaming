@@ -95,5 +95,7 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(state.observe(False,1033),'exited')
         self.assertEqual(state.observe(True,1034),'running')
         self.assertEqual(state.cycle,2)
+        state.observe(False,1035);state.observe(False,1050);state.observe(None,1051);state.observe(True,1052)
+        self.assertEqual(state.cycle,3,'a lost sample after exit must not merge two play cycles')
 
 if __name__ == '__main__': unittest.main()

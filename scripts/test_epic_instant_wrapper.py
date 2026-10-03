@@ -25,13 +25,14 @@ class WrapperTests(unittest.TestCase):
         (self.root / 'dpad_epic_installation.py').write_text(
             'import os\nassert os.environ.get("REFUSE_URI") != "1"\nprint(' + repr(URI) + ')\n')
         (self.root / 'dpad_epic_resume.py').write_text('import os\nassert os.environ.get("REFUSE_RESUME") != "1"\n')
+        (self.root / 'dpad_instant_observation.py').write_text('import os\nassert os.environ.get("REFUSE_GAME") != "1"\n')
         (self.root / 'dpad_epic_updater_failed.py').write_text('raise SystemExit(1)\n')
         fake = '''#!/usr/bin/python3
-import os, json, time
+import os, json, time, sys
 from pathlib import Path
 root = Path(os.environ['TEST_ROOT'])
 if Path(__file__).name == 'umu-run':
-    event = ['restore']
+    event = ['restore', *sys.argv[1:]]
 else:
     inventory = Path(os.environ['HOME']) / '.local/share/faugus-launcher/games.json'
     event = ['start', json.loads(inventory.read_text())[0]['game_arguments']]
@@ -86,6 +87,29 @@ while Path(__file__).name != 'umu-run' and (root/'hold').exists() and time.monot
         result = self.run_mode('--instant', REFUSE_URI='1')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.recorded(), [])
+
+    def test_replay_free_client_uses_only_sealed_uri_and_refuses_running_game(self):
+        refused=self.run_mode('--replay',REFUSE_GAME='1')
+        self.assertNotEqual(refused.returncode,0);self.assertEqual(self.recorded(),[])
+        result=self.run_mode('--replay',DPAD_EPIC_INSTANT_LAUNCH_URI='untrusted')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(shlex.split(self.recorded()[0][1]),['-SkipBuildPatchPrereq',URI])
+
+    def test_replay_busy_client_forwards_without_second_controller(self):
+        self.hold.touch()
+        owner=subprocess.Popen(['bash',str(self.wrapper),'--instant'],env=self.env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        try:
+            deadline=time.monotonic()+5
+            while not self.events.exists() and time.monotonic()<deadline:time.sleep(.02)
+            self.assertTrue(self.events.exists())
+            result=self.run_mode('--replay');self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual([v[0] for v in self.recorded()],['start','restore'])
+            self.assertEqual(self.recorded()[1][-2:],['-SkipBuildPatchPrereq',URI])
+            self.assertNotEqual(self.run_mode('--replay',REFUSE_URI='1').returncode,0)
+            self.assertNotEqual(self.run_mode('--replay',REFUSE_GAME='1').returncode,0)
+            self.assertEqual(len(self.recorded()),2)
+        finally:
+            self.hold.unlink(missing_ok=True);owner.wait(timeout=15)
 
 
 if __name__ == '__main__': unittest.main()

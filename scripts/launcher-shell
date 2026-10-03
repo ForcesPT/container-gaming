@@ -30,6 +30,7 @@ if [ -n "${DPAD_INSTANT_APP:-}${DPAD_INSTANT_METADATA:-}" ]; then
             timeout 15s python3 -I "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/dpad_epic_installation.py" register >>/tmp/instant-registration.log 2>&1 || exit 1
             # Instant Play has already selected the store and game. Open only
             # the official client with this release's launch request.
+            python3 -I "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/dpad_instant_replay.py" --publish-environment >>/tmp/launcher.log 2>&1 || exit 1
             exec "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/faugus-epic-launch" --instant >>/tmp/launcher.log 2>&1
         elif [ "${DPAD_FAUGUS_CLIENT_ONLY_TEST:-}" != 1 ]; then
             echo 'launcher-shell: official Epic Instant import is not qualified; use a Cloud Compute candidate session' >&2

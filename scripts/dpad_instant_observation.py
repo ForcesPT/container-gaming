@@ -91,12 +91,14 @@ class GameState:
         self.quiet_since = None
         self.seen = False
         self.cycle = 0
+        self.closed = False
 
     def observe(self, active, now):
         if active is True:
-            if not self.seen or self.state == 'exited':
+            if not self.seen or self.closed:
                 self.cycle += 1
             self.seen = True
+            self.closed = False
             self.state, self.quiet_since = 'running', None
         elif active is None:
             # Lost evidence must not count toward the continuous quiet interval.
@@ -109,6 +111,7 @@ class GameState:
                 self.quiet_since = now
             if now - self.quiet_since >= self.quiet_seconds:
                 self.state = 'exited'
+                self.closed = True
         return self.state
 
 
@@ -126,9 +129,13 @@ def selected_observation():
 
 if __name__ == '__main__':
     try:
-        if len(sys.argv) != 1:
+        if sys.argv[1:] == ['--require-stopped']:
+            if selected_observation()['gameRunning'] is not False:
+                raise ValueError('selected game still running or unknown')
+        elif len(sys.argv) == 1:
+            print(json.dumps(selected_observation(), separators=(',', ':')))
+        else:
             raise ValueError('unexpected arguments')
-        print(json.dumps(selected_observation(), separators=(',', ':')))
     except (ValueError, OSError, TypeError, KeyError):
         print('Selected game observation unavailable', file=sys.stderr)
         sys.exit(1)

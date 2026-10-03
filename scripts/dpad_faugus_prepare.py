@@ -57,13 +57,14 @@ def locations(home, state_root=None):
 
 def prepare_lock(home, state_root=None):
     state_dir = private_directory(locations(home, state_root)[3])
-    lock_fd = os.open(state_dir / 'dpad-epic.lock', os.O_CREAT | os.O_RDONLY | os.O_NOFOLLOW, 0o600)
-    try:
-        info = os.fstat(lock_fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1 or info.st_mode & 0o022:
-            raise ValueError('untrusted Faugus lock')
-    finally:
-        os.close(lock_fd)
+    for name in ('dpad-epic.lock', 'dpad-epic-replay.lock'):
+        lock_fd = os.open(state_dir / name, os.O_CREAT | os.O_RDONLY | os.O_NOFOLLOW, 0o600)
+        try:
+            info = os.fstat(lock_fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1 or info.st_mode & 0o022:
+                raise ValueError('untrusted Faugus lock')
+        finally:
+            os.close(lock_fd)
 
 
 def prepare(home, runner=RUNNER, umu='/usr/bin/umu-run', state_root=None, launch_uri=None):

@@ -1,0 +1,27 @@
+{
+  "status": "replay-helpers-qualified-locally",
+  "suites": {
+    "privateEnvironment": 4,
+    "wrapper": 5,
+    "observation": 8
+  },
+  "effectiveUser": "1000:1000",
+  "network": "none",
+  "sourceFiles": {
+    "scripts/dpad_instant_replay.py": "f9de675c0c38e2897cad99a76f8a5430265a02d3455038022cd79eced36b783f",
+    "scripts/faugus-epic-launch": "ea5ee0f929c608f1eb5d07f461d594fbfd53d7b7a3fb0ab874c11e9c31e66e60",
+    "scripts/launcher-shell": "d14e803a8d0c35d465758028447594530df1f6235a631cd2d3bafcd10e38a674",
+    "scripts/dpad_faugus_prepare.py": "29f0b13fa94ccc02034cf4bfe74a6f6ed7711891f9ab58fdd28f9d83c6736a8e",
+    "scripts/dpad_instant_observation.py": "d6ee9866870b329dbe1511e6e6d146cadb59f547e3fc5552b3bfbb16ac6e8ee9",
+    "scripts/test_instant_replay.py": "e7b4a4cafd8a612bb1d62bc067b31b072c8ea040116af5de7cc533fd44fed732",
+    "scripts/test_epic_instant_wrapper.py": "3b9109169f93c5b915a1f1f1a647183c70e883656a34ff5c5f39782fd364871d",
+    "scripts/test_instant_observation.py": "546c811406a4fc04267579bc9f35db73a415661617586a2fee17de28994534af"
+  },
+  "dependencyImage": "sha256:567d9575a5700ef8cb3242e09a6ef633cfa656e1b62996320a83607362da5877",
+  "genuineGameQualified": false,
+  "cloudSyncQualified": false,
+  "mediaQualified": false,
+  "productionChanged": false,
+  "paidResourcesCreated": 0,
+  "localContainerRemoved": true
+}
