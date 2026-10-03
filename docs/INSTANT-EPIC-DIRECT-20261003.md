@@ -40,3 +40,29 @@ control plane binds images immutably per release. Prepare a new tested release.
 The companion control plane now has a generic official-install capture/bank
 workflow and admits new Epic builds while retaining older published/pinned ones.
 See its `docs/INSTANT-EPIC-FLOW-20261003.md` for preparation and promotion steps.
+
+## October 3 provider check and local follow-up
+
+One approved Paris L4 test (`67dfb0fb-a857-4f82-bb87-2c834b4ae278`) reached
+official Epic directly, without a store picker. All 14 shared ABZÛ files (4.82 GB)
+matched their accepted hashes; NFS/official records were read-only and the
+session's overlay was writable. Epic recognized the game as Launch. The owner
+signed in, launched it manually and confirmed controls and audio.
+
+Closing Epic before sign-in revealed a missing recovery control. Source
+`ced433e` adds a permanent Epic Games panel button using the existing validated
+client-only restore route. A three-script same-VM patch was accepted by the
+owner. This modified runtime test does not qualify a new immutable image or the
+interrupted fresh-auth automatic game request. Cloud Compute keeps Stores.
+
+Portuguese input exposed a stale python-xlib map. A static real-Xwayland check
+reproduced US keycode 21 remaining cached after PT selection and verified that
+the public mapping refresh resolves `=` to PT keycode 19. The local fix refreshes
+before new Labwc presses, pairs releases/repeats with the original keycode, and
+clears tracked keys on reset. It does not enable input logging. The selector and
+input behavior checks pass offline; the new patch still needs runtime acceptance.
+
+The session ended at 05:38:29 UTC. Native VM/boot deletion was verified at 05:43
+UTC, within one hour from admission; the normal warm grace had to be skipped
+with the exact fenced cleanup path. Wallet debit was $1.29. There are no remaining
+paid test resources. Public image selection is unchanged.

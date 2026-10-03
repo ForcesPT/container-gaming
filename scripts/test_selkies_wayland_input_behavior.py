@@ -17,11 +17,22 @@ os.environ["DPAD_DESKTOP_CLIENT"] = desktop
 records = []
 xtest_records = []
 display_ready = False
+layout_keycode = 30
+mapping_refreshes = []
 
 
 class FakeDisplay:
+    def __init__(self):
+        self.cached_keycode = layout_keycode
+        self.display = types.SimpleNamespace(info=types.SimpleNamespace(min_keycode=8, max_keycode=255))
+
     def keysym_to_keycode(self, _keysym):
-        return 30
+        return self.cached_keycode
+
+    def refresh_keyboard_mapping(self, event):
+        assert event.request == 1 and event.first_keycode == 8 and event.count == 248
+        self.cached_keycode = layout_keycode
+        mapping_refreshes.append(event)
 
     def sync(self):
         pass
@@ -89,6 +100,7 @@ setattr(xlib, "X", types.SimpleNamespace(
     ButtonPress=4,
     ButtonRelease=5,
     NONE=0,
+    MappingKeyboard=1,
 ))
 xlib_ext = types.ModuleType("Xlib.ext")
 setattr(xlib_ext, "xtest", types.SimpleNamespace(fake_input=lambda *_a, **_k: xtest_records.append((_a, _k))))
@@ -96,6 +108,7 @@ xlib_protocol = types.ModuleType("Xlib.protocol")
 xlib_protocol_display = types.ModuleType("Xlib.protocol.display")
 setattr(xlib_protocol_display, "Display", type("ProtocolDisplay", (), {}))
 setattr(xlib_protocol, "display", xlib_protocol_display)
+setattr(xlib_protocol, "event", types.SimpleNamespace(MappingNotify=lambda **kwargs: types.SimpleNamespace(**kwargs)))
 
 wayland = types.ModuleType("dpad_wayland_input")
 setattr(wayland, "pointer_motion_absolute", lambda x, y: records.append(("absolute", x, y)) or True)
@@ -129,6 +142,7 @@ if desktop == "sway":
     client.send_mouse(webrtc.MOUSE_BUTTON, (webrtc.MOUSE_BUTTON_PRESS, webrtc.MOUSE_BUTTON_LEFT))
     client.send_x11_keypress(0x61, True)
     assert records == []
+    assert mapping_refreshes == []
     assert [event[0][1] for event in xtest_records] == [
         xlib.X.MotionNotify,
         xlib.X.ButtonPress,
@@ -149,6 +163,35 @@ assert records == [
     ("axis", 0, -120),
 ]
 assert xtest_records == []
+
+# Open the Xlib connection while the initial map is active.
+display_ready = True
+client.send_x11_keypress(0x61, True)
+assert records[-1] == ("key", 22, True)
+assert xtest_records == []
+
+# Simulate selecting Portuguese after the Xlib connection cached US. '=' must
+# use PT keycode 19, and key-up must release that same key if layout changes
+# again while held. This checks the stale-map failure without account input.
+layout_keycode = 19
+client.send_x11_keypress(0x3d, True)
+assert records[-1] == ("key", 11, True)
+layout_keycode = 21
+client.send_x11_keypress(0x3d, True)
+assert records[-1] == ("key", 11, True)
+client.send_x11_keypress(0x3d, False)
+assert records[-1] == ("key", 11, False)
+client.send_x11_keypress(0x3d, True)
+assert records[-1] == ("key", 13, True)
+client.send_x11_keypress(0x3d, False)
+assert records[-1] == ("key", 13, False)
+assert len(mapping_refreshes) == 3
+# Reconnect/reset releases held keys using their original map, so the next
+# press can resolve against the newly selected layout.
+client.reset_keyboard()
+assert records[-1] == ("key", 22, False)
+assert client._dpad_pressed_keys == {}
+layout_keycode = 30
 
 # Keyboard keysyms need XWayland only for keysym -> evdev conversion. Once it
 # appears, the resulting evdev code still goes through the Wayland seat.

@@ -39,6 +39,7 @@ def _patch():
     try:
         from Xlib import display, X
         from Xlib.ext import xtest
+        from Xlib.protocol import event
         from selkies_gstreamer import webrtc_input as w
         import webrtc_input as w_top
         import dpad_wayland_input as wayland_input
@@ -147,7 +148,26 @@ def _patch():
         if d is None:
             return  # :0 not up yet; drop the event (retry on the next one)
         try:
-            kc = d.keysym_to_keycode(keysym)
+            pressed_keys = getattr(self, "_dpad_pressed_keys", None)
+            if pressed_keys is None:
+                pressed_keys = self._dpad_pressed_keys = {}
+            kc = (pressed_keys.get(keysym) if down else pressed_keys.pop(keysym, None)) if native_wayland else None
+            if native_wayland and down and kc is None:
+                # Labwc can replace the Xwayland map after the taskbar layout
+                # selector reconfigures it. python-xlib caches that map; using
+                # the old US keycode under Portuguese turns '=' into '»'.
+                # Refresh before conversion without consuming cursor events or
+                # recording any input. Keep releases paired with their press.
+                info = d.display.info
+                d.refresh_keyboard_mapping(event.MappingNotify(
+                    request=X.MappingKeyboard,
+                    first_keycode=info.min_keycode,
+                    count=info.max_keycode - info.min_keycode + 1,
+                ))
+            if kc is None:
+                kc = d.keysym_to_keycode(keysym)
+            if native_wayland and down and kc:
+                pressed_keys[keysym] = kc
             if kc:
                 if native_wayland and wayland_input.keyboard_key(kc - 8, down):
                     if dbg:
@@ -163,10 +183,19 @@ def _patch():
         except Exception as e:
             # The display may have died (sway restarted) -> drop + reopen next time.
             _gs_dpy[0] = None
+            self._dpad_pressed_keys = {}
             if dbg:
                 _log("key XTest FAILED keysym=%s %r (dropped)" % (keysym, e))
 
     _orig_mouse = W.send_mouse
+    _orig_reset_keyboard = W.reset_keyboard
+    def reset_keyboard(self):
+        if native_wayland:
+            for keysym in list(getattr(self, "_dpad_pressed_keys", {})):
+                self.send_x11_keypress(keysym, down=False)
+            self._dpad_pressed_keys = {}
+        return _orig_reset_keyboard(self)
+
     def send_mouse(self, action, data):
         # Labwc routes through gst-wayland-display so Waybar and XWayland share
         # the compositor seat. Sway keeps its validated production XTest path.
@@ -263,6 +292,7 @@ def _patch():
     for cls in classes.values():
         cls.connect = connect
         cls.send_x11_keypress = send_x11_keypress
+        cls.reset_keyboard = reset_keyboard
         cls.send_mouse = send_mouse
         cls.on_message = on_message
         cls.start_cursor_monitor = start_cursor_monitor

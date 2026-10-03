@@ -14,8 +14,29 @@ process/restore-dispatch check. The older dispatch fixture lacked a complete
 temporary Steam install root; that fixture is now corrected. A three-script
 patch was applied to the already approved Paris test
 `67dfb0fb-a857-4f82-bb87-2c834b4ae278` after the owner intentionally closed Epic
-before sign-in. The permanent button is visible. User reopen/login acceptance
-is pending; no new VM or public image promotion is part of this source change.
+before sign-in. The owner confirmed the button reopened Epic, completed sign-in,
+and saw ABZÛ marked Launch. The shared game opened and controls/audio worked.
+The paid VM and boot volume are deleted; wallet debit was $1.29. No public image
+promotion is part of this source change. The local shortcut-only image is
+`sha256:901d4a635a2217e62b1599b3401db6a86ff1b22788907c25b93ff6462f37c006`
+from `ced433e`; it is not published.
+
+Portuguese `=` failure was reproduced with real Xlib on the same approved VM:
+the compositor changed to PT but the cached US map resolved `=` to keycode 21;
+refreshing the map resolved it to PT keycode 19. No account keystrokes were
+injected or logged. The input patch now refreshes the map before a new Labwc
+keypress, preserves the keycode through repeats/releases, and releases tracked
+keys on keyboard reset. Sway retains its existing XTest conversion. Five keyboard
+selector tests, behavioral routing/reset checks and the routing contract pass
+in an offline disposable local container. The scoped Instant Dockerfile carries
+the updated input patch; it was not loaded into the paid VM.
+
+The temporary panel restart omitted `LABWC_PID`, preventing selector changes.
+Its exact session ID was restored and panel readiness passed without restarting
+Epic. Normal Labwc autostart inherits this variable; do not strip it when
+performing a manual panel restart. Fresh-auth automatic selected-game activation
+remains pending because the owner closed Epic before completing the initial
+game request; the accepted game launch in this test was manual from Library.
 
 2026-10-03 published private candidate: direct official Epic Instant startup and client-only
 restore, without the multi-store picker. Cloud Compute retains its picker.
