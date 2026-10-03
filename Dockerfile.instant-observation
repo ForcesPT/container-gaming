@@ -1,0 +1,9 @@
+# Local account-free derivative. Observation is a UI/admin hint capability;
+# the worker requires an explicit qualified immutable-image allowlist.
+ARG EPIC_IMAGE
+FROM ${EPIC_IMAGE}
+USER root
+ARG DPAD_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
+      com.dpadplay.launcher.qualification="instant-observation-local-candidate"
+COPY scripts/dpad_instant_observation.py /opt/dpadcloud/

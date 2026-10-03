@@ -1,3 +1,13 @@
+# Current local selected-game observation candidate
+
+October 3: a narrow selected-game helper emits only running/unknown and update
+hints for the sealed Epic release. Eight offline non-root Linux checks pass,
+including actual /proc observation of a disposable process. No account state
+or logs are exported. [Scope and limits](INSTANT-OBSERVATION-LOCAL-20261003.md).
+Worker activation defaults off; genuine process/gameplay/media qualification,
+Play again and graceful cloud synchronization remain pending. No publication,
+deployment or paid resource.
+
 # DpadCloud Container Gaming — Image State & Handoff
 
 October 3 local implementation: `dpad_epic_overlay.py` now resumes an exact sealed

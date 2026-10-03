@@ -1,0 +1,18 @@
+{
+  "status": "helper-qualified-locally",
+  "tests": 8,
+  "passed": 8,
+  "network": "none",
+  "effectiveUser": "1000:1000",
+  "dependencyImage": "sha256:275d846ffe8764a4ccdaf02d293085b2c954341529112494ed3cb0e021e5981c",
+  "sources": {
+    "scripts/dpad_instant_observation.py": "0f6af815baaa6d338b010674b30b59b8250d962130b6dec21471f970befef7a0",
+    "scripts/test_instant_observation.py": "732a71d09ace1fea18d92ad9ccf17482a2aced09a5e9e87257f7c88d70968676"
+  },
+  "realProcFixture": true,
+  "genuineGameQualified": false,
+  "mediaQualified": false,
+  "productionChanged": false,
+  "paidResourcesCreated": 0,
+  "localContainerRemoved": true
+}
