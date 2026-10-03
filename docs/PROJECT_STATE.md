@@ -1,5 +1,11 @@
 # DpadCloud Container Gaming — Image State & Handoff
 
+2026-10-03 local candidate: direct official Epic Instant startup and client-only
+restore, without the multi-store picker. Cloud Compute retains its picker.
+See `INSTANT-EPIC-DIRECT-20261003.md`. Forty-three offline shell/registration/
+restore tests passed against the qualified base. No image promotion or paid VM;
+provider acceptance of a fresh login and selected-game activation is still needed.
+
 > **2026-10-01 owner acceptance plan update:** local gameplay testing is deferred
 > at the owner's request. Verify gameplay on live provider VMs using a private
 > canary before broad promotion. This is a change of test location, not a gameplay

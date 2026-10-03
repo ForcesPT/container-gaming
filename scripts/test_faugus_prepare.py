@@ -1,5 +1,6 @@
 """Local candidate contract tests; no account, installer or GPU needed."""
 import json
+import shlex
 from pathlib import Path
 import tempfile
 import unittest
@@ -7,6 +8,21 @@ from dpad_faugus_prepare import PREVIOUS_RUNNERS, prepare
 
 
 class PreparationTests(unittest.TestCase):
+    def test_instant_uri_is_one_argument_and_cloud_compute_clears_it(self):
+        uri = 'com.epicgames.launcher://apps/Sandbox%3ACatalog%3AArtifact?action=launch&silent=true'
+        prepare(str(self.root / 'a'), str(self.runner), str(self.proton), launch_uri=uri)
+        self.assertEqual(shlex.split(json.loads(self.inventory().read_text())[0]['game_arguments']),
+                         ['-SkipBuildPatchPrereq', uri])
+        self.prep()
+        self.assertEqual(json.loads(self.inventory().read_text())[0]['game_arguments'], '-SkipBuildPatchPrereq')
+
+    def test_arbitrary_uri_or_shell_parameters_are_rejected_before_writes(self):
+        for uri in ('https://example.test', 'com.epicgames.launcher://apps/Other?AUTH_PASSWORD=secret',
+                    'com.epicgames.launcher://apps/S%3AC%3AA?action=launch&silent=true; touch /tmp/unsafe'):
+            with self.assertRaisesRegex(ValueError, 'invalid Epic launch URI'):
+                prepare(str(self.root / 'a'), str(self.runner), str(self.proton), launch_uri=uri)
+        self.assertFalse(self.inventory().exists())
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

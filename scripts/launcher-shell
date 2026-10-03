@@ -17,12 +17,6 @@ set -e
 
 APPDIR="/opt/dpadcloud/launcher"
 APPRUN="${APPDIR}/dpad-launcher"
-if [ ! -x "${APPRUN}" ]; then
-    echo "launcher-shell: FATAL — ${APPRUN} not found/executable" >&2
-    echo "  (the launcher AppDir is baked into the image at ${APPDIR}/ via" >&2
-    echo "   COPY --from=forcespt/dpadcloud-launcher, or bind-mounted for dev)" >&2
-    exit 1
-fi
 
 # Prepare inventory before any store GUI can cache its installed-game list.
 # Login, Wine setup and Play remain the customer's normal in-session store flow.
@@ -34,6 +28,9 @@ if [ -n "${DPAD_INSTANT_APP:-}${DPAD_INSTANT_METADATA:-}" ]; then
             # wrapper must preserve it instead of cloning its installed template.
             timeout --kill-after=15s 330s "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/faugus-epic-launch" --prepare-only >>/tmp/instant-registration.log 2>&1 || exit 1
             timeout 15s python3 -I "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/dpad_epic_installation.py" register >>/tmp/instant-registration.log 2>&1 || exit 1
+            # Instant Play has already selected the store and game. Open only
+            # the official client with this release's launch request.
+            exec "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/faugus-epic-launch" --instant >>/tmp/launcher.log 2>&1
         elif [ "${DPAD_FAUGUS_CLIENT_ONLY_TEST:-}" != 1 ]; then
             echo 'launcher-shell: official Epic Instant import is not qualified; use a Cloud Compute candidate session' >&2
             exit 1
@@ -50,4 +47,5 @@ fi
 
 # Electron sandbox off (the container has userns; --no-sandbox avoids the
 # setuid chrome-sandbox requirement, matching the other Electron clients).
+[ -x "${APPRUN}" ] || { echo 'launcher-shell: store picker unavailable' >&2; exit 1; }
 exec "${APPRUN}" --no-sandbox >/tmp/launcher.log 2>&1

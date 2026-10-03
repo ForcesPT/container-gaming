@@ -1,5 +1,6 @@
 """Offline fixture tests; these do not claim official client/game acceptance."""
 import hashlib
+import base64
 import importlib.util
 import json
 import multiprocessing
@@ -61,6 +62,27 @@ def concurrent_register(prefix, record, ready, release, done, results, pause=Fal
 
 
 class OfficialInstallationTests(unittest.TestCase):
+    def test_launch_request_is_from_exact_validated_official_catalog(self):
+        with tempfile.TemporaryDirectory() as temp:
+            binding, source, _, _, _, manifest = fixture(Path(temp))
+            capsule = json.loads((source / 'installation.json').read_bytes())
+            self.assertEqual(m.launch_uri(capsule, binding, manifest.read_bytes()),
+                             'com.epicgames.launcher://apps/fixture_namespace%3Afixture_catalog_id%3AFixtureGame?action=launch&silent=true')
+            for changed in ({**binding, 'app': 'Other'}, {**binding, 'version': 'other'},
+                            {**binding, 'payloadManifestSha256': 'b' * 64}):
+                with self.assertRaises(ValueError):
+                    m.launch_uri(capsule, changed, manifest.read_bytes())
+
+    def test_session_selection_mismatch_is_refused_before_overlay_access(self):
+        with tempfile.TemporaryDirectory() as temp:
+            binding = fixture(Path(temp))[0]
+            env = {'DPAD_FAUGUS_INSTANT_TEST': '1', 'DPAD_INSTANT_APP': 'Other',
+                   'DPAD_EPIC_INSTALLATION_BINDING': base64.b64encode(json.dumps(binding).encode()).decode(),
+                   'DPAD_INSTANT_METADATA': base64.b64encode(json.dumps(binding).encode()).decode()}
+            with patch.dict(os.environ, env, clear=True), patch.object(m.os, 'geteuid', return_value=1000), \
+                    patch.object(m, 'read_bytes', side_effect=AssertionError('overlay read before validation')):
+                with self.assertRaisesRegex(ValueError, 'selected game binding'):
+                    m.session_binding()
     def test_registration_selects_the_launchers_explicit_volume_or_home_prefix(self):
         with patch.dict(m.os.environ, {'HOME': '/private/home'}, clear=True):
             self.assertEqual(m.session_prefix(), Path('/private/home/Faugus/epic-games'))

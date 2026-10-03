@@ -11,6 +11,14 @@ set -euo pipefail
 LOG=/tmp/launcher-toggle.log
 echo "$(date -Is) launcher-toggle invoked" >> "$LOG"
 
+if [ -n "${DPAD_INSTANT_APP:-}${DPAD_INSTANT_METADATA:-}" ] && [ "${DPAD_EPIC_BACKEND:-heroic}" = faugus ]; then
+  script_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+  # Restore only this session's store, without relaunching its game. Failed
+  # validation cannot open the picker or create a second running controller.
+  python3 -I "${script_dir}/dpad_epic_installation.py" launch-uri >/dev/null 2>>"$LOG"
+  exec "${script_dir}/faugus-epic-launch" --open >>"$LOG" 2>&1
+fi
+
 # Check if the launcher process is running
 if ! pgrep -x dpad-launcher >/dev/null 2>&1; then
   echo "$(date -Is) launcher process not found — relaunching" >> "$LOG"

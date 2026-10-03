@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 import stat
+import re
+import shlex
 import tempfile
 import sys
 
@@ -64,7 +66,16 @@ def prepare_lock(home, state_root=None):
         os.close(lock_fd)
 
 
-def prepare(home, runner=RUNNER, umu='/usr/bin/umu-run', state_root=None):
+def prepare(home, runner=RUNNER, umu='/usr/bin/umu-run', state_root=None, launch_uri=None):
+    arguments = '-SkipBuildPatchPrereq'
+    if launch_uri is not None:
+        if not isinstance(launch_uri, str) or not re.fullmatch(
+                r'com\.epicgames\.launcher://apps/[A-Za-z0-9][A-Za-z0-9_-]{0,127}%3A'
+                r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}%3A[A-Za-z0-9][A-Za-z0-9_-]{0,127}'
+                r'\?action=launch&silent=true', launch_uri):
+            raise ValueError('invalid Epic launch URI')
+        # Faugus builds a shell command. Keep the URI (especially &) one argument.
+        arguments += ' ' + shlex.quote(launch_uri)
     home = Path(home)
     if not home.is_absolute():
         raise ValueError('HOME must be absolute')
@@ -88,7 +99,7 @@ def prepare(home, runner=RUNNER, umu='/usr/bin/umu-run', state_root=None):
     executable = prefix / 'drive_c/Program Files/Epic Games/Launcher/Portal/Binaries/Win64/EpicGamesLauncher.exe'
     entry = {'gameid': 'dpad-epic', 'title': 'Epic Games', 'path': str(executable),
              'prefix': str(prefix), 'runner': runner, 'protonfix': 'umu-default',
-             'launch_arguments': 'PROTON_ENABLE_WAYLAND=0', 'game_arguments': '-SkipBuildPatchPrereq',
+             'launch_arguments': 'PROTON_ENABLE_WAYLAND=0', 'game_arguments': arguments,
              'playtime': 0}
     games_path = data_dir / 'games.json'
     games = read_json(games_path, [])
@@ -116,7 +127,8 @@ if __name__ == '__main__':
             prepare_lock(os.environ['HOME'], os.environ.get('DPAD_FAUGUS_STATE_ROOT'))
         elif not sys.argv[1:]:
             prepare(os.environ['HOME'], runner=os.environ.get('PROTONPATH', RUNNER),
-                    state_root=os.environ.get('DPAD_FAUGUS_STATE_ROOT'))
+                    state_root=os.environ.get('DPAD_FAUGUS_STATE_ROOT'),
+                    launch_uri=os.environ.get('DPAD_EPIC_INSTANT_LAUNCH_URI'))
         else:
             raise ValueError('unknown preparation option')
     except (OSError, ValueError, KeyError) as error:

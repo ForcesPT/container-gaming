@@ -368,6 +368,44 @@ def session_prefix():
     return Path(state) / 'prefixes/epic-games' if state else Path(os.environ['HOME']) / 'Faugus/epic-games'
 
 
+def launch_uri(capsule, binding, manifest):
+    """Ask official Epic to launch its catalog entry; Epic checks entitlement."""
+    item = validate_capsule(capsule, binding, manifest)
+    identity = '%3A'.join(item[key] for key in ('CatalogNamespace', 'CatalogItemId', 'AppName'))
+    return 'com.epicgames.launcher://apps/' + identity + '?action=launch&silent=true'
+
+
+def session_binding():
+    if os.geteuid() == 0 or os.environ.get('DPAD_FAUGUS_INSTANT_TEST') != '1':
+        raise ValueError('private official registration canary required')
+    encoded = os.environ['DPAD_EPIC_INSTALLATION_BINDING']
+    metadata = os.environ['DPAD_INSTANT_METADATA']
+    if len(encoded) > 16384 or len(metadata) > 16384:
+        raise ValueError('session metadata size limit')
+    binding = json.loads(base64.b64decode(encoded, validate=True), object_pairs_hook=unique)
+    selected = json.loads(base64.b64decode(metadata, validate=True), object_pairs_hook=unique)
+    if (binding['app'] != os.environ['DPAD_INSTANT_APP']
+            or any(selected[key] != binding[key] for key in ('app', 'version', 'executable', 'installSize'))):
+        raise ValueError('selected game binding mismatch')
+    receipt_path = Path('/run/dpadcloud/epic-overlay.json')
+    receipt = json.loads(read_bytes(receipt_path, MAX_JSON, sealed=True), object_pairs_hook=unique)
+    if receipt_path.stat().st_uid != 0:
+        raise ValueError('root overlay receipt required')
+    if receipt != {'releaseId': binding['releaseId'], 'game': '/opt/dpad-instant/official-game'}:
+        raise ValueError('overlay ownership mismatch')
+    return binding, receipt
+
+
+def session_launch_uri(binding):
+    digest = os.environ['DPAD_EPIC_INSTALLATION_SHA256']
+    encoded = read_bytes(Path('/opt/dpad-instant/epic/installation.json'), MAX_JSON, sealed=True)
+    if not re.fullmatch(DIGEST, digest) or hashlib.sha256(encoded).hexdigest() != digest:
+        raise ValueError('capsule digest mismatch')
+    capsule = json.loads(encoded, object_pairs_hook=unique)
+    manifest = read_bytes(Path('/opt/dpad-instant/epic/vendor.manifest'), MAX_MANIFEST, sealed=True)
+    return launch_uri(capsule, binding, manifest)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='operation', required=True)
@@ -378,6 +416,7 @@ def main():
     for name in ('source', 'source-sha256', 'source-binding', 'binding', 'output'):
         rebind.add_argument('--' + name, required=True)
     commands.add_parser('register')
+    commands.add_parser('launch-uri')
     args = parser.parse_args()
     if args.operation == 'export':
         binding = json.loads(read_bytes(Path(args.binding), MAX_JSON), object_pairs_hook=unique)
@@ -389,14 +428,10 @@ def main():
         print(json.dumps({'capsuleSha256': rebind_capsule(args.source, args.source_sha256,
                          source_binding, binding, args.output)}))
         return
-    if os.geteuid() == 0 or os.environ.get('DPAD_FAUGUS_INSTANT_TEST') != '1':
-        raise ValueError('private official registration canary required')
-    binding = json.loads(base64.b64decode(os.environ['DPAD_EPIC_INSTALLATION_BINDING'], validate=True), object_pairs_hook=unique)
-    receipt = json.loads(read_bytes(Path('/run/dpadcloud/epic-overlay.json'), MAX_JSON, sealed=True), object_pairs_hook=unique)
-    if Path('/run/dpadcloud/epic-overlay.json').stat().st_uid != 0:
-        raise ValueError('root overlay receipt required')
-    if receipt != {'releaseId': binding['releaseId'], 'game': '/opt/dpad-instant/official-game'}:
-        raise ValueError('overlay ownership mismatch')
+    binding, receipt = session_binding()
+    if args.operation == 'launch-uri':
+        print(session_launch_uri(binding))
+        return
     prefix = session_prefix()
     print('DPAD_INSTANT_INSTALLATION ' + register(prefix, receipt['game'],
           '/opt/dpad-instant/epic', binding, os.environ['DPAD_EPIC_INSTALLATION_SHA256']))

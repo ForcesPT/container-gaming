@@ -30,12 +30,26 @@ if [ -n "${DPAD_FAUGUS_STATE_ROOT:-}" ]; then
 fi
 script_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 mode="${1:---launch}"
-if [ "$#" -gt 1 ] || [[ "$mode" != --launch && "$mode" != --prepare-only && "$mode" != --resume ]]; then
-    echo 'usage: faugus-epic-launch [--prepare-only|--resume]' >&2
+if [ "$#" -gt 1 ] || [[ "$mode" != --launch && "$mode" != --prepare-only && "$mode" != --resume && "$mode" != --instant && "$mode" != --open ]]; then
+    echo 'usage: faugus-epic-launch [--prepare-only|--resume|--instant|--open]' >&2
     exit 1
+fi
+# Only the sealed selected release supplies an initial game request. Reopening
+# the client must not relaunch a game or trust a URI inherited from the caller.
+unset DPAD_EPIC_INSTANT_LAUNCH_URI
+if [ "$mode" = --instant ]; then
+    DPAD_EPIC_INSTANT_LAUNCH_URI="$(python3 -I "${script_dir}/dpad_epic_installation.py" launch-uri)"
+    export DPAD_EPIC_INSTANT_LAUNCH_URI
 fi
 python3 -I "${script_dir}/dpad_faugus_prepare.py" --lock-only
 exec 9<"${XDG_STATE_HOME:-${HOME}/.local/state}/faugus-launcher/dpad-epic.lock"
+if [ "$mode" = --open ]; then
+    if flock -n 9; then
+        mode=--launch
+    else
+        mode=--resume
+    fi
+fi
 if [ "$mode" = --resume ]; then
     # Never start another Faugus controller or kill an invisible client/game.
     # Only ask the already managed official client to restore via its normal
