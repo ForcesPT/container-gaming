@@ -6,6 +6,15 @@ See `INSTANT-EPIC-DIRECT-20261003.md`. Forty-three offline shell/registration/
 restore tests passed against the qualified base. No image promotion or paid VM;
 provider acceptance of a fresh login and selected-game activation is still needed.
 
+Frozen image built from `10f1991`: local tag
+`dpadplay/epic-instant:direct-flow-10f1991`, digest
+`sha256:8a18d043bccc4e6e2c65f44cf0d64e63d3abbb9bcf8830eac80e3e638245a4bf`.
+All 43 tests also passed on that built image. The companion control-plane final
+runtime source `7f563a0` passed 29 DB, 3 API, 13 browser and 23 storage Python
+checks; its actual accepted ABZÛ public capsule passed the generic adoption
+workflow. The candidate remains local, unpromoted and needs provider activation
+acceptance; the current qualified public ABZÛ runtime remains the reference.
+
 > **2026-10-01 owner acceptance plan update:** local gameplay testing is deferred
 > at the owner's request. Verify gameplay on live provider VMs using a private
 > canary before broad promotion. This is a change of test location, not a gameplay
