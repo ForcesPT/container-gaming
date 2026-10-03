@@ -2,7 +2,8 @@
 
 October 4: a private allowlisted desktop environment and sealed selected-game
 replay wrapper are implemented. Seventeen offline non-root helper/wrapper cases
-pass, including process isolation and no second running Faugus controller.
+pass against packaged image `3442ee78`, whose helper hashes match source,
+including process isolation and no second running Faugus controller.
 [Evidence and limits](INSTANT-REPLAY-LOCAL-20261004.md). Real official-client
 replay, native media and cloud-sync acceptance remain open. No publication,
 production activation or paid VM; the companion image allowlists default off.

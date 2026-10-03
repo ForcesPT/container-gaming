@@ -24,3 +24,10 @@ delivery before mutation and never repeats an ambiguous command.
 Epic Instant Dockerfiles package the helper. GE-Proton11-7 is unchanged. This does
 not establish actual official-client replay, restored saves, cloud-sync completion
 or native GPU/WebRTC acceptance; worker/API image allowlists remain disabled.
+
+The exact local image `sha256:3442ee78246481519e58e916fb776c6a992971b345d76f5d751b8a025b51e495`
+was built from `c856ed3` over the verified local observation image. Its five
+packaged helper hashes match source; all 17 offline cases pass against those
+packaged bytes. The first attempt incorrectly mounted fixture process doubles
+on a noexec temporary directory; the corrected executable fixture passed.
+Receipt: `qualification/instant-replay-image-local-20261004.json`.
