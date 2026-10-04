@@ -1,4 +1,17 @@
-# Current local Compute picker reliability candidate
+# Current local shutdown and Compute picker candidates
+
+October 4: runtime source `6fb4bb2` produces private Instant shutdown image
+`b266313d` and final Compute picker image `a1efea01`. Shutdown passes 25 packaged
+non-root/offline cases, including real X11 protocol and disposable process
+identity. Picker passes eight actual-package behavior cases, native import/source
+pins and five browser scenarios at three layouts; screenshots were inspected.
+The browser found and fixed late-failure stale status and off-screen retry controls.
+[Shutdown evidence](INSTANT-SHUTDOWN-LOCAL-20261004.md), [picker evidence](COMPUTE-PICKER-LOCAL-20261004.md).
+No push, production change or paid VM. Policies/allowlists remain off; real game/
+store synchronization, native media/Shared isolation and immutable account checks
+remain open. The retained ASAR builder dependency image enables offline rebuilds.
+
+# Previous local Compute picker reliability candidate
 
 October 4: startup uncertainty retains the picker; stale child/store events cannot
 replace its current launch. Cards now distinguish wrapper readiness from a real

@@ -1,0 +1,10 @@
+# Offline adapter rebuild from the retained ASAR dependency/lock image.
+# Caller verifies PICKER_DEPENDENCIES identity before building.
+ARG PICKER_DEPENDENCIES
+FROM ${PICKER_DEPENDENCIES}
+WORKDIR /work
+COPY launcher/src/main.js launcher/src/renderer.js launcher/src/index.html launcher/src/styles.css launcher/src/store_lifecycle.cjs /work/current/
+RUN cp current/main.js current/renderer.js current/index.html current/styles.css current/store_lifecycle.cjs unpacked/src/ \
+    && node --check unpacked/src/main.js \
+    && node --check unpacked/src/renderer.js \
+    && ./node_modules/.bin/asar pack unpacked output/app.asar --unpack-dir node_modules

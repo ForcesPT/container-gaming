@@ -1,0 +1,23 @@
+{
+  "status": "compute-picker-ui-qualified-locally",
+  "cases": 5,
+  "viewports": [
+    "1280x720",
+    "1920x1080",
+    "390x844"
+  ],
+  "pageErrors": 0,
+  "ipc": "explicit test doubles",
+  "realStoreOrCompositorQualified": false,
+  "productionChanged": false,
+  "paidResourcesCreated": 0,
+  "sourceRevision": "6fb4bb24a8df279f6c47b2bed0f4d81e1dfe5bbc",
+  "sourceFiles": {
+    "launcher/src/renderer.js": "c93053ad328e17f986c2bd454cf1e84a6fcc2288a9e4e18a18548c5d7bb0a923",
+    "launcher/src/index.html": "417d9f788d517144ad6ebb84dfd3be628013dec6e9c3eddc49474242e9acd25f",
+    "launcher/src/styles.css": "955d85ddeb114cb0ed5a023009d52b288a9658c1141bc9c54bd67811a6cb8a43",
+    "scripts/check_picker_ui_local.cjs": "1e0dc1b44151e841803bc8fa03597cbfc7f758540d3b8a6f8c199d9d20bab955"
+  },
+  "pairedPackagedImage": "sha256:a1efea01f5cd224272e020936928088940836e67bba78d24834763f9d9bc1c4e",
+  "screenshotsInspected": true
+}

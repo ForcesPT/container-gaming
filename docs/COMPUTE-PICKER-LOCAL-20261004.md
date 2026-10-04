@@ -1,6 +1,6 @@
 # Local Compute store-picker reliability
 
-October 4, 2026. Runtime source `c8afdbf`. Local candidate `dpadplay/compute:picker-local-20261004`, immutable image `sha256:7bac4b4bdb8185eda1ecb47acd6c3e349988a99f81daa09cb5a0de506db6fec1`. No publication, production activation or paid VM.
+October 4, 2026. Final runtime source `6fb4bb2`. Local candidate `dpadplay/compute:picker-local-20261004`, immutable image `sha256:a1efea01f5cd224272e020936928088940836e67bba78d24834763f9d9bc1c4e`. No publication, production activation or paid VM.
 
 ## Changes
 
@@ -20,7 +20,18 @@ Eight behavioral cases execute the actual packaged main/renderer code through El
 
 The pinned public ASAR 3.2.17 packaging dependency was downloaded once; its dependency lock hash is retained. The final derivative build and runtime checks use network-disabled execution. An initial network-disabled adapter dependency install was stopped because the cache was empty; no runtime test failed.
 
-Receipt: `docs/qualification/compute-picker-local-20261004.json`.
+Final receipts: `docs/qualification/compute-picker-final-local-20261004.json`
+and `compute-picker-ui-local-20261004.json`. The earlier `compute-picker-local`
+receipt preserves the initial package checkpoint only.
+
+Five real-browser scenarios pass with explicit IPC doubles at 1280×720,
+1920×1080 and 390×844. Ready/retry screenshots were inspected. Browser checks
+found and corrected a stale waiting badge after Esc followed by late failure,
+and a Reload stores button below the visible viewport. Cards now refresh on
+state changes; the card area scrolls and controls stay reachable. The final
+package rerun passes all eight cases and its source hashes match the browser
+source. The original ASAR dependency image is retained and reused offline by
+`Dockerfile.picker-local`; its lock hash is unchanged.
 
 ## Remaining acceptance
 

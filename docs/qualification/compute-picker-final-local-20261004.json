@@ -1,0 +1,35 @@
+{
+  "status": "packaged-compute-picker-qualified-locally",
+  "sourceBaseline": "6fb4bb24a8df279f6c47b2bed0f4d81e1dfe5bbc",
+  "sourceFiles": {
+    "main.js": "8c23a39ee42d7b3360868cf59e164fce15aeb059082287f57810ed375bee467a",
+    "renderer.js": "c93053ad328e17f986c2bd454cf1e84a6fcc2288a9e4e18a18548c5d7bb0a923",
+    "index.html": "417d9f788d517144ad6ebb84dfd3be628013dec6e9c3eddc49474242e9acd25f",
+    "styles.css": "955d85ddeb114cb0ed5a023009d52b288a9658c1141bc9c54bd67811a6cb8a43",
+    "store_lifecycle.cjs": "d00fed30c3c4ec18e4375fae8870148702fe85cdee8fbacfefbd89425daa251f"
+  },
+  "computeBase": "sha256:93fef1d0839b8b88c8f04dadc8abbf493746f9b44036535b626d97a782e62fe1",
+  "adapterImage": "sha256:48c23350802400f55194136ce9d61287c6d32c2bf9429320bc76704c49a53c5c",
+  "packagerLockSha256": "1c4b25f1c7b0a3a82de4e54a7ca099245a25bce99bbcdeb59b8e79a3875ba9bb",
+  "imageId": "sha256:a1efea01f5cd224272e020936928088940836e67bba78d24834763f9d9bc1c4e",
+  "behaviorTests": 8,
+  "packagedSourcesMatch": true,
+  "nativeKoffiImported": true,
+  "epicReopenPreserved": true,
+  "runtimeContractAndBasePreserved": true,
+  "testNetwork": "none",
+  "testUser": "1000:1000",
+  "productionChanged": false,
+  "paidResourcesCreated": 0,
+  "allDisposableContainersRemoved": true,
+  "realStoreAccountAcceptance": false,
+  "nativeMediaQualified": false,
+  "qualificationFiles": {
+    "Dockerfile.official-stores": "411ef140d4539fe4cabaaa1f29222844c3aebd0cc6eefcab8660469227b53ea8",
+    "Dockerfile.compute-picker": "aa6263b32493cdf374a19ec909293f3406f0f794a3bc8b90cbc6eda851ef2b63",
+    "Dockerfile.picker-local": "104d7bd0925efdec31c914b0b4bc327dd0895906073b0ddb64196a579eff3aaa",
+    "scripts/check_compute_picker_local.py": "2e126204299ed996a41fd35d28adfdb6ef27463a3d4d2ba1a1d0d961a2494dbe",
+    "scripts/test_picker_startup.cjs": "6c3f014d98ad4b4af38de294ba5796603325146031a61b208a7dcad7d2075966"
+  },
+  "dependencyAcquisition": "Final offline adapter reuses retained dependency image fbe91045 with the same ASAR lock hash."
+}
