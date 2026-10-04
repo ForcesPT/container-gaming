@@ -1,0 +1,9 @@
+# Private normal-exit helper successor of the reviewed local replay image.
+ARG EPIC_IMAGE
+FROM ${EPIC_IMAGE}
+USER root
+ARG DPAD_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
+      com.dpadplay.launcher.qualification="instant-shutdown-local-candidate"
+COPY scripts/dpad_instant_shutdown.py /opt/dpadcloud/
+RUN python3 -m py_compile /opt/dpadcloud/dpad_instant_shutdown.py

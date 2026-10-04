@@ -4,6 +4,6 @@ USER root
 ARG DPAD_SOURCE_REVISION
 LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
       com.dpadplay.launcher.qualification="instant-replay-local-candidate"
-COPY scripts/dpad_instant_observation.py scripts/dpad_instant_replay.py scripts/dpad_faugus_prepare.py scripts/faugus-epic-launch scripts/launcher-shell /opt/dpadcloud/
+COPY scripts/dpad_instant_observation.py scripts/dpad_instant_replay.py scripts/dpad_instant_shutdown.py scripts/dpad_faugus_prepare.py scripts/faugus-epic-launch scripts/launcher-shell /opt/dpadcloud/
 RUN sed -i 's/\r$//' /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/launcher-shell \
     && chmod +x /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/launcher-shell
