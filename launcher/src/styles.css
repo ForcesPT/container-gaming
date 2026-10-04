@@ -77,11 +77,13 @@ html, body {
 
 .grid {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 28px;
   padding: 56px 80px;
-  align-content: center;
+  align-content: start;
 }
 
 /* ---- store card ---- */
@@ -276,6 +278,8 @@ html, body {
 }
 .reload-stores {
   align-self: center;
+  flex-shrink: 0;
+  margin-bottom: 12px;
   padding: 12px 20px;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -284,3 +288,21 @@ html, body {
   cursor: pointer;
 }
 .reload-stores:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+
+.brand, .hint { flex-shrink: 0; }
+@media (max-height: 800px), (max-width: 900px) {
+  .brand { padding: 24px 32px 0; flex-wrap: wrap; }
+  .wordmark { font-size: 2rem; }
+  .grid { padding: 24px 32px; gap: 18px; }
+  .card { height: 250px; }
+  .card .tile { height: 52%; }
+  .card .tile .logo { width: 88px; height: 88px; }
+  .card .body { padding: 16px 20px; }
+  .hint { padding: 0 32px 20px; }
+}
+@media (max-width: 700px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .hint { font-size: .75rem; line-height: 1.8; }
+  .toast { width: calc(100% - 32px); font-size: .9rem; bottom: 70px; }
+  .launch-card { max-width: calc(100% - 32px); padding: 24px; }
+}

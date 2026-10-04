@@ -106,6 +106,8 @@ test('return to the picker refreshes status without losing selected store',async
  const f=await rendererFixture();await f.run('launch()');f.handlers.onStoreInstalling('epic');f.run('dismissOverlay()');
  assert.match(f.elements.grid.children[0].innerHTML,/Waiting for window/);
  assert.equal(f.run('cards[focusIndex].store.id'),'epic');
+ f.handlers.onStoreLaunchFailed('epic','fixture delayed failure');
+ assert.match(f.elements.grid.children[0].innerHTML,/Startup unconfirmed/);
 });
 test('catalog transport loss exposes retry and preserves existing choices',async()=>{
  const f=await rendererFixture();f.run('focus(1)');f.catalog(async()=>{throw Error('fixture catalog lost')});

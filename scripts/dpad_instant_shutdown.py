@@ -110,7 +110,8 @@ class X11:
             self.x.XUngrabServer(self.display); self.x.XFlush(self.display)
 
 
-def request_exit(binding, prefix, observation, desktop, processes):
+def request_exit(binding, prefix, observation, desktop, processes, process_factory=None):
+    process_factory = process_factory or observation.psutil.Process
     selected = {}
     for process in processes:
         if len(selected) >= 32: raise ValueError('selected process bound exceeded')
@@ -124,7 +125,10 @@ def request_exit(binding, prefix, observation, desktop, processes):
         process, created = selected[pid]
         def current():
             try:
-                return process.create_time() == created and observation.selected_game_running(binding, prefix, [process]) is True
+                # psutil caches creation time on an existing Process instance.
+                # Resolve a fresh instance to detect PID reuse at delivery time.
+                fresh = process_factory(pid)
+                return fresh.create_time() == created and observation.selected_game_running(binding, prefix, [fresh]) is True
             except (OSError, observation.psutil.Error): return False
         requested = desktop.request_close(window, pid, current) or requested
     return requested

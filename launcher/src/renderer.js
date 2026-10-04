@@ -50,6 +50,7 @@ function showOverlay(store) {
 // --- main -> renderer events ---
 window.dpad.onStoreVisible((id) => {
   storeStates[id] = 'opened';
+  refreshCardStates();
   // The store window appeared — dismiss the overlay. The launcher will be
   // hidden to scratchpad by the main process; when the store exits, the
   // launcher is restored + refocused, and 'store-exited' fires.
@@ -58,6 +59,7 @@ window.dpad.onStoreVisible((id) => {
 
 window.dpad.onStoreExited((id) => {
   if (storeStates[id] !== 'unconfirmed') delete storeStates[id];
+  refreshCardStates();
   // The store exited — the launcher is restored from scratchpad. Just make
   // sure the overlay is dismissed.
   dismissOverlay(id);
@@ -67,6 +69,7 @@ window.dpad.onStoreExited((id) => {
 
 window.dpad.onStoreLaunchFailed((id, err) => {
   storeStates[id] = 'unconfirmed';
+  refreshCardStates();
   dismissOverlay(id);
   const store = STORES_LOOKUP[id];
   showToast(`${store?.name || 'Store'}: ${err}`, true);
@@ -74,6 +77,7 @@ window.dpad.onStoreLaunchFailed((id, err) => {
 
 window.dpad.onStoreInstalling((id) => {
   storeStates[id] = 'waiting';
+  refreshCardStates();
   // First-launch install: winetricks + downloading the installer takes
   // 5-10 min with no visible window. Update the overlay so the user
   // gets feedback instead of a black screen.
@@ -107,6 +111,10 @@ function statusPill(store) {
   if (state === 'unconfirmed') return { text: 'Startup unconfirmed · retry', cls: 'missing' };
   if (store.available) return { text: 'Ready to open', cls: 'available' };
   return { text: 'Unavailable', cls: 'missing' };
+}
+
+function refreshCardStates() {
+  if (cards.length) render(cards.map(card => card.store));
 }
 
 function render(stores) {

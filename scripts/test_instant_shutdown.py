@@ -33,7 +33,9 @@ class SelectionTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.prefix=Path(self.tmp.name);self.prefix.chmod(0o700)
         self.binding={'app':'Artifact','executable':'bin/Game.exe'}
-    def request(self,desktop,processes):return shutdown.request_exit(self.binding,self.prefix,observation,desktop,processes)
+    def request(self,desktop,processes):
+        inventory={process.pid:process for process in processes}
+        return shutdown.request_exit(self.binding,self.prefix,observation,desktop,processes,lambda pid:inventory[pid])
     def test_only_exact_selected_private_process_window_receives_request(self):
         desktop=Desktop({11:47,12:48,13:49})
         self.assertTrue(self.request(desktop,[Process(self.prefix),Process(self.prefix,48,os.geteuid()+1)]));self.assertEqual(desktop.sent,[(11,47)])
@@ -87,5 +89,20 @@ class ProtocolTests(unittest.TestCase):
         self.assertFalse(d.request_close(window,48,lambda:True));self.assertFalse(d.request_close(window,47,lambda:False))
         self.assertFalse(d.request_close(unsupported,48,lambda:True));d.x.XSync(d.display,False)
         self.assertEqual(d.x.XPending(d.display),0)
+    def test_fresh_real_process_identity_and_x11_request_work_together(self):
+        temporary=tempfile.TemporaryDirectory();self.addCleanup(temporary.cleanup);prefix=Path(temporary.name);prefix.chmod(0o700)
+        env={**os.environ,'FAUGUSID':'dpad-epic','WINEPREFIX':str(prefix)}
+        child=subprocess.Popen(['python3','-c','import ctypes,time;ctypes.CDLL(None).prctl(15,b"GameThread",0,0,0);time.sleep(30)',
+            'C:/DpadPlay/Games/Artifact/bin/Game.exe'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        self.addCleanup(child.wait);self.addCleanup(child.terminate)
+        deadline=time.monotonic()+5
+        process=observation.psutil.Process(child.pid)
+        while process.name()!='GameThread':
+            self.assertLess(time.monotonic(),deadline);time.sleep(.02)
+        window=self.window(child.pid)
+        self.assertTrue(shutdown.request_exit({'app':'Artifact','executable':'bin/Game.exe'},prefix,observation,self.desktop,[process]))
+        self.desktop.x.XSync(self.desktop.display,False);event=shutdown.Event()
+        self.assertGreater(self.desktop.x.XPending(self.desktop.display),0);self.desktop.x.XNextEvent(self.desktop.display,c.byref(event))
+        self.assertEqual(event.client.window,window);self.assertEqual(event.client.data.longs[0],self.desktop.delete)
 
 if __name__=='__main__':unittest.main()
