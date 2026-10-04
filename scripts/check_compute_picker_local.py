@@ -33,9 +33,9 @@ assert.equal(typeof require(src+'epic_reopen.cjs').reopenManagedEpic,'function')
 require('/opt/dpadcloud/launcher/resources/app.asar/node_modules/koffi');
 console.log(JSON.stringify({packagedSourcesMatch:true,epicReopenPreserved:true,nativeKoffiImported:true,uid:process.getuid()}));
 """)
+    (out/'test_picker_startup.cjs').write_bytes((ROOT/'scripts/test_picker_startup.cjs').read_bytes())
     common=['docker','run','--rm','--pull','never','--network','none','--user','1000:1000','--cap-drop','ALL','--security-opt','no-new-privileges',
       '--tmpfs','/tmp:rw,nosuid,nodev,mode=1777','--mount','type=bind,src='+str(out)+',dst=/fixture,readonly',
-      '--mount','type=bind,src='+str(ROOT/'scripts/test_picker_startup.cjs')+',dst=/fixture/test_picker_startup.cjs,readonly',
       '-e','ELECTRON_RUN_AS_NODE=1','-e','DPAD_PICKER_TEST_SOURCE=/opt/dpadcloud/launcher/resources/app.asar/src',
       '--entrypoint','/opt/dpadcloud/launcher/dpad-launcher']
     package=run(common[:-2]+['-e','DPAD_PICKER_EXPECTED='+json.dumps(before)]+common[-2:]+[iid,'/fixture/package-check.cjs'])

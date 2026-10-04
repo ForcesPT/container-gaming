@@ -1,3 +1,13 @@
+# Current local Compute picker reliability candidate
+
+October 4: startup uncertainty retains the picker; stale child/store events cannot
+replace its current launch. Cards now distinguish wrapper readiness from a real
+window and provide retry/catalog recovery. Packaged candidate `7bac4b4b` preserves
+the accepted GE-Proton11-7 Compute base and client wrappers. Eight actual-package
+behavioral fixtures, five source pins and native koffi/Epic-reopen checks pass
+non-root/offline. [Evidence](COMPUTE-PICKER-LOCAL-20261004.md). No publication,
+production change or paid VM. Real client/native/Shared acceptance remains open.
+
 # Current local selected Epic replay candidate
 
 October 4: a private allowlisted desktop environment and sealed selected-game

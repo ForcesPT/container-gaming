@@ -1,0 +1,34 @@
+{
+  "status": "packaged-compute-picker-qualified-locally",
+  "sourceBaseline": "c8afdbf87cb5428be7486c22c4422aaddfa98491",
+  "sourceFiles": {
+    "main.js": "8c23a39ee42d7b3360868cf59e164fce15aeb059082287f57810ed375bee467a",
+    "renderer.js": "54401da48fe9491b40a03e0e42dfc46b599a94a0315e6d4c1b59d2b2c3a6eb79",
+    "index.html": "417d9f788d517144ad6ebb84dfd3be628013dec6e9c3eddc49474242e9acd25f",
+    "styles.css": "6a697ae0f132566d64e75e19ebffe472f7edc33793857624cd941d0134955b40",
+    "store_lifecycle.cjs": "d00fed30c3c4ec18e4375fae8870148702fe85cdee8fbacfefbd89425daa251f"
+  },
+  "computeBase": "sha256:93fef1d0839b8b88c8f04dadc8abbf493746f9b44036535b626d97a782e62fe1",
+  "adapterImage": "sha256:fbe9104523521052b34ef935d64f8c9067329e47c22b8e4139b8d60bf39ebec2",
+  "packagerLockSha256": "1c4b25f1c7b0a3a82de4e54a7ca099245a25bce99bbcdeb59b8e79a3875ba9bb",
+  "imageId": "sha256:7bac4b4bdb8185eda1ecb47acd6c3e349988a99f81daa09cb5a0de506db6fec1",
+  "behaviorTests": 8,
+  "packagedSourcesMatch": true,
+  "nativeKoffiImported": true,
+  "epicReopenPreserved": true,
+  "runtimeContractAndBasePreserved": true,
+  "testNetwork": "none",
+  "testUser": "1000:1000",
+  "productionChanged": false,
+  "paidResourcesCreated": 0,
+  "allDisposableContainersRemoved": true,
+  "realStoreAccountAcceptance": false,
+  "nativeMediaQualified": false,
+  "qualificationFiles": {
+    "Dockerfile.official-stores": "411ef140d4539fe4cabaaa1f29222844c3aebd0cc6eefcab8660469227b53ea8",
+    "Dockerfile.compute-picker": "aa6263b32493cdf374a19ec909293f3406f0f794a3bc8b90cbc6eda851ef2b63",
+    "scripts/check_compute_picker_local.py": "2e126204299ed996a41fd35d28adfdb6ef27463a3d4d2ba1a1d0d961a2494dbe",
+    "scripts/test_picker_startup.cjs": "3f0411a2b7618c03fcf0dd34a1c858be5d620f5dc795ba6b0e6b92bea6fe79f7"
+  },
+  "dependencyAcquisition": "Pinned public ASAR 3.2.17 and Node image fetched once; final derivative build and all runtime fixtures offline."
+}
