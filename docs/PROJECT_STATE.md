@@ -1,3 +1,12 @@
+# Current local official-client window checks
+
+October 4: all six official clients displayed fresh sign-in windows and reopened
+after their windows were closed on the current Compute `d6bf574a` software-display
+adapter. Each used a separate disposable container and no account. All fixtures
+and their temporary viewer are removed. [Evidence and scope](OFFICIAL-STORE-WINDOWS-LOCAL-20261004.md).
+This adds startup/reopen evidence; native media, account/save and Shared acceptance
+remain open. No publication, deployment or paid resource.
+
 # Current local keyboard and corrected startup candidates
 
 October 4: runtime source `5ac9167`. Instant `acddbe8e` and Compute `d6bf574a`

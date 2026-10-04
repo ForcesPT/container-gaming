@@ -1,0 +1,78 @@
+{
+  "status": "official-store-windows-observed-locally",
+  "method": "manual visual observation through local noVNC, close window, then wrapper reopen",
+  "sourceBaseline": "5ac9167204097330dc7f4ea6f3c24e3ec8ec2afc",
+  "computeImageId": "sha256:d6bf574a817a0d38f0a33c930249f44472b7ec5108a4cf1b9c7b9840e2157688",
+  "localSoftwareAdapterImageId": "sha256:5d7fdfa0b222e444b3e98c798c1ffcf4b5c53356fea4bb107d0ad9f2e167243c",
+  "display": "Xorg dummy and Openbox; Mesa software Vulkan/OpenGL",
+  "runner": "GE-Proton11-7; Steam uses native Linux client",
+  "clients": [
+    {
+      "store": "epic",
+      "freshSignInWindowObserved": true,
+      "closeReopenWindowObserved": true,
+      "accountUsed": false,
+      "fixtureRemoved": true
+    },
+    {
+      "store": "gog",
+      "freshSignInWindowObserved": true,
+      "closeReopenWindowObserved": true,
+      "accountUsed": false,
+      "fixtureRemoved": true
+    },
+    {
+      "store": "battlenet",
+      "freshSignInWindowObserved": true,
+      "closeReopenWindowObserved": true,
+      "accountUsed": false,
+      "fixtureRemoved": true
+    },
+    {
+      "store": "ea",
+      "freshSignInWindowObserved": true,
+      "closeReopenWindowObserved": true,
+      "accountUsed": false,
+      "fixtureRemoved": true
+    },
+    {
+      "store": "ubisoft",
+      "freshSignInWindowObserved": true,
+      "closeReopenWindowObserved": true,
+      "accountUsed": false,
+      "fixtureRemoved": true
+    },
+    {
+      "store": "steam",
+      "freshSignInWindowObserved": true,
+      "closeReopenWindowObserved": true,
+      "accountUsed": false,
+      "fixtureRemoved": true
+    }
+  ],
+  "screenshots": {
+    "epic-sign-in.jpg": "0237a6351972dce9f7cc274ea214a7d515f54c56ad7a21627d53331d58e1e3d8",
+    "epic-reopened.jpg": "a656774ff3740d6be6805d90ea897bae8bf61d3178cd9fdc9811e2d032156009",
+    "gog-sign-in.jpg": "8dd102dcd36f09e94e36c94019f1ab2e43c0b38b768bbb924f14de3a756c974d",
+    "gog-reopened.jpg": "04ce986145c06e7b9a5a0055949406d5c06bfba136b497f1d9cb3b3934b5ff88",
+    "battlenet-sign-in.jpg": "104ca7cd0f7451fb0865d97c8768de3cf8b941c0b020f80caab776411a68a98b",
+    "battlenet-reopened.jpg": "ab880c115a389449d7b21b8cabff803a4a6ade96134c37102331ffde88d29f2b",
+    "ea-sign-in.jpg": "dbb031961c955b1c7e8e27347e8a840f83148853df9157301e0bb24c0e7a6883",
+    "ea-reopened.jpg": "2ec0f30c92869b3a3dead53e7cd0bd5efebb5d81931ce56d954dd3ae4569bad5",
+    "ubisoft-sign-in.jpg": "a5d1038fe05fc8d8f2403e73975a2a6a32558898d3591ef29d3f8bb7b46db949",
+    "ubisoft-reopened.jpg": "2132b750bb8fc8738a1255b676c7d2b00e7052589c66d20fedce81876bd61495",
+    "steam-sign-in.jpg": "59905ab05438be792ce89b3dde6347f63c7b314ae557597506a6638a25d5f6ce",
+    "steam-reopened.jpg": "59905ab05438be792ce89b3dde6347f63c7b314ae557597506a6638a25d5f6ce"
+  },
+  "privateVendorLogsExported": false,
+  "profilesExported": false,
+  "allDisposableContainersRemoved": true,
+  "temporaryViewerClosed": true,
+  "productionChanged": false,
+  "paidResourcesCreated": 0,
+  "published": false,
+  "accountRetentionQualified": false,
+  "nativeWaylandMediaQualified": false,
+  "fullPickerClientInteractionQualified": false,
+  "cloudSaveRestorationQualified": false
+}
