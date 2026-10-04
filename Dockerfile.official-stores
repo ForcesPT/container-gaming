@@ -57,7 +57,7 @@ COPY scripts/steam-desktop /usr/local/bin/steam
 COPY scripts/ea-launch /opt/dpadcloud/ea-launch
 COPY scripts/battlenet-launch scripts/ubisoft-launch scripts/dpad-clone-prefix-template /opt/dpadcloud/
 COPY scripts/dpad-sanitize-store-prefix /opt/dpadcloud/dpad-sanitize-store-prefix
-COPY scripts/dpad-keyboard-layout scripts/launcher-shell scripts/faugus-epic-launch scripts/dpad_epic_installation.py /opt/dpadcloud/
+COPY scripts/dpad-keyboard-layout scripts/dpad-publish-desktop-config scripts/launcher-shell scripts/faugus-epic-launch scripts/dpad_epic_installation.py /opt/dpadcloud/
 COPY scripts/swaymsg-desktop-compat /usr/local/bin/swaymsg
 COPY --from=picker-adapter /work/output/ /opt/dpadcloud/launcher/resources/
 RUN sed -i 's/\r$//' /opt/dpadcloud/gog-launch \
@@ -67,8 +67,8 @@ RUN sed -i 's/\r$//' /opt/dpadcloud/gog-launch \
     && chmod +x /opt/dpadcloud/battlenet-launch /opt/dpadcloud/ubisoft-launch /opt/dpadcloud/dpad-clone-prefix-template \
     && sed -i 's/\r$//' /opt/dpadcloud/dpad-sanitize-store-prefix \
     && chmod +x /opt/dpadcloud/dpad-sanitize-store-prefix \
-    && sed -i 's/\r$//' /opt/dpadcloud/dpad-keyboard-layout /opt/dpadcloud/launcher-shell /opt/dpadcloud/faugus-epic-launch \
-    && chmod +x /opt/dpadcloud/dpad-keyboard-layout /opt/dpadcloud/launcher-shell /opt/dpadcloud/faugus-epic-launch \
+    && sed -i 's/\r$//' /opt/dpadcloud/dpad-keyboard-layout /opt/dpadcloud/dpad-publish-desktop-config /opt/dpadcloud/launcher-shell /opt/dpadcloud/faugus-epic-launch \
+    && chmod +x /opt/dpadcloud/dpad-keyboard-layout /opt/dpadcloud/dpad-publish-desktop-config /opt/dpadcloud/launcher-shell /opt/dpadcloud/faugus-epic-launch \
     && sed -i 's/\r$//' /usr/local/bin/steam && chmod +x /usr/local/bin/steam \
     && bash -n /usr/local/bin/steam /opt/dpadcloud/launcher-shell /opt/dpadcloud/faugus-epic-launch \
     && sed -i 's/\r$//' /usr/local/bin/swaymsg && chmod +x /usr/local/bin/swaymsg \

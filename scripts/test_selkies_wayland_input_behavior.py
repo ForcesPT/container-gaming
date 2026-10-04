@@ -9,7 +9,7 @@ import sys
 import types
 
 ROOT = Path(__file__).resolve().parents[1]
-PATCH = ROOT / "scripts" / "dpad_input_patch.py"
+PATCH = Path(os.environ.get('DPAD_TEST_INPUT_PATCH',str(ROOT / "scripts" / "dpad_input_patch.py")))
 os.environ["DPAD_INPUT_DISPLAY"] = ":0"
 desktop = os.environ.get("DPAD_TEST_DESKTOP", "labwc")
 os.environ["DPAD_DESKTOP_CLIENT"] = desktop
@@ -142,12 +142,24 @@ if desktop == "sway":
     client.send_mouse(webrtc.MOUSE_BUTTON, (webrtc.MOUSE_BUTTON_PRESS, webrtc.MOUSE_BUTTON_LEFT))
     client.send_x11_keypress(0x61, True)
     assert records == []
-    assert mapping_refreshes == []
+    assert len(mapping_refreshes) == 1
     assert [event[0][1] for event in xtest_records] == [
         xlib.X.MotionNotify,
         xlib.X.ButtonPress,
         xlib.X.KeyPress,
     ]
+    layout_keycode = 19
+    client.send_x11_keypress(0x3d, True)
+    assert xtest_records[-1][1]['detail'] == 19
+    layout_keycode = 21
+    client.send_x11_keypress(0x3d, False)
+    assert xtest_records[-1][1]['detail'] == 19
+    client.send_x11_keypress(0x3d, True)
+    assert xtest_records[-1][1]['detail'] == 21
+    client.reset_keyboard()
+    assert xtest_records[-1][0][1] == xlib.X.KeyRelease
+    assert xtest_records[-1][1]['detail'] == 21
+    assert client._dpad_pressed_keys == {}
     print("Sway retains its XTest-only input path: PASS")
     raise SystemExit(0)
 

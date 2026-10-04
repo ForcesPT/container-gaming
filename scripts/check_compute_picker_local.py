@@ -26,6 +26,8 @@ def main():
     candidate=image(tag);iid=candidate['Id']
     if candidate['RootFS']['Layers'][:len(base['RootFS']['Layers'])]!=base['RootFS']['Layers']:raise ValueError('Compute base changed')
     if candidate['Config']['Env']!=base['Config']['Env'] or candidate['Config']['Entrypoint']!=base['Config']['Entrypoint']:raise ValueError('runtime contract changed')
+    for key in ['User','Cmd','WorkingDir','StopSignal','Healthcheck','Volumes','ExposedPorts']:
+        if candidate['Config'].get(key)!=base['Config'].get(key):raise ValueError('runtime contract changed: '+key)
     fixture=out/'package-check.cjs';fixture.write_text("""const fs=require('node:fs'),crypto=require('node:crypto'),assert=require('node:assert/strict');
 const expected=JSON.parse(process.env.DPAD_PICKER_EXPECTED),src='/opt/dpadcloud/launcher/resources/app.asar/src/';
 for(const [name,hash] of Object.entries(expected))assert.equal(crypto.createHash('sha256').update(fs.readFileSync(src+name)).digest('hex'),hash,name);
@@ -46,7 +48,7 @@ console.log(JSON.stringify({packagedSourcesMatch:true,epicReopenPreserved:true,n
     lock=run(['docker','run','--rm','--pull','never','--network','none','--entrypoint','sha256sum',adapter['Id'],'/work/package-lock.json']).split()[0]
     receipt={'status':'packaged-compute-picker-qualified-locally','sourceBaseline':baseline,'sourceFiles':before,'computeBase':BASE_ID,
       'adapterImage':adapter['Id'],'packagerLockSha256':lock,'imageId':iid,'behaviorTests':8,'packagedSourcesMatch':True,
-      'nativeKoffiImported':True,'epicReopenPreserved':True,'runtimeContractAndBasePreserved':True,'testNetwork':'none','testUser':'1000:1000',
+      'nativeKoffiImported':True,'epicReopenPreserved':True,'runtimeContractAndBasePreserved':True,'startupUserPreserved':True,'testNetwork':'none','testUser':'1000:1000',
       'productionChanged':False,'paidResourcesCreated':0,'allDisposableContainersRemoved':True,'realStoreAccountAcceptance':False,'nativeMediaQualified':False}
     (out/'qualification.json').write_text(json.dumps(receipt,indent=2)+'\n');print('Packaged Compute picker: 8 behavioral cases, source integrity and native import passed; receipt saved.')
 if __name__=='__main__':main()

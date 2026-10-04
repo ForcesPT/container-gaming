@@ -151,9 +151,9 @@ def _patch():
             pressed_keys = getattr(self, "_dpad_pressed_keys", None)
             if pressed_keys is None:
                 pressed_keys = self._dpad_pressed_keys = {}
-            kc = (pressed_keys.get(keysym) if down else pressed_keys.pop(keysym, None)) if native_wayland else None
-            if native_wayland and down and kc is None:
-                # Labwc can replace the Xwayland map after the taskbar layout
+            kc = pressed_keys.get(keysym) if down else pressed_keys.pop(keysym, None)
+            if down and kc is None:
+                # The desktop can replace the Xwayland map after the layout
                 # selector reconfigures it. python-xlib caches that map; using
                 # the old US keycode under Portuguese turns '=' into '»'.
                 # Refresh before conversion without consuming cursor events or
@@ -166,7 +166,7 @@ def _patch():
                 ))
             if kc is None:
                 kc = d.keysym_to_keycode(keysym)
-            if native_wayland and down and kc:
+            if down and kc:
                 pressed_keys[keysym] = kc
             if kc:
                 if native_wayland and wayland_input.keyboard_key(kc - 8, down):
@@ -190,10 +190,9 @@ def _patch():
     _orig_mouse = W.send_mouse
     _orig_reset_keyboard = W.reset_keyboard
     def reset_keyboard(self):
-        if native_wayland:
-            for keysym in list(getattr(self, "_dpad_pressed_keys", {})):
-                self.send_x11_keypress(keysym, down=False)
-            self._dpad_pressed_keys = {}
+        for keysym in list(getattr(self, "_dpad_pressed_keys", {})):
+            self.send_x11_keypress(keysym, down=False)
+        self._dpad_pressed_keys = {}
         return _orig_reset_keyboard(self)
 
     def send_mouse(self, action, data):

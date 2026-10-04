@@ -1,0 +1,15 @@
+# Offline successor; preserve accepted base layers, environment and entrypoint.
+ARG GAMING_IMAGE
+FROM ${GAMING_IMAGE}
+USER root
+ARG DPAD_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
+      com.dpadplay.launcher.qualification="input-layout-local-candidate"
+COPY scripts/dpad_input_patch.py /usr/local/lib/python3.12/dist-packages/dpad_input_patch.py
+COPY scripts/dpad-keyboard-layout scripts/dpad-publish-desktop-config /opt/dpadcloud/
+RUN sed -i 's/\r$//' /opt/dpadcloud/dpad-keyboard-layout /opt/dpadcloud/dpad-publish-desktop-config /usr/local/lib/python3.12/dist-packages/dpad_input_patch.py \
+    && chmod +x /opt/dpadcloud/dpad-keyboard-layout /opt/dpadcloud/dpad-publish-desktop-config \
+    && python3 -m py_compile /opt/dpadcloud/dpad-keyboard-layout /usr/local/lib/python3.12/dist-packages/dpad_input_patch.py
+# Reviewed Instant and corrected Compute bases initialize services as root;
+# their entrypoints drop store clients to dpad. Qualification checks this default.
+USER root

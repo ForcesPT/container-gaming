@@ -34,6 +34,8 @@ def main():
  base=json.loads(run(['docker','image','inspect',BASE])[0])[0];image=json.loads(run(['docker','image','inspect',args.image])[0])[0]
  assert image['Id']==args.image and image['RootFS']['Layers'][:len(base['RootFS']['Layers'])]==base['RootFS']['Layers']
  assert image['Config']['Env']==base['Config']['Env'] and image['Config']['Entrypoint']==base['Config']['Entrypoint']
+ for key in ['User','Cmd','WorkingDir','StopSignal','Healthcheck','Volumes','ExposedPorts']:
+  assert image['Config'].get(key)==base['Config'].get(key),key
  for name in TESTS:(out/name).write_bytes((ROOT/'scripts'/name).read_bytes())
  (out/'expected.json').write_text(json.dumps(files));(out/'runner.py').write_text(RUNNER)
  result,error=run(['docker','run','--rm','--pull','never','--network','none','--user','1000:1000','--cap-drop','ALL','--security-opt','no-new-privileges',

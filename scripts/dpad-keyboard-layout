@@ -1,9 +1,10 @@
 #!/usr/bin/python3
-"""Search and select the session keyboard layout from the Labwc taskbar."""
+"""Search and select the session keyboard layout on Labwc or Sway."""
 
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import re
 import stat
@@ -93,22 +94,47 @@ def replace_config(parent: Path, data: bytes) -> None:
 def apply(code: str, available: dict[str, str]) -> None:
     if code not in available:
         raise ValueError("unsupported keyboard layout")
-    if os.environ.get("DPAD_DESKTOP_CLIENT", "labwc") != "labwc":
-        raise ValueError("live keyboard switching requires the Labwc desktop")
-    if not os.environ.get("LABWC_PID", "").isdigit():
-        raise ValueError("Labwc session is unavailable")
+    desktop = os.environ.get("DPAD_DESKTOP_CLIENT", "labwc")
+    if desktop == 'labwc':
+        if not os.environ.get("LABWC_PID", "").isdigit():
+            raise ValueError("Labwc session is unavailable")
+    elif desktop == 'sway':
+        socket = Path(os.environ.get('SWAYSOCK', ''))
+        info = socket.lstat()
+        if (not socket.is_absolute() or socket.resolve() != socket or not stat.S_ISSOCK(info.st_mode)
+                or info.st_uid != os.geteuid() or info.st_mode & 0o022):
+            raise ValueError('Sway session is unavailable')
+    else:
+        raise ValueError('unsupported keyboard desktop')
+
+    def reconfigure(selected):
+        command = ['labwc', '--reconfigure'] if desktop == 'labwc' else [
+            'swaymsg', '-s', str(socket), '-t', 'command', 'input type:keyboard xkb_layout ' + selected]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=5)
+        if result.returncode:
+            raise RuntimeError('Desktop refused the keyboard layout')
+        if desktop == 'sway':
+            response = json.loads(result.stdout)
+            if (not isinstance(response, list) or len(response) != 1 or not isinstance(response[0], dict)
+                    or response[0].get('success') is not True):
+                raise RuntimeError('Sway refused the keyboard layout')
     parent = trusted_parent()
     old = CONFIG.read_bytes() if CONFIG.exists() else None
+    old_code = current(available)
     replace_config(parent, f"XKB_DEFAULT_LAYOUT={code}\n".encode("ascii"))
     try:
-        result = subprocess.run(["labwc", "--reconfigure"], capture_output=True, text=True, timeout=5)
-        if result.returncode:
-            raise RuntimeError("Labwc refused the keyboard layout")
-    except (OSError, RuntimeError, subprocess.TimeoutExpired):
+        reconfigure(code)
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired):
         if old is None:
             CONFIG.unlink()
         else:
             replace_config(parent, old)
+        # A timed-out command may already have applied. Reapply the prior saved
+        # layout once; failures stay failures and never report the new layout.
+        try:
+            reconfigure(old_code)
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired):
+            pass
         raise
 
 
@@ -169,6 +195,8 @@ def main() -> None:
     if command == ["label"]:
         code = current(available)
         print(f"⌨ {code.upper()}")
+    elif command == ['code']:
+        print(current(available))
     elif command == ["picker"]:
         picker(available)
     elif command == ["init"]:
@@ -176,7 +204,7 @@ def main() -> None:
     elif len(command) == 2 and command[0] == "apply":
         apply(command[1], available)
     else:
-        raise ValueError("usage: dpad-keyboard-layout [label|picker|apply CODE]")
+        raise ValueError("usage: dpad-keyboard-layout [label|code|picker|apply CODE]")
 
 
 if __name__ == "__main__":

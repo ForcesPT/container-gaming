@@ -9,4 +9,6 @@ LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
       com.dpadplay.launcher.qualification="compute-picker-local-candidate"
 USER root
 COPY --from=picker /work/output/ /opt/dpadcloud/launcher/resources/
-USER dpad
+# The reviewed base entrypoint initializes services as root, then drops clients
+# to dpad. A non-root image default would fail before those clients can start.
+USER root

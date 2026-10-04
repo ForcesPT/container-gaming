@@ -10,7 +10,7 @@ COPY scripts/dpad_epic_installation.py scripts/dpad_epic_overlay.py scripts/dpad
 COPY scripts/dpad_instant_observation.py /opt/dpadcloud/
 COPY scripts/dpad_instant_replay.py /opt/dpadcloud/
 COPY scripts/dpad_instant_shutdown.py /opt/dpadcloud/
-COPY scripts/dpad-publish-desktop-config scripts/dpad-waybar /opt/dpadcloud/
+COPY scripts/dpad-publish-desktop-config scripts/dpad-waybar scripts/dpad-keyboard-layout /opt/dpadcloud/
 COPY scripts/dpad_input_patch.py /usr/local/lib/python3.12/dist-packages/dpad_input_patch.py
-RUN sed -i 's/\r$//' /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/dpad-publish-desktop-config /opt/dpadcloud/dpad-waybar \
-    && chmod +x /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/dpad-publish-desktop-config /opt/dpadcloud/dpad-waybar
+RUN sed -i 's/\r$//' /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/dpad-publish-desktop-config /opt/dpadcloud/dpad-waybar /opt/dpadcloud/dpad-keyboard-layout \
+    && chmod +x /opt/dpadcloud/launcher-shell /opt/dpadcloud/launcher-toggle /opt/dpadcloud/faugus-epic-launch /opt/dpadcloud/dpad-publish-desktop-config /opt/dpadcloud/dpad-waybar /opt/dpadcloud/dpad-keyboard-layout

@@ -22,17 +22,31 @@ exec 9>"$RUNTIME_DIR/.desktop-config.lock"
 chmod 0600 "$RUNTIME_DIR/.desktop-config.lock"
 flock -x 9
 
+# Keep the selected layout through a desktop restart inside the same private
+# container. The helper validates its catalog/state; no raw config is sourced.
+keyboard_helper="$(dirname "$(readlink -f -- "${BASH_SOURCE[0]}")")/dpad-keyboard-layout"
+if [ "$EUID" -eq 0 ]; then
+    runuser -u dpad -- env HOME=/home/dpad "$keyboard_helper" init
+    keyboard_layout="$(runuser -u dpad -- env HOME=/home/dpad "$keyboard_helper" code)"
+else
+    "$keyboard_helper" init
+    keyboard_layout="$("$keyboard_helper" code)"
+fi
+[[ "$keyboard_layout" =~ ^[a-z0-9_+-]+$ ]] || { echo "invalid keyboard layout" >&2; exit 1; }
+
 if [ "$DESKTOP" = sway ]; then
     tmp="$RUNTIME_DIR/sway.config.tmp"
     trap 'rm -f -- "$tmp"' EXIT
     cat > "$tmp" <<SWAYCFG
 # DpadPlay nested Sway desktop
 output * mode --custom ${WIDTH}x${HEIGHT}
+input type:keyboard xkb_layout ${keyboard_layout}
 default_border none
 default_floating_border none
 for_window [app_id=".*"] fullscreen enable
 for_window [class=".*"] fullscreen enable
 bindsym Mod4+l exec /opt/dpadcloud/launcher-toggle
+bindsym Ctrl+Mod1+l exec /opt/dpadcloud/dpad-keyboard-layout picker
 bindsym Mod4+q kill
 bindsym Mod4+k kill
 bindsym Ctrl+Mod1+c kill
@@ -41,11 +55,6 @@ SWAYCFG
     chmod 0644 "$tmp"
     mv -fT "$tmp" "$RUNTIME_DIR/sway.config"
 else
-    # Production publishes desktop config as root before Labwc starts. Create
-    # the private layout file as the session user so Labwc can read it on boot.
-    if [ "$EUID" -eq 0 ]; then
-        runuser -u dpad -- env HOME=/home/dpad /opt/dpadcloud/dpad-keyboard-layout init
-    fi
     generation="$(mktemp -d "$RUNTIME_DIR/labwc.gen.XXXXXX")"
     link_tmp="$RUNTIME_DIR/labwc-current.tmp.$$"
     cleanup_labwc_generation() {

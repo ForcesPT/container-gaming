@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +20,13 @@ ENTRYPOINT = ROOT / "entrypoint.sh"
 
 
 class DesktopRuntimeHelpersTests(unittest.TestCase):
+    def setUp(self):
+        private=tempfile.TemporaryDirectory()
+        self.addCleanup(private.cleanup)
+        self.keyboard_config=Path(private.name)/'layout/keyboard.env'
+        environment=patch.dict(os.environ,{'DPAD_KEYBOARD_CONFIG':str(self.keyboard_config)})
+        environment.start();self.addCleanup(environment.stop)
+
     def run_cmd(self, *args: str, env: dict[str, str] | None = None, check: bool = True):
         return subprocess.run(args, text=True, capture_output=True, env=env, check=check)
 
@@ -37,7 +45,9 @@ class DesktopRuntimeHelpersTests(unittest.TestCase):
             self.assertTrue(config.is_file())
             text = config.read_text()
             self.assertIn("output * mode --custom 1920x1080", text)
+            self.assertIn("input type:keyboard xkb_layout us", text)
             self.assertIn("exec /opt/dpadcloud/launcher-shell", text)
+            self.assertIn("bindsym Ctrl+Mod1+l exec /opt/dpadcloud/dpad-keyboard-layout picker", text)
             self.assertFalse(Path(tmp, "sway.config.tmp").exists())
 
     def test_labwc_config_and_autostart_are_published_together(self):
@@ -84,6 +94,14 @@ class DesktopRuntimeHelpersTests(unittest.TestCase):
             self.assertIn("#taskbar", (config_dir / "waybar.css").read_text())
             self.assertFalse((config_dir / "rc.xml.tmp").exists())
             self.assertFalse((config_dir / "autostart.tmp").exists())
+
+    def test_sway_publication_preserves_selected_private_layout(self):
+        self.keyboard_config.parent.mkdir(mode=0o700)
+        self.keyboard_config.write_text('XKB_DEFAULT_LAYOUT=pt\n');self.keyboard_config.chmod(0o600)
+        with tempfile.TemporaryDirectory() as tmp:
+            self.run_cmd(str(PUBLISHER),'sway','/opt/dpadcloud/launcher-shell','1920','1080',
+                env={**os.environ,'DPAD_RUNTIME_DIR':tmp})
+            self.assertIn('input type:keyboard xkb_layout pt',(Path(tmp)/'sway.config').read_text())
 
 
     def test_publication_failure_is_nonzero_and_does_not_publish(self):
