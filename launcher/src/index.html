@@ -13,28 +13,29 @@
       <div class="tagline">Choose your store</div>
     </header>
 
-    <main class="grid" id="grid"></main>
+    <main class="grid" id="grid" aria-label="Official stores"></main>
+    <button id="reloadStores" class="reload-stores" type="button" hidden>Reload stores</button>
 
     <footer class="hint">
       <span class="key">←</span><span class="key">→</span><span class="key">↑</span><span class="key">↓</span>
       navigate &nbsp;·&nbsp;
       <span class="key">Enter</span> / <span class="pad">A</span> launch &nbsp;·&nbsp;
-      <span class="key">Esc</span> / <span class="pad">B</span> exit store &nbsp;·&nbsp;
+      <span class="key">Esc</span> / <span class="pad">B</span> leave picker &nbsp;·&nbsp;
       gamepad supported
     </footer>
 
     <!-- launch overlay: shown while a store client boots; covers the grid so
          the user has clear feedback the launch is happening. Stays until the
-         store window appears (covering the launcher) or any input dismisses. -->
+         store window appears or Esc/B returns to the picker. -->
     <div id="launchOverlay" class="launch-overlay" aria-hidden="true">
       <div class="launch-card">
         <img id="launchLogo" class="launch-logo" src="" alt="" />
         <div id="launchName" class="launch-name">Launching…</div>
         <div class="launch-spinner" aria-hidden="true"></div>
-        <div class="launch-hint">Press <span class="pad">B</span> / <span class="key">Esc</span> to cancel</div>
+        <div class="launch-hint">Press <span class="pad">B</span> / <span class="key">Esc</span> to return to the picker. Store startup continues.</div>
       </div>
     </div>
-  </main>
+  </div>
 
   <script src="renderer.js"></script>
 </body>

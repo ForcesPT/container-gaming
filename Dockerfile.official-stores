@@ -18,12 +18,13 @@ FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddf
 WORKDIR /work
 RUN npm install --no-audit --no-fund @electron/asar@3.2.17
 COPY --from=runtime-base /opt/dpadcloud/launcher/resources/ /work/resources/
-COPY scripts/dpad_patch_gog_picker.cjs /work/patch.cjs
 COPY launcher/src/store_lifecycle.cjs /work/store_lifecycle.cjs
+COPY launcher/src/main.js launcher/src/renderer.js launcher/src/index.html launcher/src/styles.css /work/current/
 RUN ./node_modules/.bin/asar extract resources/app.asar unpacked \
-    && node patch.cjs unpacked/src/main.js \
     && cp store_lifecycle.cjs unpacked/src/ \
+    && cp current/main.js current/renderer.js current/index.html current/styles.css unpacked/src/ \
     && node --check unpacked/src/main.js \
+    && node --check unpacked/src/renderer.js \
     && node --check unpacked/src/store_lifecycle.cjs \
     && ./node_modules/.bin/asar pack unpacked output/app.asar --unpack-dir node_modules
 FROM ${STORE_COMPAT_IMAGE} AS store-service-builder

@@ -15,55 +15,72 @@ let cards = [];        // [{ el, store, index }]
 let STORES_LOOKUP = {}; // id -> store (for install overlay lookup)
 let focusIndex = 0;
 let launching = false; // true while the launch overlay is up
+let overlayStoreId = null;
+let launchGeneration = 0;
+const storeStates = {};
 const overlay = document.getElementById('launchOverlay');
 const launchLogo = document.getElementById('launchLogo');
 const launchName = document.getElementById('launchName');
 
 // dismiss the launch overlay — called when the main process confirms the
-// store window is visible, or on explicit cancel (Esc/B).
-function dismissOverlay() {
+// store window is visible, or on explicit return to the picker (Esc/B).
+function dismissOverlay(storeId = null) {
+  if (storeId !== null && storeId !== overlayStoreId) return;
   if (!launching) return;
   launching = false;
+  overlayStoreId = null;
+  launchGeneration++;
   overlay.classList.remove('show');
   overlay.classList.remove('installing');
+  overlay.setAttribute('aria-hidden', 'true');
+  if (cards.length) render(cards.map(card => card.store));
 }
 
 function showOverlay(store) {
   launching = true;
+  overlayStoreId = store.id;
+  launchGeneration++;
   launchLogo.src = `logos/${store.id}.svg`;
   launchLogo.alt = store.name;
   launchName.textContent = `Launching ${store.name}…`;
   overlay.classList.add('show');
+  overlay.setAttribute('aria-hidden', 'false');
 }
 
 // --- main -> renderer events ---
-window.dpad.onStoreVisible((_id) => {
+window.dpad.onStoreVisible((id) => {
+  storeStates[id] = 'opened';
   // The store window appeared — dismiss the overlay. The launcher will be
   // hidden to scratchpad by the main process; when the store exits, the
   // launcher is restored + refocused, and 'store-exited' fires.
-  dismissOverlay();
+  dismissOverlay(id);
 });
 
-window.dpad.onStoreExited((_id) => {
+window.dpad.onStoreExited((id) => {
+  if (storeStates[id] !== 'unconfirmed') delete storeStates[id];
   // The store exited — the launcher is restored from scratchpad. Just make
   // sure the overlay is dismissed.
-  dismissOverlay();
+  dismissOverlay(id);
   // Re-render in case store availability changed (e.g. a store got installed)
-  window.dpad.getStores().then(render);
+  refreshStores();
 });
 
-window.dpad.onStoreLaunchFailed((_id, err) => {
-  dismissOverlay();
-  showToast(`Couldn't launch: ${err}`, true);
+window.dpad.onStoreLaunchFailed((id, err) => {
+  storeStates[id] = 'unconfirmed';
+  dismissOverlay(id);
+  const store = STORES_LOOKUP[id];
+  showToast(`${store?.name || 'Store'}: ${err}`, true);
 });
 
 window.dpad.onStoreInstalling((id) => {
+  storeStates[id] = 'waiting';
   // First-launch install: winetricks + downloading the installer takes
   // 5-10 min with no visible window. Update the overlay so the user
   // gets feedback instead of a black screen.
   const store = STORES_LOOKUP[id];
-  if (store) {
-    launchName.textContent = `Installing ${store.name}… this may take a few minutes`;
+  if (store && launching && overlayStoreId === id) {
+    // Wrapper presence and elapsed time do not prove installation progress.
+    launchName.textContent = `Waiting for ${store.name}… check the taskbar for an installer or update`;
     overlay.classList.add('installing');
   }
 });
@@ -83,11 +100,17 @@ function showToast(msg, isError = false) {
 
 function statusPill(store) {
   if (store.comingSoon) return { text: 'Coming soon', cls: 'soon' };
-  if (store.available) return { text: 'Available', cls: 'available' };
-  return { text: 'Not installed', cls: 'missing' };
+  const state = storeStates[store.id];
+  if (state === 'opening') return { text: 'Opening…', cls: 'soon' };
+  if (state === 'waiting') return { text: 'Waiting for window', cls: 'soon' };
+  if (state === 'opened') return { text: 'Window opened', cls: 'available' };
+  if (state === 'unconfirmed') return { text: 'Startup unconfirmed · retry', cls: 'missing' };
+  if (store.available) return { text: 'Ready to open', cls: 'available' };
+  return { text: 'Unavailable', cls: 'missing' };
 }
 
 function render(stores) {
+  const selected = cards[focusIndex]?.store.id;
   grid.innerHTML = '';
   cards = [];
   STORES_LOOKUP = {};
@@ -110,7 +133,7 @@ function render(stores) {
     grid.appendChild(el);
     cards.push({ el, store, index });
   });
-  if (cards.length) focus(0);
+  if (cards.length) focus(Math.max(0, cards.findIndex(card => card.store.id === selected)));
 }
 
 function focus(index) {
@@ -141,14 +164,26 @@ function move(dx, dy) {
 
 async function launch() {
   if (launching) { dismissOverlay(); return; }
+  if (!cards[focusIndex]) return;
   const { store } = cards[focusIndex];
   if (store.comingSoon) { showToast(`${store.name} — coming soon`); return; }
-  if (!store.available) { showToast(`${store.name} not installed`, true); return; }
+  if (!store.available) { showToast(`${store.name} is unavailable in this session`, true); return; }
   showOverlay(store);
-  const res = await window.dpad.launchStore(store.id);
-  if (!res.ok) {
-    dismissOverlay();
-    showToast(`Couldn't launch ${store.name}: ${res.error}`, true);
+  storeStates[store.id] = 'opening';
+  const generation = launchGeneration;
+  try {
+    const res = await window.dpad.launchStore(store.id);
+    if (generation !== launchGeneration) return;
+    if (!res?.ok) {
+      storeStates[store.id] = 'unconfirmed';
+      dismissOverlay(store.id);
+      showToast(`Couldn't launch ${store.name}: ${res?.error || 'Startup could not be confirmed'}`, true);
+    }
+  } catch {
+    if (generation !== launchGeneration) return;
+    storeStates[store.id] = 'unconfirmed';
+    dismissOverlay(store.id);
+    showToast(`${store.name} startup could not be confirmed. Check the taskbar, then retry.`, true);
   }
   // If ok, the overlay stays until 'store-visible' event from main process.
 }
@@ -213,9 +248,19 @@ async function pollGamepad() {
 }
 pollGamepad();
 
-// ---- boot ----
-(async () => {
-  const stores = await window.dpad.getStores();
-  render(stores);
-  window.addEventListener('focus', async () => render(await window.dpad.getStores()));
-})();
+// Catalog IPC may be temporarily unavailable. Keep the current choices and
+// give the user an explicit retry instead of leaving an empty picker.
+const reloadStores = document.getElementById('reloadStores');
+async function refreshStores() {
+  try {
+    const stores = await window.dpad.getStores();
+    render(stores);
+    reloadStores.hidden = true;
+  } catch {
+    reloadStores.hidden = false;
+    showToast('Store list could not be loaded. Select Reload stores to retry.', true);
+  }
+}
+reloadStores.addEventListener('click', refreshStores);
+window.addEventListener('focus', refreshStores);
+refreshStores();

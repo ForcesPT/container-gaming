@@ -1,0 +1,12 @@
+# Local/offline Compute picker successor. No customer profiles or test viewer.
+# The qualification harness verifies both cached image identities before building.
+ARG COMPUTE_IMAGE=forcespt/dpadcloud-gaming:official-stores-ge117-canary-20261001-69d9f44
+ARG PICKER_BUILD_IMAGE=dpadplay/picker-adapter:local-20261004
+FROM ${PICKER_BUILD_IMAGE} AS picker
+FROM ${COMPUTE_IMAGE}
+ARG DPAD_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
+      com.dpadplay.launcher.qualification="compute-picker-local-candidate"
+USER root
+COPY --from=picker /work/output/ /opt/dpadcloud/launcher/resources/
+USER dpad

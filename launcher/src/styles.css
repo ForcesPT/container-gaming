@@ -274,3 +274,13 @@ html, body {
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(1.06); opacity: 0.85; }
 }
+.reload-stores {
+  align-self: center;
+  padding: 12px 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-high);
+  color: var(--primary);
+  cursor: pointer;
+}
+.reload-stores:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }

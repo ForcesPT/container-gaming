@@ -433,7 +433,8 @@ ipcMain.handle('launch-store', async (event, storeId) => {
 
     child.on('error', (e) => {
       log(`launch-store ${storeId} spawn error: ${e.message}`);
-      if (activeStoreChildren.get(storeId) === child) activeStoreChildren.delete(storeId);
+      if (activeStoreChildren.get(storeId) !== child) return;
+      activeStoreChildren.delete(storeId);
       clearStoreVisibleTimer(storeId, child);
       // Notify renderer to dismiss overlay + show error
       if (mainWindow) mainWindow.webContents.send('store-launch-failed', storeId, e.message);
@@ -448,10 +449,14 @@ ipcMain.handle('launch-store', async (event, storeId) => {
     let pollCount = 0;
     const POLL_MS = 500;
     const SHORT_TIMEOUT = 30;  // seconds before switching to "installing" message
-    const MAX_TIMEOUT = 900;   // 15 min hard cap (give up + hide launcher)
+    const MAX_TIMEOUT = 900;   // 15 min window-confirmation cap; preserve picker
     let installingNotified = false;
     clearStoreVisibleTimer(storeId);
     const storeVisibleTimer = setInterval(() => {
+      if (activeStoreChildren.get(storeId) !== child) {
+        clearStoreVisibleTimer(storeId, child);
+        return;
+      }
       pollCount++;
       const elapsedSec = Math.round(pollCount * POLL_MS / 1000);
       const visible = checkStoreWindowVisible(storeId);
@@ -472,9 +477,10 @@ ipcMain.handle('launch-store', async (event, storeId) => {
       } else if (elapsedSec >= MAX_TIMEOUT) {
         log(`launch-store ${storeId}: no window after ${MAX_TIMEOUT}s, giving up`);
         clearStoreVisibleTimer(storeId, child);
-        // Last resort: hide launcher. The store may still appear later.
-        hideLauncherToScratchpad();
-        if (mainWindow) mainWindow.webContents.send('store-visible', storeId);
+        // A timeout is not a visible window or successful installation. Keep
+        // the picker usable and retain the child to prevent duplicate startup.
+        if (mainWindow) mainWindow.webContents.send('store-launch-failed', storeId,
+          'No store window was confirmed. Check the taskbar for an installer or update, then retry this card.');
       }
     }, POLL_MS);
     storeVisibleTimers.set(storeId, { timer: storeVisibleTimer, owner: child });
@@ -482,8 +488,9 @@ ipcMain.handle('launch-store', async (event, storeId) => {
     // When one store client exits, preserve every other store's lifecycle.
     child.on('exit', (code, sig) => {
       log(`launch-store ${storeId} exited (code=${code} sig=${sig})`);
+      if (activeStoreChildren.get(storeId) !== child) return;
       clearStoreVisibleTimer(storeId, child);
-      if (activeStoreChildren.get(storeId) === child) activeStoreChildren.delete(storeId);
+      activeStoreChildren.delete(storeId);
       launcherRestoreReconciler.request();
       if (storeId === 'epic' && process.env.DPAD_EPIC_BACKEND === 'faugus' && code !== null && code !== 0) {
         if (mainWindow) mainWindow.webContents.send('store-launch-failed', storeId,
