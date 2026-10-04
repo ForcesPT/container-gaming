@@ -1,0 +1,39 @@
+{
+  "status": "passed",
+  "imageId": "sha256:acddbe8e16b17ae1f84dfebaa5d85952bebe5c2ca0e45ce758a70887599bb2c7",
+  "imageSourceRevision": "5ac9167204097330dc7f4ea6f3c24e3ec8ec2afc",
+  "probeSha256": "eec114a74b5c011cc72238e8a60d012e690bd701d4664365f3a26704fea9cbd5",
+  "harnessSha256": "a84ecb9e5240a3c08b2d0ae278e121061d1a3c4527379f030d0d51a64b367621",
+  "accountUsed": false,
+  "testNetwork": "none",
+  "fixtureUser": "1000:1000",
+  "fixtureRemoved": true,
+  "nativeCompositorQualified": false,
+  "webRtcQualified": false,
+  "audioQualified": false,
+  "cloudSaveQualified": false,
+  "sharedIsolationQualified": false,
+  "productionChanged": false,
+  "paidResourcesCreated": 0,
+  "pipeline": {
+    "status": "encoded-and-decoded",
+    "gstreamerVersion": [
+      1,
+      24,
+      6,
+      0
+    ],
+    "encoder": "nvcudah264enc",
+    "decoder": "nvh264dec",
+    "encodedFrames": 60,
+    "encodedBytes": 52211,
+    "decodedFrames": 60,
+    "distinctDecodedFrames": 60,
+    "resolution": [
+      1280,
+      720
+    ],
+    "fps": 30,
+    "cudaEglRegistrationSymbolPresent": false
+  }
+}

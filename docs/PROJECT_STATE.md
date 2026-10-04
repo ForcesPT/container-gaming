@@ -1,4 +1,14 @@
-# Current local official-client window checks
+# Current local CUDA/NVENC frame checks
+
+October 4: both current Instant `acddbe8e` and Compute `d6bf574a` pass packaged
+CUDA upload/conversion and H.264 hardware encoding/decoding on the local RTX
+4070 Ti. Each produces sixty distinct decoded synthetic frames, non-root and
+offline. Exact fixtures are removed. [Evidence and scope](ENCODER-GPU-LOCAL-20261004.md).
+The compositor's CUDA-EGL function remains unavailable under this WSL stack;
+native capture, WebRTC/audio/input, accounts/saves and Shared acceptance remain
+open. No driver/engine change, publication, deployment or paid resource.
+
+# Previous local official-client window checks
 
 October 4: all six official clients displayed fresh sign-in windows and reopened
 after their windows were closed on the current Compute `d6bf574a` software-display
