@@ -1,5 +1,10 @@
 # Local Compute store-picker reliability
 
+Correction, October 4: `a1efea01` below is withdrawn as a release candidate because
+its builder changed the default startup user. The picker evidence remains scoped
+to its explicit UID-1000 fixtures. Corrected candidate `a9ea464f` preserves the
+full startup contract; [current evidence](INPUT-LAYOUT-LOCAL-20261004.md).
+
 October 4, 2026. Final runtime source `6fb4bb2`. Local candidate `dpadplay/compute:picker-local-20261004`, immutable image `sha256:a1efea01f5cd224272e020936928088940836e67bba78d24834763f9d9bc1c4e`. No publication, production activation or paid VM.
 
 ## Changes

@@ -1,0 +1,31 @@
+{
+  "status": "input-layout-qualified-locally",
+  "sourceBaseline": "5ac9167204097330dc7f4ea6f3c24e3ec8ec2afc",
+  "sourceFiles": {
+    "dpad_input_patch.py": "391d47274918461ff92c4c47b71baa2a2426109d25896c9d3508250ea693e3ff",
+    "dpad-keyboard-layout": "37bac2dfd0e34e01a45e6728f12991bbfade9e86a6ff5818f99938861762add9",
+    "dpad-publish-desktop-config": "56cd50ce98ea5707e3bbda5bdec29d7caf81cafc9587d823a6c18b011c2ef733",
+    "test_keyboard_layout.py": "948ee54c1db618e3cad5aeee7d07f3800cb942128997c4c349453111bf98890c",
+    "test_selkies_wayland_input_behavior.py": "849a2714c43e602a94b3516545d19ea8f50dfd4abf106b70f78cab45f1284846",
+    "test_input_mapping_x11.py": "d4ad36f18ce53d7da056dc1174a1b6d214c87122ea5e92ba2b5cd7437df75566",
+    "check_input_layout_local.py": "8a8cbd5d0509bd6d696fea8488d3c4752be091fb86864318bc1495065c1539c0"
+  },
+  "imageId": "sha256:d6bf574a817a0d38f0a33c930249f44472b7ec5108a4cf1b9c7b9840e2157688",
+  "baseImageId": "sha256:a9ea464f87d488ed569da10fb8bcb77c4a38d7a7c219c78a85a1d14f92192c99",
+  "packagedHelperHashesMatch": true,
+  "startupUserPreserved": true,
+  "fullRuntimeContractPreserved": true,
+  "keyboardSelectorCases": 8,
+  "routingBehaviorCases": 2,
+  "realX11MappingCases": 2,
+  "realSelkiesInputClassUsed": true,
+  "softwareX11Only": true,
+  "nativeWaylandSeatQualified": false,
+  "nativeMediaQualified": false,
+  "accountUsed": false,
+  "testNetwork": "none",
+  "fixtureUser": "1000:1000",
+  "productionChanged": false,
+  "paidResourcesCreated": 0,
+  "allDisposableContainersRemoved": true
+}

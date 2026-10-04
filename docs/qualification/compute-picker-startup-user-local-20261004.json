@@ -1,0 +1,28 @@
+{
+  "status": "packaged-compute-picker-qualified-locally",
+  "sourceBaseline": "5ac9167204097330dc7f4ea6f3c24e3ec8ec2afc",
+  "sourceFiles": {
+    "main.js": "8c23a39ee42d7b3360868cf59e164fce15aeb059082287f57810ed375bee467a",
+    "renderer.js": "c93053ad328e17f986c2bd454cf1e84a6fcc2288a9e4e18a18548c5d7bb0a923",
+    "index.html": "417d9f788d517144ad6ebb84dfd3be628013dec6e9c3eddc49474242e9acd25f",
+    "styles.css": "955d85ddeb114cb0ed5a023009d52b288a9658c1141bc9c54bd67811a6cb8a43",
+    "store_lifecycle.cjs": "d00fed30c3c4ec18e4375fae8870148702fe85cdee8fbacfefbd89425daa251f"
+  },
+  "computeBase": "sha256:93fef1d0839b8b88c8f04dadc8abbf493746f9b44036535b626d97a782e62fe1",
+  "adapterImage": "sha256:48c23350802400f55194136ce9d61287c6d32c2bf9429320bc76704c49a53c5c",
+  "packagerLockSha256": "1c4b25f1c7b0a3a82de4e54a7ca099245a25bce99bbcdeb59b8e79a3875ba9bb",
+  "imageId": "sha256:a9ea464f87d488ed569da10fb8bcb77c4a38d7a7c219c78a85a1d14f92192c99",
+  "behaviorTests": 8,
+  "packagedSourcesMatch": true,
+  "nativeKoffiImported": true,
+  "epicReopenPreserved": true,
+  "runtimeContractAndBasePreserved": true,
+  "startupUserPreserved": true,
+  "testNetwork": "none",
+  "testUser": "1000:1000",
+  "productionChanged": false,
+  "paidResourcesCreated": 0,
+  "allDisposableContainersRemoved": true,
+  "realStoreAccountAcceptance": false,
+  "nativeMediaQualified": false
+}

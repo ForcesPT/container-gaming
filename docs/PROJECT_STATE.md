@@ -1,4 +1,18 @@
-# Current local shutdown and Compute picker candidates
+# Current local keyboard and corrected startup candidates
+
+October 4: runtime source `5ac9167`. Instant `acddbe8e` and Compute `d6bf574a`
+each pass eight selector cases, two input-routing scenarios and two real X11
+mapping scenarios against packaged Selkies. Eighteen desktop/helper cases pass.
+Sway preserves the selected layout and exposes its searchable selector through
+Ctrl+Alt+L; its native taskbar/fullscreen acceptance remains open.
+
+Compute `a1efea01` is withdrawn for a default startup-user mismatch. Corrected
+`a9ea464f` passes eight packaged cases and strengthened startup-contract checks.
+[Keyboard and startup evidence](INPUT-LAYOUT-LOCAL-20261004.md).
+No push, production change or paid VM. Native media, account, save and Shared
+acceptance remain open; runtime policies and admission allowlists remain off.
+
+# Previous local shutdown and Compute picker candidates
 
 October 4: runtime source `6fb4bb2` produces private Instant shutdown image
 `b266313d` and final Compute picker image `a1efea01`. Shutdown passes 25 packaged
