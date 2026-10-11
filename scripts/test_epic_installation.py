@@ -62,6 +62,25 @@ def concurrent_register(prefix, record, ready, release, done, results, pause=Fal
 
 
 class OfficialInstallationTests(unittest.TestCase):
+    def test_derived_capsule_registers_and_refuses_changed_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);binding,source,_,game,_,manifest=fixture(root)
+            old=json.loads((source/'installation.json').read_bytes())
+            item=old['item']
+            context={'schema':1,'catalog':{'app':item['AppName'],'namespace':item['CatalogNamespace'],'itemId':item['CatalogItemId'],'title':item['DisplayName']},
+                     'build':item['AppVersionString'],'vendorManifestSha256':old['manifestSha256'],'manifestApp':item['AppName']}
+            encoded=json.dumps(context,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()
+            capsule={k:v for k,v in old.items() if k!='sourceItemSha256'}
+            capsule.update(schema=2,origin='vendor-manifest-derived',source=context,sourceSha256=hashlib.sha256(encoded).hexdigest())
+            source.chmod(0o700);target=source/'installation.json';target.chmod(0o600)
+            data=json.dumps(capsule).encode();target.write_bytes(data);target.chmod(0o444);source.chmod(0o555)
+            prefix=root/'prefix';prefix.mkdir(mode=0o700)
+            self.assertEqual(m.register(prefix,game,source,binding,hashlib.sha256(data).hexdigest()),'official_epic_registered')
+            self.assertEqual(m.launch_uri(capsule,binding,manifest.read_bytes()),'com.epicgames.launcher://apps/fixture_namespace%3Afixture_catalog_id%3AFixtureGame?action=launch&silent=true')
+            for changed in ({**capsule,'origin':'official-capture'}, {**capsule,'sourceSha256':'b'*64},
+                            {**capsule,'source':{**context,'catalog':{**context['catalog'],'itemId':'other'}}}):
+                with self.assertRaises(ValueError):m.validate_capsule(changed,binding,manifest.read_bytes())
+
     def test_launch_request_is_from_exact_validated_official_catalog(self):
         with tempfile.TemporaryDirectory() as temp:
             binding, source, _, _, _, manifest = fixture(Path(temp))

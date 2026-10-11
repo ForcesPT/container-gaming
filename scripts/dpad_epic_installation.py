@@ -123,13 +123,16 @@ def normalize_item(raw):
 
 
 def validate_capsule(capsule, binding, manifest):
-    fields = {'schema', 'releaseId', 'payloadManifestSha256', 'sourceItemSha256',
-              'manifestSha256', 'manifestFileName', 'item'}
-    if not isinstance(capsule, dict) or set(capsule) != fields or capsule['schema'] != 1:
+    common = {'schema', 'releaseId', 'payloadManifestSha256', 'manifestSha256', 'manifestFileName', 'item'}
+    if not isinstance(capsule, dict):
+        raise ValueError('invalid installation capsule')
+    schema = capsule.get('schema')
+    fields = common | ({'sourceItemSha256'} if schema == 1 else {'origin','source','sourceSha256'})
+    if type(schema) is not int or schema not in (1, 2) or set(capsule) != fields:
         raise ValueError('invalid installation capsule')
     if not re.fullmatch(UUID, capsule['releaseId']):
         raise ValueError('invalid release identity')
-    for key in ('payloadManifestSha256', 'sourceItemSha256', 'manifestSha256'):
+    for key in ('payloadManifestSha256', 'sourceItemSha256' if schema == 1 else 'sourceSha256', 'manifestSha256'):
         if not isinstance(capsule[key], str) or not re.fullmatch(DIGEST, capsule[key]):
             raise ValueError('invalid installation digest')
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}\.manifest', capsule['manifestFileName']):
@@ -137,6 +140,17 @@ def validate_capsule(capsule, binding, manifest):
     item = normalize_item(capsule['item'])
     if item != capsule['item']:
         raise ValueError('unexpected capsule fields')
+    if schema == 2:
+        source = capsule['source']
+        if (capsule['origin'] != 'vendor-manifest-derived' or not isinstance(source, dict)
+                or set(source) != {'schema','catalog','build','vendorManifestSha256','manifestApp'}
+                or type(source['schema']) is not int or source['schema'] != 1
+                or source['build'] != item['AppVersionString'] or source['vendorManifestSha256'] != capsule['manifestSha256']
+                or not isinstance(source['manifestApp'], str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}', source['manifestApp'])
+                or source['catalog'] != {'app': item['AppName'], 'namespace': item['CatalogNamespace'],
+                    'itemId': item['CatalogItemId'], 'title': item['DisplayName']}
+                or hashlib.sha256(json.dumps(source, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest() != capsule['sourceSha256']):
+            raise ValueError('invalid derived registration source')
     expected = {'releaseId', 'payloadManifestSha256', 'vendorManifestSha256',
                 'app', 'version', 'executable', 'installSize'}
     if not isinstance(binding, dict) or set(binding) != expected:

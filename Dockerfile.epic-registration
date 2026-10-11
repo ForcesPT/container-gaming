@@ -1,0 +1,9 @@
+# Offline successor of the reviewed Instant image; no game or account data.
+ARG INSTANT_IMAGE=dpadplay/epic-instant:input-local-20261004
+FROM ${INSTANT_IMAGE}
+USER root
+ARG DPAD_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
+      com.dpadplay.epic.registration="captured-v1,vendor-v2"
+COPY scripts/dpad_epic_installation.py /opt/dpadcloud/dpad_epic_installation.py
+RUN python3 -m py_compile /opt/dpadcloud/dpad_epic_installation.py
