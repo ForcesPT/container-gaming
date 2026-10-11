@@ -1,4 +1,15 @@
-# Current local CUDA/NVENC frame checks
+# Current local: generated Epic registration reader
+
+October 11: runtime source `f1f0f23`, local image `a19d2c40…0b004ef`, reviewed
+Instant base `acddbe8e`. Version-one captured and version-two vendor-derived
+registration are supported with strict source/build/manifest binding. Fourteen
+actual packaged reader tests and 12 input cases pass. Startup contract and base
+layers are preserved. No accounts/games enter the build; no registry upload,
+production selection or paid resource. [Scope and evidence](EPIC-REGISTRATION-V2-LOCAL-20261011.md).
+The control plane is wiring automatic website/bare-metal preparation; new images
+need explicit compatible approval. Native/provider/gameplay acceptance stays open.
+
+# Previous local CUDA/NVENC frame checks
 
 October 4: both current Instant `acddbe8e` and Compute `d6bf574a` pass packaged
 CUDA upload/conversion and H.264 hardware encoding/decoding on the local RTX

@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location('epic_installation', Path(__file__).with_name('dpad_epic_installation.py'))
+spec = importlib.util.spec_from_file_location('epic_installation', os.environ.get('DPAD_TEST_EPIC_INSTALLATION', str(Path(__file__).with_name('dpad_epic_installation.py'))))
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 
