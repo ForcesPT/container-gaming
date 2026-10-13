@@ -1,0 +1,9 @@
+# Offline derivative: preserve the tested store/registration/runtime image.
+ARG INSTANT_IMAGE
+FROM ${INSTANT_IMAGE}
+USER root
+ARG DPAD_SOURCE_REVISION
+LABEL org.opencontainers.image.revision=$DPAD_SOURCE_REVISION \
+      com.dpadplay.instant.desktop-state="private-child-v1"
+COPY scripts/dpad_instant_replay.py /opt/dpadcloud/dpad_instant_replay.py
+RUN python3 -m py_compile /opt/dpadcloud/dpad_instant_replay.py

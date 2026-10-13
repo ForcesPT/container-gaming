@@ -1,4 +1,16 @@
-# Current local: generated Epic registration reader
+# Current local: Instant desktop state fix
+
+October14: the native Among Us7489 test passed official Epic shared recognition,
+owner gameplay/controls/audio and game-exit/countdown detection. Initial automatic
+launch and Play again failed because the helper refused the entrypoint's owned
+sticky1777 runtime and never wrote its private environment receipt. Two real CLI
+cases reproduce against pinneda19d2c40. The helper now keeps a private0700 child
+and0600 receipt while retaining desktop socket permissions and its allowlist.
+Fourteen offline non-root permission/CLI/wrapper cases pass; immutable derivative
+build and packaged verification are in progress. No publication, production change
+or new paid resource. [Diagnosis, change and limits](INSTANT-DESKTOP-STATE-FIX-20261014.md).
+
+# Previous local: generated Epic registration reader
 
 October 11: runtime source `f1f0f23`, local image `a19d2c40…0b004ef`, reviewed
 Instant base `acddbe8e`. Version-one captured and version-two vendor-derived

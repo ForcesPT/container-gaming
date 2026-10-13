@@ -31,29 +31,43 @@ def validate(value, runtime):
     return env
 
 
-def private_runtime(runtime):
+def private_state(runtime, create=False):
+    # The desktop entrypoint uses a sticky 1777 runtime for compositor/audio
+    # sockets. Keep the receipt in a private child without changing those sockets.
     info = runtime.lstat()
     if (not stat.S_ISDIR(info.st_mode) or runtime.resolve() != runtime
-            or info.st_uid != os.geteuid() or info.st_mode & 0o077):
-        raise ValueError('private runtime required')
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) not in (0o700, 0o1777)):
+        raise ValueError('owned desktop runtime required')
+    state = runtime / 'dpad-instant'
+    if create:
+        try:
+            state.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+    info = state.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or state.resolve() != state
+            or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700):
+        raise ValueError('private replay state required')
+    return state
 
 
 def publish(runtime, environment):
-    private_runtime(runtime)
     value = {'schema': 1, 'environment': {key: environment[key] for key in KEYS if key in environment}}
     validate(value, runtime)
-    fd, name = tempfile.mkstemp(prefix='.dpad-replay-', dir=runtime)
+    state = private_state(runtime, create=True)
+    fd, name = tempfile.mkstemp(prefix='.dpad-replay-', dir=state)
     try:
         with os.fdopen(fd, 'w', encoding='utf8') as stream:
             json.dump(value, stream); stream.flush(); os.fsync(stream.fileno())
-        os.replace(name, runtime / 'dpad-instant-desktop.json')
+        os.replace(name, state / 'dpad-instant-desktop.json')
     finally:
         Path(name).unlink(missing_ok=True)
 
 
 def read(runtime):
-    private_runtime(runtime)
-    fd = os.open(runtime / 'dpad-instant-desktop.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    state = private_state(runtime)
+    fd = os.open(state / 'dpad-instant-desktop.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         info = os.fstat(fd)
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
