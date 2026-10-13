@@ -1,0 +1,29 @@
+{
+  "status": "instant-desktop-state-qualified-locally",
+  "runtimeSource": "07c17a512a346a5cdccedf6c8eec5c8d260a89c1",
+  "baseImage": "sha256:a19d2c40bae51e83fea55544e47b1a288245411ff664b1711b0f840ef0b004ef",
+  "candidateImage": "sha256:85ae52ddadaed0e67049ec182a6e626ada49759c7accbe34562f54fbafae2f67",
+  "originalConfigurationAndLayersPreserved": true,
+  "onlyRuntimeFileChanged": "dpad_instant_replay.py",
+  "packagedRuntimeHashes": {
+    "entrypoint.sh": "097e96dbb79bdb5730168ed9b8bbd9707281e1d7c5fd2515cfdbda41e70d9a0e",
+    "launcher-shell": "d14e803a8d0c35d465758028447594530df1f6235a631cd2d3bafcd10e38a674",
+    "faugus-epic-launch": "ea5ee0f929c608f1eb5d07f461d594fbfd53d7b7a3fb0ab874c11e9c31e66e60",
+    "dpad_epic_installation.py": "13bb715683b474f83e2ed8c3b15cea85fd5b909652c98d7abfe30c07efcd5987",
+    "dpad_instant_replay.py": "2d93c240e3c734934033ab6a414dbd844da8e352d16682a1d3062660ce00a08d",
+    "dpad_instant_observation.py": "d6ee9866870b329dbe1511e6e6d146cadb59f547e3fc5552b3bfbb16ac6e8ee9",
+    "dpad_instant_shutdown.py": "4837083df2a330bfd28c80851b6cbcdfa73a7942b47f63b39e73695c7255955e",
+    "dpad_faugus_prepare.py": "29f0b13fa94ccc02034cf4bfe74a6f6ed7711891f9ab58fdd28f9d83c6736a8e"
+  },
+  "network": "none",
+  "paidResourcesCreated": 0,
+  "productionChanged": false,
+  "published": false,
+  "sourceChecks": 14,
+  "packagedHelperAndWrapperChecks": 14,
+  "originalPackagedCliRegressionsFailed": 2,
+  "effectiveUser": "1001:1001",
+  "genuineAutomaticLaunchQualified": false,
+  "genuineReplayQualified": false,
+  "accountsUsed": false
+}

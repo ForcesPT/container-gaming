@@ -6,8 +6,9 @@ launch and Play again failed because the helper refused the entrypoint's owned
 sticky1777 runtime and never wrote its private environment receipt. Two real CLI
 cases reproduce against pinneda19d2c40. The helper now keeps a private0700 child
 and0600 receipt while retaining desktop socket permissions and its allowlist.
-Fourteen offline non-root permission/CLI/wrapper cases pass; immutable derivative
-build and packaged verification are in progress. No publication, production change
+Runtime07c17a5 produces local image85ae52dd…f54fbafae2f67. Fourteen source and14
+packaged-helper/unchanged-wrapper cases pass; original settings/base layers and
+seven unchanged runtime hashes pass. No publication, production change
 or new paid resource. [Diagnosis, change and limits](INSTANT-DESKTOP-STATE-FIX-20261014.md).
 
 # Previous local: generated Epic registration reader

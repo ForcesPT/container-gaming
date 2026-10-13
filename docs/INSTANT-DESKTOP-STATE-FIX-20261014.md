@@ -32,8 +32,14 @@ registration parser, account profile or game file is rebuilt into the image.
   two real startup/replay CLI cases and five selected-game wrapper cases.
 - The same two startup CLI cases fail against the original packaged helper.
 - Fixtures contain no account data and use network `none`.
-- Replacement image build, packaged checks and immutable configuration/layer
-  comparison are recorded separately after completing the build.
+- Local runtime source `07c17a512a346a5cdccedf6c8eec5c8d260a89c1` builds image
+  `sha256:85ae52ddadaed0e67049ec182a6e626ada49759c7accbe34562f54fbafae2f67`.
+- The actual packaged helper passes the seven permission and two CLI cases;
+  five wrapper cases pass against the unchanged, hash-verified launch wrapper.
+- Base layers, all startup configuration fields and seven other runtime hashes
+  match the reviewed image. Only the replay helper changes. All fixture containers
+  were disposable and are removed.
+- [Qualification receipt](qualification/instant-desktop-state-local-20261014.json).
 
 This fixes the reproduced permission boundary. Genuine automatic launch through
 fresh Epic sign-in and Play again still require a separately approved native

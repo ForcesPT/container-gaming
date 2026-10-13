@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-spec=importlib.util.spec_from_file_location('replay',Path(__file__).with_name('dpad_instant_replay.py'))
+spec=importlib.util.spec_from_file_location('replay',Path(os.environ.get('DPAD_TEST_REPLAY_HELPER',Path(__file__).with_name('dpad_instant_replay.py'))))
 replay=importlib.util.module_from_spec(spec);spec.loader.exec_module(replay)
 
 class ReplayTests(unittest.TestCase):
